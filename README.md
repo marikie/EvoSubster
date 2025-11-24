@@ -2,48 +2,36 @@
 
 ## Introduction
 
-We aim to observe single-base and double-base substitution trends across diverse organisms, taking into account the influence of neighboring bases. 
+EvoSubster analyzes single-base and dinucleotide substitution trends across diverse organisms while accounting for neighboring bases. Provide three closely related genomes (we recommend >80% sequence identity): species A as the outgroup and species B and C as the ingroups. The pipeline downloads their genomic FASTA files and, when available, gene annotations.
 
-Our pipeline’s input should be NCBI genome accession IDs of three closely related species of your choice (we
-suggest >80% identity of orthologous DNA): species A as an outgroup, species B, and species C. It downloads
-the corresponding genomic FASTA files and, when available, gene annotations.
-
-Pairwise alignments will be performed between _Species A_ and _Species B_, and between _Species A_ and _Species C_. These two sets of alignments will then be merged into a multiple sequence alignment. Our pipeline infers substitutions in _Species B_ and _Species C_ based on the principle of parsimony, and outputs visualizations.
+Pairwise alignments are generated between _Species A_ vs _Species B_ and _Species A_ vs _Species C_ with LAST, merged into a three-way MAF, and examined under a parsimony model. The downstream Python and R utilities summarize substitution patterns and render publication-ready plots.
 
 ## Prerequisites
 
 Install the following command-line tools before running any scripts:
-- #### NCBI Datasets command-line tools ([https://www.ncbi.nlm.nih.gov/datasets/docs/v2/command-line-tools/download-and-install/](https://www.ncbi.nlm.nih.gov/datasets/docs/v2/command-line-tools/download-and-install/))
 
-- #### LAST ([https://gitlab.com/mcfrith/last](https://gitlab.com/mcfrith/last))
-- #### yq ([https://github.com/mikefarah/yq](https://github.com/mikefarah/yq))
+- NCBI Datasets CLI [datasets](https://www.ncbi.nlm.nih.gov/datasets/docs/v2/command-line-tools/download-and-install/) and [jq](https://jqlang.org) for accession metadata
+- [LAST](https://gitlab.com/mcfrith/last) for alignment
+- [yq](https://github.com/mikefarah/yq) (Mike Farah’s v4+) for reading YAML
+- [unzip](https://linux.die.net/man/1/unzip) for extracting NCBI dataset archives
+- [python3](https://www.python.org/) (3.8 or later) with the standard library
+- [R](https://www.r-project.org/) (≥4.0) with packages: `stringr`, `RColorBrewer`, `showtext`, `jsonlite`, `curl`, `dplyr`, `ggplot2`, `rlang`, `sysfonts`
 
-- #### jq ([https://jqlang.org](https://jqlang.org))
-
-- #### R (≥4.0) with the following libraries:
-    * stringr
-    * RColorBrewer
-    * showtext
-    * jsonlite
-    * curl
-    * dplyr
-    * ggplot2
-    * rlang
-    * sysfonts
-
-- #### Python3 (3.8 or later) with standard library modules
+Make sure the executables are discoverable in your `PATH`. 
 
 ## Repository Setup
 
 ```bash
 git clone https://github.com/marikie/EvoSubster.git
+cd EvoSubster
 ```
 
-The alignment entry points live under `EvoSubster/last/`, analytics helpers under `EvoSubster/analysis/`, and plotting code under `EvoSubster/analysis/R/`.
+Alignment entry points live under `EvoSubster/last/`, analytics helpers under `EvoSubster/analysis/`, and plotting code under `EvoSubster/analysis/R/`.
 
 ## Configuration
 ### `dwl_config.yaml`
-Update `EvoSubster/last/dwl_config.yaml` to point at the directory that should store downloaded genomes:
+
+Update `EvoSubster/last/dwl_config.yaml` so downloads land in your genome directory:
 
 ```yaml
 paths:
@@ -51,7 +39,8 @@ paths:
   base_genomes: "/absolute/path/to/genomes"
 ```
 ### `sbst_config.yaml`
-Adjust `EvoSubster/last/sbst_config.yaml` so results flow to your writable location (This can be overridden with the `--out-dir` flag, later. See below for more details.):
+
+Adjust `EvoSubster/last/sbst_config.yaml` so results flow to your output directory (the `--out-dir` flag described below can override this per run):
 
 ```yaml
 paths:
@@ -60,65 +49,67 @@ paths:
 ```
 
 ## Running the Pipeline
-All commands below must be executed from `EvoSubster/last/`.
 
-### To start from downloading genomes:
+All commands below should be executed from `EvoSubster/last/`.
 
-Run the following script:
+### Start from genome downloads
 
 ```bash
 ./trisbst_3spc_fromDwl.sh [DATE] [ORG1_ACCESSION] [ORG2_ACCESSION] [ORG3_ACCESSION] [--out-dir /absolute/path/to/outputs]
 ```
 
-- `DATE` is an arbitrary run label (e.g., `20250131`).
-- The `ORG1` should be the outgroup among the three genomes.  
-- `ORG1_ACCESSION`, `ORG2_ACCESSION`, and `ORG3_ACCESSION` are the NCBI accession IDs of the three genomes. (e.g. GCA_023078555.1, GCA_900538255.1, GCA_024500015.1)
-- `--out-dir` is optional; when omitted the script writes beneath the `paths.out_dir` configured in `sbst_config.yaml`.
+- `DATE` is any run label (for example `20250131`).
+- `ORG1_ACCESSION`, `ORG2_ACCESSION`, `ORG3_ACCESSION` are NCBI genome accession IDs; `ORG1_ACCESSION` should be the outgroup.
+- `--out-dir` is optional. When omitted, outputs go under `paths.out_dir` defined in `sbst_config.yaml`.
 
-The download wrapper ensures:
+During execution the wrapper:
 
-- Each accession is fetched via `datasets download genome accession` with the includes defined in `dwl_config.yaml`.
-- Archives are unpacked, non-essential folders removed, and FASTA/GFF assets moved to the genome directory.
-- `genomic.gff` for the outgroup is auto-detected; if missing, downstream scripts receive `NO_GFF_FILE`.
-- FASTA paths and (optional) GFF are passed to `trisbst_3spc.sh`.
+- Downloads each accession with the file types listed in `dwl_config.yaml`.
+- Unpacks the archives, prunes helper directories, and moves FASTA/GFF assets into the genome directory.
+- Detects `genomic.gff` for the outgroup; if missing, downstream steps receive `NO_GFF_FILE`.
+- Resolves FASTA paths and invokes `trisbst_3spc.sh` with the appropriate arguments.
 
-
-### If the genomes are already downloaded:
-
-You can also run the pipeline directly from the downloaded genomes by running the following script:
+### Reuse existing FASTA assets
 
 ```bash
 ./trisbst_3spc.sh [DATE] [ORG1_FASTA] [ORG2_FASTA] [ORG3_FASTA] [ORG1_GFF|NO_GFF_FILE] [--out-dir /absolute/path/to/outputs]
 ```
 
-- `DATE` is an arbitrary run label (e.g., `20250131`).
-- `ORG1_FASTA`, `ORG2_FASTA`, and `ORG3_FASTA` are the paths to the reference FASTA files of the three genomes.
-- `ORG1_GFF` is the path to the reference GFF file of the outgroup. If the GFF file is unavailable, enter "NO_GFF_FILE".
-- `--out-dir` is optional; when omitted the script writes beneath the `paths.out_dir` configured in `sbst_config.yaml`.
+- Provide absolute paths to the FASTA files.
+- Supply the outgroup GFF path or use `NO_GFF_FILE`.
+- `--out-dir` behaves the same as in the download wrapper.
+
+This script:
+
+- Generates short organism identifiers for consistent filenames.
+- Computes GC content for ingroup genomes.
+- Runs `last_train.sh` on every pair of the three species to calculate their substitution percent identity.
+- Produces paired `one2one` alignments for `org1` vs `org2` and `org1` vs `org3`.
+- Joins the MAFs into three-way alignments.
+- Calls Python utilities to create TSV summaries.
+- Uses the outgroup GFF, when available, to cut off the CDS regions.
+- Invokes `generate_graphs.sh` to render R visualizations.
 
 ## Outputs
 
-Results are written beneath `paths.out_dir` (or the `--out-dir` override) following this structure:
+Results reside under:
 
 ```
 <out_dir>/<ORG1short>_<ORG2short>_<ORG3short>/<DATE>/
 ```
 
-Key files include:
+Representative outputs include:
 
-- `*.train`: you can check the rough substitution percent identity between two species calculated by `LAST` (see [LAST-TRAIN](https://gitlab.com/mcfrith/last/-/blob/main/doc/last-train.rst?ref_type=heads) for more details)
-- `*_gcContent*.out`: GC content of the whole genome sequence for the ingroup species
-- `*_sbstRatio*.out`: the percentage of single-base substitutions without considering neighboring bases for the ingroup species (see `EvoSubster/analysis/subRatio.py` for more details)
-- `*_maflinked.tsv`: single-base substitution counts with maf-link filtering, which removes
-alignments between non-homologous insertions of homologous transposons (see [MAF-LINKED](https://gitlab.com/mcfrith/last/-/blob/main/doc/maf-linked.rst?ref_type=heads) of `LAST` for more details)
+- `*.train`: substitution percent identity estimates from `LAST` (see [last-train](https://gitlab.com/mcfrith/last/-/blob/main/doc/last-train.rst?ref_type=heads))
+- `*_gcContent_*.out`: whole-genome GC content for each ingroup FASTA
+- `*_sbstRatio*.out`: single-base substitution percentages without considering neighboring bases (see `EvoSubster/analysis/subRatio.py`)
+- `*_maflinked.tsv`: single-base substitution counts with maf-link filtering, removing alignments between non-homologous insertions of homologous transposons (see [maf-linked](https://gitlab.com/mcfrith/last/-/blob/main/doc/maf-linked.rst?ref_type=heads))
 - `*_maflinked_dinuc.tsv`: dinucleotide substitution counts
-- `*_maflinked_sbst.pdf`: bar plot of the number of single-base substitutions
-- `*_maflinked_ori.pdf`: bar plot of the number of original trinucleotides
-- `*_maflinked_norm.pdf`: bar plot of single-base substitutions normalized by the number of original trinucleotides
-- `*_maflinked_logRatio.pdf`: the log₂ of the single-base substitution rate relative to
-the overall mean substitution rate across all substitution types (y-axis: log₂[(# of substitutions / # of original trinucleotides) ÷ mean(# of
-substitutions / # of original trinucleotides) across all substitution types])
-- `*_maflinked_dinuc*.pdf`: bar plot of the number of dinucleotide substitutions normalized by the number of original dinucleotides
-- `*_ncds*`: files of non-coding regions analysis
+- `*_maflinked_sbst.pdf`: bar chart of single-base substitution counts
+- `*_maflinked_ori.pdf`: bar chart of original trinucleotide counts
+- `*_maflinked_norm.pdf`: single-base substitutions normalized by original trinucleotide counts
+- `*_maflinked_logRatio.pdf`: log₂ enrichment of substitution rates relative to the overall mean across substitution types
+- `*_maflinked_dinuc*.pdf`: normalized dinucleotide substitution counts
+- `*_ncds*`: files derived from non-coding regions when a GFF is available
 
-Re-running the pipeline preserves existing outputs and skips recomputation where possible.
+Re-running the pipeline skips steps whose outputs already exist.
