@@ -130,20 +130,20 @@ These three fish are types of Central American cichlids, a group of freshwater f
 
 Together, these species show how fish from the same family can evolve to look and behave very differently depending on where and how they live — from quiet shallow waters to powerful lake predators.
 
-Single-base substitution spectrum for Amphilophus citrinellus:
+Single-base substitution spectrum for *Amphilophus citrinellus*:
 ![ampCit_norm](./egfigs/ampCit_20250407_maflinked_ncds_norm.png)
 
-Single-base substitution spectrum for Amphilophus zaliosus:
+Single-base substitution spectrum for *Amphilophus zaliosus*:
 ![ampZal_norm](./egfigs/ampZal_20250407_maflinked_ncds_norm.png)
 
-Log-scaled single-base substitution spectrum for Amphilophus citrinellus:
+Log-scaled single-base substitution spectrum for *Amphilophus citrinellus*:
 ![ampCit_norm_log](./egfigs/ampCit_20250407_maflinked_ncds_logRatio.png)
 
-Log-scaled single-base substitution spectrum for Amphilophus zaliosus:
+Log-scaled single-base substitution spectrum for *Amphilophus zaliosus*:
 ![ampZal_norm_log](./egfigs/ampZal_20250407_maflinked_ncds_logRatio.png)
 
-Dinucleotide substitution spectrum for Amphilophus citrinellus:
+Dinucleotide substitution spectrum for *Amphilophus citrinellus*:
 ![ampCit_dinuc](./egfigs/ampCit_20250407_maflinked_ncds_dinuc.tsv.png)
 
-Dinucleotide substitution spectrum for Amphilophus zaliosus:
+Dinucleotide substitution spectrum for *Amphilophus zaliosus* :
 ![ampZal_dinuc](./egfigs/ampZal_20250407_maflinked_ncds_dinuc.tsv.png)
