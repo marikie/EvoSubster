@@ -113,3 +113,37 @@ Representative outputs include:
 - `*_ncds*`: files derived from non-coding regions when a GFF is available
 
 Re-running the pipeline skips steps whose outputs already exist.
+
+## Example
+The figures below are the outputs of a fish trio run. The organisms are:
+- *Archocentrus centrarchus* (GCF_007364275.1) — outgroup
+- *Amphilophus citrinellus* (GCA_013435755.1) — ingroup
+- *Amphilophus zaliosus* (GCA_015108585.1) — ingroup
+
+These three fish are types of Central American cichlids, a group of freshwater fish known for being intelligent, territorial, and very protective of their young.
+
+*Archocentrus centrarchus* is the smallest and most adaptable of the trio. It lives in shallow, plant-filled waters and had a modest, striped appearance. It is generally calmer and suited to sheltered environments.
+
+*Amphilophus citrinellus* is much larger and bolder. It lives mainly in large lakes and connected rivers. It is famous for its bright orange or white coloring and strong personality. This fish is very aggressive and likes to dominate its territory.
+
+*Amphilophus zaliosus* is slimmer and faster. It lives only in Lake Apoyo in Nicaragua and prefers open water rather than the shoreline. It hunts other small fish and has a sleek, arrow-shaped body that helps it swim quickly.
+
+Together, these species show how fish from the same family can evolve to look and behave very differently depending on where and how they live — from quiet shallow waters to powerful lake predators.
+
+Single-base substitution spectrum for Amphilophus citrinellus:
+![ampCit_norm](./egfigs/ampCit_20250407_maflinked_ncds_norm.png)
+
+Single-base substitution spectrum for Amphilophus zaliosus:
+![ampZal_norm](./egfigs/ampZal_20250407_maflinked_ncds_norm.png)
+
+Log-scaled single-base substitution spectrum for Amphilophus citrinellus:
+![ampCit_norm_log](./egfigs/ampCit_20250407_maflinked_ncds_logRatio.png)
+
+Log-scaled single-base substitution spectrum for Amphilophus zaliosus:
+![ampZal_norm_log](./egfigs/ampZal_20250407_maflinked_ncds_logRatio.png)
+
+Dinucleotide substitution spectrum for Amphilophus citrinellus:
+![ampCit_dinuc](./egfigs/ampCit_20250407_maflinked_ncds_dinuc.tsv.png)
+
+Dinucleotide substitution spectrum for Amphilophus zaliosus:
+![ampZal_dinuc](./egfigs/ampZal_20250407_maflinked_ncds_dinuc.tsv.png)
