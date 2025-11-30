@@ -2,7 +2,6 @@
 
 import argparse
 import sys
-from collections import Counter
 from pathlib import Path
 from typing import Iterable
 
@@ -31,19 +30,6 @@ def iter_matching_files(root: Path, pattern: str) -> Iterable[Path]:
     return root.rglob(pattern)
 
 
-def generate_unique_name(output_dir: Path, base_name: str, suffix_counter: Counter) -> Path:
-    stem = Path(base_name).stem
-    suffix = Path(base_name).suffix
-
-    while True:
-        count = suffix_counter[base_name]
-        suffix_counter[base_name] += 1
-        candidate_name = f"{stem}_{count}{suffix}" if count else base_name
-        candidate_path = output_dir / candidate_name
-        if not candidate_path.exists():
-            return candidate_path
-
-
 def create_symlink(src: Path, dest: Path) -> None:
     dest.symlink_to(src)
 
@@ -53,24 +39,31 @@ def process_links(input_dir: Path, output_dir: Path, pattern: str) -> None:
 
     total_found = 0
     created_links = 0
-    reused_links = 0
-    conflicts = 0
-    suffix_counter: Counter[str] = Counter()
+    replaced_links = 0
+    skipped_entries = 0
 
     for src in iter_matching_files(input_dir, pattern):
         total_found += 1
         dest = output_dir / src.name
 
         if dest.exists() or dest.is_symlink():
+            if dest.is_dir() and not dest.is_symlink():
+                print(
+                    f"Warning: destination is a directory, skipping: {dest}",
+                    file=sys.stderr,
+                )
+                skipped_entries += 1
+                continue
             try:
-                if dest.is_symlink() and dest.resolve() == src.resolve():
-                    reused_links += 1
-                    continue
-            except OSError:
-                pass
-
-            conflicts += 1
-            dest = generate_unique_name(output_dir, src.name, suffix_counter)
+                dest.unlink()
+                replaced_links += 1
+            except OSError as exc:
+                print(
+                    f"Warning: failed to remove existing entry {dest}: {exc}",
+                    file=sys.stderr,
+                )
+                skipped_entries += 1
+                continue
 
         create_symlink(src, dest)
         created_links += 1
@@ -80,8 +73,8 @@ def process_links(input_dir: Path, output_dir: Path, pattern: str) -> None:
     print(f"Pattern: {pattern}")
     print(f"Total matches found: {total_found}")
     print(f"New symlinks created: {created_links}")
-    print(f"Existing symlinks reused: {reused_links}")
-    print(f"Name conflicts resolved: {conflicts}")
+    print(f"Existing entries replaced: {replaced_links}")
+    print(f"Entries skipped: {skipped_entries}")
 
 
 def main() -> None:
