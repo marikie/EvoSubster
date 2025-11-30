@@ -11,13 +11,14 @@ from typing import Dict, List, Optional, Tuple
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from adjustText import adjust_text  # type: ignore
 from matplotlib import rcParams
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import StandardScaler
 
-rcParams["font.family"] = "MS Gothic"
+rcParams["font.family"] = "DejaVu Sans"
 
 EPS = 1e-12
 DEFAULT_TSV_PATTERN = "*.tsv"
@@ -80,9 +81,9 @@ def parse_filename_parts(tsv_path: Path) -> Tuple[str, str, str]:
     name_parts = tsv_path.stem.split("_")
     if len(name_parts) < 3:
         raise ValueError(f"Unexpected filename format for TSV file: {tsv_path.name}")
-    accession = name_parts[0]
-    short_name = name_parts[1]
-    date = name_parts[2]
+    accession = "_".join(name_parts[:2])
+    short_name = name_parts[2]
+    date = name_parts[3] if len(name_parts) > 3 else ""
     return accession, short_name, date
 
 
@@ -126,10 +127,9 @@ def extract_genus(metadata: dict, short_name: str, accession: str) -> Tuple[str,
         organism_name = organism.get("organism_name")
         if organism_name:
             genus = organism_name.split()[0]
-            label = f"{organism_name.replace(' ', '_')} ({short_name})"
-            return genus, label
+            return genus, organism_name
 
-    fallback_label = f"{short_name} ({accession})"
+    fallback_label = accession
     return "Unknown", fallback_label
 
 
@@ -228,7 +228,7 @@ def build_color_map(genus_labels: List[str]) -> Dict[str, Tuple[float, float, fl
 def plot_pca_scatter(
     output_dir: Path,
     pca_data: np.ndarray,
-    labels: List[str],
+    species_labels: List[str],
     genus_labels: List[str],
     cluster_labels: np.ndarray,
 ) -> None:
@@ -238,8 +238,34 @@ def plot_pca_scatter(
     fig, ax = plt.subplots(figsize=(14, 12))
     ax.scatter(pca_data[:, 0], pca_data[:, 1], c=colors, alpha=0.8, s=80, edgecolors="k")
 
-    for idx, text in enumerate(labels):
-        ax.annotate(text, (pca_data[idx, 0], pca_data[idx, 1]), xytext=(5, 5), textcoords="offset points", fontsize=8)
+    texts: List[plt.Text] = []
+    for idx, raw_text in enumerate(species_labels):
+        clean_text = raw_text.replace("_", " ")
+        text = ax.text(
+            pca_data[idx, 0],
+            pca_data[idx, 1],
+            clean_text,
+            fontsize=9,
+            fontstyle="italic",
+            ha="left",
+            va="bottom",
+        )
+        texts.append(text)
+
+    adjust_text(
+        texts,
+        x=pca_data[:, 0],
+        y=pca_data[:, 1],
+        ax=ax,
+        arrowprops=dict(arrowstyle="-", color="gray", lw=0.6, alpha=0.6, shrinkA=6, shrinkB=6),
+        autoalign="xy",
+        only_move={"points": "y", "text": "xy"},
+        expand_text=(1.2, 1.6),
+        expand_points=(1.2, 1.6),
+        force_text=(0.6, 0.6),
+        force_points=(0.4, 0.4),
+        lim=1000,
+    )
 
     ax.set_xlabel("PC1")
     ax.set_ylabel("PC2")
@@ -270,6 +296,7 @@ def save_results(
             "short_name": metadata_records[idx]["short_name"],
             "date": metadata_records[idx]["date"],
             "genus": metadata_records[idx]["genus"],
+            "species": metadata_records[idx]["species"],
             "cluster": int(cluster_labels[idx]),
             "PC1": float(pca_data[idx, 0]),
             "PC2": float(pca_data[idx, 1]),
@@ -295,19 +322,19 @@ def main() -> None:
 
     vectors: List[np.ndarray] = []
     metadata_records: List[dict] = []
-    labels: List[str] = []
     genus_labels: List[str] = []
+    species_labels: List[str] = []
     reference_order: Optional[List[str]] = None
 
     for tsv_file in tsv_files:
         accession, short_name, date = parse_filename_parts(tsv_file)
         metadata_json = ensure_metadata(tsv_file, accession)
-        genus, label = extract_genus(metadata_json, short_name, accession)
+        genus, species_label = extract_genus(metadata_json, short_name, accession)
 
         vector, reference_order = load_tsv_logratio(tsv_file, reference_order)
 
         vectors.append(vector)
-        labels.append(label)
+        species_labels.append(species_label)
         genus_labels.append(genus)
         metadata_records.append(
             {
@@ -315,6 +342,7 @@ def main() -> None:
                 "short_name": short_name,
                 "date": date,
                 "genus": genus,
+                "species": species_label,
             }
         )
 
@@ -331,7 +359,7 @@ def main() -> None:
     final_model = KMeans(n_clusters=best_k, random_state=args.random_state, n_init=10)
     cluster_labels = final_model.fit_predict(pca_data)
 
-    plot_pca_scatter(output_dir, pca_data, labels, genus_labels, cluster_labels)
+    plot_pca_scatter(output_dir, pca_data, species_labels, genus_labels, cluster_labels)
     save_results(output_dir, tsv_files, pca_data, cluster_labels, metadata_records)
 
     print("PCA clustering completed successfully.")
