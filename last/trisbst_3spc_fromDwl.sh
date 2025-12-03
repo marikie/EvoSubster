@@ -26,12 +26,32 @@ sanitize_for_path() {
     echo "$name"
 }
 
+make_short_name() {
+    local full_name="$1"
+    local suffix="$2"
+    local first_part=""
+    local second_part=""
+    local rest=""
+    local IFS='_'
+    read -r first_part second_part rest <<< "$full_name"
+
+    local first_trimmed="${first_part:0:3}"
+
+    if [ -z "$second_part" ]; then
+        second_part="${first_part:3}"
+    fi
+
+    local second_trimmed="${second_part:0:3}"
+
+    echo "${first_trimmed}${second_trimmed}${suffix}"
+}
+
 # Function to derive organism full name from NCBI Datasets summary JSON
-# - Writes summary JSON to "$base_genomes/<orgFullName>/<accession>.json" when configured
-# - Base name: reports[0].organism.organism_name (spaces -> underscores)
-# - If infraspecific_names exists, append all values joined by '_'
+# - Writes summary JSON to "$base_genomes/<orgFullName>/<accession>.json" (final_dir_name honors overrides)
+# - Returns: "<final_dir_name>|<summary_json_path>|<raw_organism_name>|<calculated_full_name>"
 get_org_full_name_from_id() {
     local accession="$1"
+    local override_name="$2"
     local tmp_json
     tmp_json=$(mktemp) || {
         echo "Error: Unable to create temporary file for $accession summary." >&2
@@ -53,13 +73,14 @@ get_org_full_name_from_id() {
     fi
 
     # Parse organism name
-    local base_name
-    base_name=$(jq -r 'try .reports[0].organism.organism_name catch ""' "$tmp_json")
-    if [ -z "$base_name" ] || [ "$base_name" = "null" ]; then
+    local raw_base_name
+    raw_base_name=$(jq -r 'try .reports[0].organism.organism_name catch ""' "$tmp_json")
+    if [ -z "$raw_base_name" ] || [ "$raw_base_name" = "null" ]; then
         echo "Warning: '.reports[0].organism.organism_name' not found in temporary summary; using accession $accession" >&2
-        base_name="$accession"
+        raw_base_name="$accession"
     fi
-    base_name=$(sanitize_for_path "$base_name")
+    local base_name
+    base_name=$(sanitize_for_path "$raw_base_name")
 
     # Parse infraspecific names (optional)
     local infra
@@ -74,10 +95,17 @@ get_org_full_name_from_id() {
     fi
     calculated_full_name=$(sanitize_for_path "$calculated_full_name")
 
+    local final_dir_name
+    if [ -n "$override_name" ]; then
+        final_dir_name=$(sanitize_for_path "$override_name")
+    else
+        final_dir_name="$calculated_full_name"
+    fi
+
     # Determine final JSON location
     local destination_json=""
     if [ -n "$base_genomes" ] && [ "$base_genomes" != "null" ]; then
-        local dest_dir="$base_genomes/$calculated_full_name"
+        local dest_dir="$base_genomes/$final_dir_name"
         if ! mkdir -p "$dest_dir"; then
             echo "Error: Unable to create directory $dest_dir for storing summary JSON." >&2
             rm -f "$tmp_json"
@@ -98,7 +126,7 @@ get_org_full_name_from_id() {
         rm -f "$tmp_json"
     fi
 
-    echo "$calculated_full_name"
+    echo "$final_dir_name|$destination_json|$raw_base_name|$calculated_full_name"
 }
 
 OUT_DIR_OVERRIDE=""
@@ -145,9 +173,6 @@ DATE="$1"
 org1ID="$2"
 org2ID="$3"
 org3ID="$4"
-org1FullName="$5"
-org2FullName="$6"
-org3FullName="$7"
 
 
 # Check minimally required arguments (DATE and 3 accessions)
@@ -170,28 +195,32 @@ if [ ! -d "$base_genomes" ]; then
     }
 fi
 
-# Auto-generate org full names from NCBI Datasets summary if not provided
-if [ -z "$org1FullName" ]; then
-    org1FullName=$(get_org_full_name_from_id "$org1ID") || exit 1
-    echo "Derived org1FullName: $org1FullName"
-else
-    org1FullName="${org1FullName// /_}"  # Replace spaces with underscores
-    echo "Using provided org1FullName: $org1FullName"
+default_out_dir=$(get_config '.paths.out_dir')
+if [ -z "$default_out_dir" ] || [ "$default_out_dir" = "null" ]; then
+    echo "Error: .paths.out_dir is not set in dwl_config.yaml" >&2
+    exit 1
 fi
-if [ -z "$org2FullName" ]; then
-    org2FullName=$(get_org_full_name_from_id "$org2ID") || exit 1
-    echo "Derived org2FullName: $org2FullName"
-else
-    org2FullName="${org2FullName// /_}"  # Replace spaces with underscores
-    echo "Using provided org2FullName: $org2FullName"
+
+out_dir_base="${OUT_DIR_OVERRIDE:-$default_out_dir}"
+if [ ! -d "$out_dir_base" ]; then
+    if ! mkdir -p "$out_dir_base"; then
+        echo "Error: Unable to create output base directory at $out_dir_base" >&2
+        exit 1
+    fi
 fi
-if [ -z "$org3FullName" ]; then
-    org3FullName=$(get_org_full_name_from_id "$org3ID") || exit 1
-    echo "Derived org3FullName: $org3FullName"
-else
-    org3FullName="${org3FullName// /_}"  # Replace spaces with underscores
-    echo "Using provided org3FullName: $org3FullName"
-fi
+
+# Auto-generate org full names from NCBI Datasets summary (always capture metadata)
+org1Metadata=$(get_org_full_name_from_id "$org1ID" "") || exit 1
+org2Metadata=$(get_org_full_name_from_id "$org2ID" "") || exit 1
+org3Metadata=$(get_org_full_name_from_id "$org3ID" "") || exit 1
+
+IFS='|' read -r org1FullName org1SummaryJson org1RawName org1NcbiFullName <<< "$org1Metadata"
+IFS='|' read -r org2FullName org2SummaryJson org2RawName org2NcbiFullName <<< "$org2Metadata"
+IFS='|' read -r org3FullName org3SummaryJson org3RawName org3NcbiFullName <<< "$org3Metadata"
+
+echo "Derived org1FullName: $org1FullName"
+echo "Derived org2FullName: $org2FullName"
+echo "Derived org3FullName: $org3FullName"
 
 cd "$base_genomes" || {
     echo "Error: Cannot change directory to $base_genomes" >&2
@@ -209,6 +238,9 @@ echo "includes: $includes"
 # Create arrays
 ids=("$org1ID" "$org2ID" "$org3ID")
 names=("$org1FullName" "$org2FullName" "$org3FullName")
+raw_names=("$org1RawName" "$org2RawName" "$org3RawName")
+ncbi_full_names=("$org1NcbiFullName" "$org2NcbiFullName" "$org3NcbiFullName")
+summary_jsons=("$org1SummaryJson" "$org2SummaryJson" "$org3SummaryJson")
 
 # Iterate over both arrays using an index
 for i in {0..2}; do
@@ -331,6 +363,28 @@ for f in "$org1FASTA" "$org2FASTA" "$org3FASTA"; do
     fi
 done
 
+org1FullNameWithSuffix="${org1FullName}_1"
+org2FullNameWithSuffix="${org2FullName}_2"
+org3FullNameWithSuffix="${org3FullName}_3"
+
+org1ShortName=$(make_short_name "$org1FullNameWithSuffix" "1")
+org2ShortName=$(make_short_name "$org2FullNameWithSuffix" "2")
+org3ShortName=$(make_short_name "$org3FullNameWithSuffix" "3")
+
+short_names=("$org1ShortName" "$org2ShortName" "$org3ShortName")
+run_combo_dir="${org1ShortName}_${org2ShortName}_${org3ShortName}"
+run_dir_root="$out_dir_base/$run_combo_dir"
+run_date_dir_rel="$run_dir_root/$DATE"
+metadata_dir_rel="$run_date_dir_rel/metadata"
+
+if ! mkdir -p "$metadata_dir_rel"; then
+    echo "Error: Unable to create metadata directory at $metadata_dir_rel" >&2
+    exit 1
+fi
+
+run_date_dir="$(cd "$run_dir_root/$DATE" && pwd)"
+metadata_dir="$run_date_dir/metadata"
+
 # Check if GFF file exists in org1 (auto-detect)
 gffFilePath="$(get_config '.paths.base_genomes')/$org1FullName/genomic.gff"
 
@@ -340,6 +394,94 @@ if [ -e "$gffFilePath" ]; then
 else
     org1GFF="NO_GFF_FILE" # set a special flag to $org1GFF
     echo "No GFF file found for $org1FullName. Please download the GFF file manually."
+fi
+
+echo "--- Preparing metadata artifacts in $metadata_dir"
+declare -a fasta_paths=("$org1FASTA" "$org2FASTA" "$org3FASTA")
+declare -a gff_paths=("$org1GFF" "" "")
+declare -a metadata_json_copies=("" "" "")
+
+for i in {0..2}; do
+    src_json=${summary_jsons[$i]}
+    short_name=${short_names[$i]}
+    accession=${ids[$i]}
+    if [ -n "$src_json" ] && [ -f "$src_json" ]; then
+        dest_json="$metadata_dir/${short_name}_${accession}.json"
+        if cp "$src_json" "$dest_json"; then
+            metadata_json_copies[$i]="$dest_json"
+        else
+            echo "Warning: Failed to copy metadata JSON for ${short_name} ($accession) to $dest_json" >&2
+        fi
+    else
+        echo "Warning: Source metadata JSON missing for ${short_name} ($accession) at ${src_json:-<empty>}" >&2
+    fi
+done
+
+manifest_path="$metadata_dir/metadata_manifest.json"
+python - "$manifest_path" "$DATE" "$run_combo_dir" "$run_date_dir" "$metadata_dir" \
+"${ids[0]}" "${names[0]}" "${short_names[0]}" "${fasta_paths[0]}" "${gff_paths[0]}" "${raw_names[0]}" "${ncbi_full_names[0]}" "${metadata_json_copies[0]}" \
+"${ids[1]}" "${names[1]}" "${short_names[1]}" "${fasta_paths[1]}" "${gff_paths[1]}" "${raw_names[1]}" "${ncbi_full_names[1]}" "${metadata_json_copies[1]}" \
+"${ids[2]}" "${names[2]}" "${short_names[2]}" "${fasta_paths[2]}" "${gff_paths[2]}" "${raw_names[2]}" "${ncbi_full_names[2]}" "${metadata_json_copies[2]}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+def normalize(value, empty_as_none=False):
+    if value in ("", "null", "None"):
+        return None
+    if empty_as_none and value in ("NO_GFF_FILE",):
+        return None
+    return value
+
+manifest_path = Path(sys.argv[1])
+run_date = sys.argv[2]
+combo_dir = sys.argv[3]
+run_dir = sys.argv[4]
+metadata_dir = sys.argv[5]
+
+args = sys.argv[6:]
+slots = [
+    ("org1", "outgroup"),
+    ("org2", "ingroup"),
+    ("org3", "ingroup"),
+]
+chunk_size = 8
+organisms = []
+for idx, (slot, role) in enumerate(slots):
+    offset = idx * chunk_size
+    chunk = args[offset : offset + chunk_size]
+    accession, directory_name, short_name, fasta_path, gff_path, raw_name, ncbi_full, metadata_json = chunk
+    organisms.append(
+        {
+            "slot": slot,
+            "role": role,
+            "accession": normalize(accession),
+            "directory_name": normalize(directory_name),
+            "short_name": normalize(short_name),
+            "fasta_path": normalize(fasta_path),
+            "gff_path": normalize(gff_path, empty_as_none=True),
+            "raw_organism_name": normalize(raw_name),
+            "ncbi_full_name": normalize(ncbi_full),
+            "metadata_json": normalize(metadata_json),
+        }
+    )
+
+manifest = {
+    "date": run_date,
+    "combo_dir": combo_dir,
+    "run_dir": run_dir,
+    "metadata_dir": metadata_dir,
+    "organisms": organisms,
+}
+manifest_path.parent.mkdir(parents=True, exist_ok=True)
+manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+print(f"Wrote metadata manifest to {manifest_path}")
+PY
+
+# shellcheck disable=SC2181
+if [ $? -ne 0 ]; then
+    echo "Error: Failed to generate metadata manifest" >&2
+    exit 1
 fi
 
 # Run downstream pipeline (no checkInnerGroupIdt argument anymore)

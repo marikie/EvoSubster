@@ -11,10 +11,9 @@ R Markdown report can consume.
 
 import argparse
 import json
-import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 IDENTITY_PREFIX = "# substitution percent identity:"
 GC_CONTENT_PREFIX = "Total GC content: "
@@ -37,17 +36,6 @@ def parse_args() -> argparse.Namespace:
             "Optional file path for the JSON summary. "
             "Defaults to <input_dir>/<input_dir_name>_summary.json."
         ),
-    )
-    parser.add_argument(
-        "--ncbi-cli",
-        default="datasets",
-        help="NCBI CLI executable used to fetch metadata (default: datasets).",
-    )
-    parser.add_argument(
-        "--ncbi-timeout",
-        type=int,
-        default=30,
-        help="Timeout in seconds for the NCBI CLI invocation.",
     )
     return parser.parse_args()
 
@@ -72,35 +60,27 @@ def select_all(run_dir: Path, pattern: str) -> List[Path]:
     return sorted(run_dir.glob(pattern))
 
 
-def matches_species_suffix(path: Path, species_suffix: str) -> bool:
+def matches_short_name(path: Path, short_name: str) -> bool:
+    if not short_name:
+        return False
     parts = path.stem.split("_")
-    for part in parts:
-        if part.endswith(species_suffix) and not part.isdigit():
-            return True
-    return False
+    return any(part == short_name for part in parts)
 
 
-def filter_for_species(paths: Iterable[Path], species_suffix: str) -> List[Path]:
-    filtered = [path for path in paths if matches_species_suffix(path, species_suffix)]
+def filter_for_short_name(paths: Iterable[Path], short_name: str) -> List[Path]:
+    filtered = [path for path in paths if matches_short_name(path, short_name)]
     return sorted(filtered)
 
 
-def select_first_for_species(run_dir: Path, pattern: str, species_suffix: str) -> Optional[Path]:
-    matches = filter_for_species(run_dir.glob(pattern), species_suffix)
+def select_first_for_short_name(run_dir: Path, pattern: str, short_name: str) -> Optional[Path]:
+    matches = filter_for_short_name(run_dir.glob(pattern), short_name)
     if not matches:
         return None
     return matches[0]
 
 
-def select_all_for_species(run_dir: Path, pattern: str, species_suffix: str) -> List[Path]:
-    return filter_for_species(run_dir.glob(pattern), species_suffix)
-
-
-def extract_accession_from_filename(path: Path) -> Optional[str]:
-    parts = path.stem.split("_")
-    if len(parts) < 2:
-        return None
-    return "_".join(parts[:2])
+def select_all_for_short_name(run_dir: Path, pattern: str, short_name: str) -> List[Path]:
+    return filter_for_short_name(run_dir.glob(pattern), short_name)
 
 
 def load_json_file(path: Path) -> Tuple[Optional[dict], Optional[str]]:
@@ -112,89 +92,34 @@ def load_json_file(path: Path) -> Tuple[Optional[dict], Optional[str]]:
         return None, f"Failed to read {path}: {exc}"
 
 
-def fetch_ncbi_metadata(
-    accession: str, cache_dir: Path, cli: str, timeout: int
-) -> Dict[str, Optional[str]]:
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    json_path = cache_dir / f"{accession}.json"
-    command = [cli, "summary", "genome", "accession", accession]
+def load_manifest(run_dir: Path) -> Tuple[Optional[dict], Optional[str]]:
+    manifest_path = run_dir / "metadata" / "metadata_manifest.json"
+    if not manifest_path.exists():
+        return None, f"Metadata manifest not found: {manifest_path}"
+    payload, error = load_json_file(manifest_path)
+    if error:
+        return None, error
+    payload["manifest_path"] = str(manifest_path)
+    return payload, None
 
-    result: Dict[str, Optional[str]] = {
-        "species_name": None,
-        "command": " ".join(command),
-        "returncode": None,
-        "stderr": None,
-        "error": None,
-        "cached": None,
-        "json_path": str(json_path),
+
+def build_manifest_slot_map(manifest: dict) -> Dict[str, dict]:
+    slot_map: Dict[str, dict] = {}
+    for entry in manifest.get("organisms", []):
+        slot = entry.get("slot")
+        if slot:
+            slot_map[slot] = entry
+    return slot_map
+
+
+def sanitize_metadata(metadata: dict) -> dict:
+    """Drop duplicated keys that are promoted to the species root."""
+    filtered = {
+        key: value
+        for key, value in metadata.items()
+        if key not in {"accession", "metadata_json"}
     }
-
-    payload: Optional[dict] = None
-
-    if json_path.exists():
-        payload, error = load_json_file(json_path)
-        if error is None and payload is not None:
-            result["cached"] = True
-        else:
-            result["cached"] = False
-            result["error"] = error
-
-    if payload is None:
-        try:
-            completed = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                check=False,
-            )
-        except FileNotFoundError:
-            result["error"] = f"CLI not found: {cli}"
-            return result
-        except subprocess.TimeoutExpired:
-            result["error"] = f"CLI timed out after {timeout} seconds"
-            return result
-
-        result["returncode"] = str(completed.returncode)
-        stderr = completed.stderr.strip() if completed.stderr else None
-        if stderr:
-            result["stderr"] = stderr
-
-        if completed.returncode != 0:
-            result["error"] = "CLI exited with a non-zero status"
-            return result
-
-        stdout = completed.stdout.strip()
-        if not stdout:
-            result["error"] = "CLI returned an empty response"
-            return result
-
-        try:
-            json_path.write_text(stdout, encoding="utf-8")
-        except OSError as exc:
-            result["error"] = f"Failed to write metadata JSON: {exc}"
-            return result
-
-        payload, error = load_json_file(json_path)
-        if error:
-            result["error"] = error
-            return result
-        result["cached"] = False
-        result["error"] = None
-
-    reports = payload.get("reports") if payload else None
-    if not reports:
-        result["error"] = "No reports returned in metadata payload"
-        return result
-
-    organism = reports[0].get("organism", {})
-    organism_name = organism.get("organism_name")
-    if not organism_name:
-        result["error"] = "Organism name missing in metadata payload"
-        return result
-
-    result["species_name"] = organism_name
-    return result
+    return filtered
 
 
 def extract_identity_line(train_path: Path) -> Optional[str]:
@@ -208,6 +133,13 @@ def extract_identity_line(train_path: Path) -> Optional[str]:
     if lines:
         return lines[0]
     return None
+
+
+def extract_identity_value(identity_line: str) -> str:
+    if ":" in identity_line:
+        _, remainder = identity_line.split(":", 1)
+        return remainder.strip()
+    return identity_line.strip()
 
 
 def extract_sbst_ratio_line(sbst_path: Path, line_index: int) -> Optional[str]:
@@ -235,120 +167,155 @@ def read_file_lines(path: Path) -> List[str]:
 
 def process_species(
     run_dir: Path,
-    species_suffix: str,
+    metadata: dict,
     sbst_ratio_path: Optional[Path],
-    ratio_line_index: int,
-    cli: str,
-    timeout: int,
+    ratio_line_index: Optional[int],
+    *,
+    include_tsv: bool = True,
+    include_sbst_ratio: bool = True,
+    include_pdfs: bool = True,
 ) -> Tuple[Dict[str, object], List[str]]:
-    data: Dict[str, object] = {}
+    data: Dict[str, object] = {"metadata": sanitize_metadata(metadata)}
     issues: List[str] = []
 
-    tsv_path = select_first_for_species(run_dir, f"*_*{species_suffix}_*.tsv", species_suffix)
-    if tsv_path:
-        data["tsv_file"] = str(tsv_path)
-        accession = extract_accession_from_filename(tsv_path)
+    slot = metadata.get("slot", "unknown")
+    short_name = metadata.get("short_name")
+    if not short_name:
+        issues.append(f"{slot}: Metadata missing short_name.")
+        return data, issues
+
+    accession = metadata.get("accession")
+    if accession:
         data["accession"] = accession
-        if accession:
-            metadata = fetch_ncbi_metadata(accession, tsv_path.parent, cli, timeout)
-            data["ncbi_lookup"] = metadata
-            if metadata.get("error"):
+    metadata_json = metadata.get("metadata_json")
+    if metadata_json:
+        data["metadata_json"] = metadata_json
+
+    if include_tsv:
+        tsv_path = select_first_for_short_name(run_dir, f"*_*{short_name}_*.tsv", short_name)
+        if tsv_path:
+            data["tsv_file"] = str(tsv_path)
+        else:
+            issues.append(f"{slot}: No TSV matching '*_*{short_name}_*.tsv' found.")
+
+    if include_sbst_ratio:
+        if sbst_ratio_path and ratio_line_index is not None:
+            ratio_value = extract_sbst_ratio_line(sbst_ratio_path, ratio_line_index)
+            if ratio_value:
+                data["sbst_ratio_entry"] = ratio_value
+            else:
                 issues.append(
-                    f"NCBI metadata lookup failed for {accession}: {metadata['error']}"
+                    f"{slot}: Could not extract substitution ratio line {ratio_line_index} from "
+                    f"{sbst_ratio_path.name}."
                 )
         else:
-            issues.append(f"Failed to derive accession from {tsv_path.name}")
-    else:
-        issues.append(f"No TSV matching '*_*{species_suffix}_*.tsv' found.")
+            issues.append(f"{slot}: Missing sbstRatio*_maflinked.out file.")
 
-    train_path = select_first_for_species(run_dir, f"*1*{species_suffix}_*.train", species_suffix)
-    if train_path:
-        data["train_file"] = str(train_path)
-        identity_line = extract_identity_line(train_path)
-        if identity_line:
-            data["train_identity_line"] = identity_line
-        else:
-            issues.append(
-                f"No '{IDENTITY_PREFIX}' line available in {train_path.name}."
-            )
-    else:
-        issues.append(f"No train file matching '*1*{species_suffix}_*.train' found.")
-
-    if sbst_ratio_path:
-        ratio_value = extract_sbst_ratio_line(sbst_ratio_path, ratio_line_index)
-        if ratio_value:
-            data["sbst_ratio_entry"] = ratio_value
-        else:
-            issues.append(
-                f"Could not extract substitution ratio line {ratio_line_index} from "
-                f"{sbst_ratio_path.name}."
-            )
-    else:
-        issues.append("Missing sbstRatio*_maflinked.out file.")
-
-    gc_path = select_first_for_species(run_dir, f"*{species_suffix}_gcContent*.out", species_suffix)
+    gc_path = select_first_for_short_name(run_dir, f"*{short_name}_gcContent*.out", short_name)
     if gc_path:
         data["gc_content_file"] = str(gc_path)
         data["gc_content"] = read_file_lines(gc_path)
     else:
-        issues.append(f"No GC content file matching '*{species_suffix}_gcContent*.out' found.")
+        issues.append(
+            f"{slot}: No GC content file matching '*{short_name}_gcContent*.out' found."
+        )
 
-    data["pdfs"] = {
-        "maflinked_norm": [
-            str(path)
-            for path in select_all_for_species(
-                run_dir, f"*_*{species_suffix}_*_maflinked_norm.pdf", species_suffix
-            )
-        ],
-        "maflinked_logratio": [
-            str(path)
-            for path in select_all_for_species(
-                run_dir, f"*_*{species_suffix}_*_maflinked_logRatio*.pdf", species_suffix
-            )
-        ],
-        "maflinked_ncds_norm": [
-            str(path)
-            for path in select_all_for_species(
-                run_dir, f"*_*{species_suffix}_*_maflinked_ncds_norm.pdf", species_suffix
-            )
-        ],
-        "maflinked_ncds_logratio": [
-            str(path)
-            for path in select_all_for_species(
-                run_dir, f"*_*{species_suffix}_*_maflinked_ncds_logRatio*.pdf", species_suffix
-            )
-        ],
-        "maflinked_dinuc_tsv": [
-            str(path)
-            for path in select_all_for_species(
-                run_dir, f"*_*{species_suffix}_*_maflinked_dinuc.tsv.pdf", species_suffix
-            )
-        ],
-        "maflinked_dinuc_ncds_tsv": [
-            str(path)
-            for path in select_all_for_species(
-                run_dir, f"*_*{species_suffix}_*_maflinked_dinuc_ncds.tsv.pdf", species_suffix
-            )
-        ],
-    }
+    if include_pdfs:
+        data["pdfs"] = {
+            "maflinked_norm": [
+                str(path)
+                for path in select_all_for_short_name(
+                    run_dir, f"*_*{short_name}_*_maflinked_norm.pdf", short_name
+                )
+            ],
+            "maflinked_logratio": [
+                str(path)
+                for path in select_all_for_short_name(
+                    run_dir, f"*_*{short_name}_*_maflinked_logRatio*.pdf", short_name
+                )
+            ],
+            "maflinked_ncds_norm": [
+                str(path)
+                for path in select_all_for_short_name(
+                    run_dir, f"*_*{short_name}_*_maflinked_ncds_norm.pdf", short_name
+                )
+            ],
+            "maflinked_ncds_logratio": [
+                str(path)
+                for path in select_all_for_short_name(
+                    run_dir, f"*_*{short_name}_*_maflinked_ncds_logRatio*.pdf", short_name
+                )
+            ],
+            "maflinked_dinuc_tsv": [
+                str(path)
+                for path in select_all_for_short_name(
+                    run_dir, f"*_*{short_name}_*_maflinked_dinuc.tsv.pdf", short_name
+                )
+            ],
+            "maflinked_dinuc_ncds_tsv": [
+                str(path)
+                for path in select_all_for_short_name(
+                    run_dir, f"*_*{short_name}_*_maflinked_dinuc_ncds.tsv.pdf", short_name
+                )
+            ],
+        }
 
-    required_pdfs = {
-        "maflinked_norm": "maflinked_norm.pdf",
-        "maflinked_logratio": "maflinked_logRatio*.pdf",
-        "maflinked_dinuc_tsv": "maflinked_dinuc.tsv.pdf",
-    }
-    for key, description in required_pdfs.items():
-        if not data["pdfs"][key]:
-            issues.append(
-                f"Missing required PDF matching '*_*{species_suffix}_{description}'."
-            )
+        required_pdfs = {
+            "maflinked_norm": "maflinked_norm.pdf",
+            "maflinked_logratio": "maflinked_logRatio*.pdf",
+            "maflinked_dinuc_tsv": "maflinked_dinuc.tsv.pdf",
+        }
+        for key, description in required_pdfs.items():
+            if not data["pdfs"][key]:
+                issues.append(
+                    f"{slot}: Missing required PDF matching '*_*{short_name}_{description}'."
+                )
 
     return data, issues
 
 
-def process_dataset(
-    dataset_dir: Path, cli: str, timeout: int
-) -> Tuple[Optional[Dict[str, object]], List[str]]:
+def collect_identity_metrics(
+    run_dir: Path, slot_map: Dict[str, dict]
+) -> Tuple[Dict[str, str], List[str]]:
+    identity: Dict[str, str] = {}
+    issues: List[str] = []
+
+    def short_name_for(slot: str) -> Optional[str]:
+        entry = slot_map.get(slot)
+        return entry.get("short_name") if entry else None
+
+    pair_specs = [
+        ("idt_12", "org1", "org2"),
+        ("idt_13", "org1", "org3"),
+        ("idt_23", "org2", "org3"),
+    ]
+
+    for key, slot_a, slot_b in pair_specs:
+        short_a = short_name_for(slot_a)
+        short_b = short_name_for(slot_b)
+        if not short_a or not short_b:
+            issues.append(f"{key}: Missing short_name for {slot_a} or {slot_b}.")
+            continue
+
+        pattern = f"*{short_a}2{short_b}_*.train"
+        train_path = select_first(run_dir, pattern)
+        if not train_path:
+            issues.append(f"{key}: No train file matching '{pattern}' found.")
+            continue
+
+        identity_line = extract_identity_line(train_path)
+        if not identity_line:
+            issues.append(f"{key}: '{IDENTITY_PREFIX}' line missing in {train_path.name}.")
+            continue
+
+        raw_value = extract_identity_value(identity_line)
+        value_with_unit = raw_value if raw_value.endswith("%") else f"{raw_value} %"
+        identity[key] = value_with_unit
+
+    return identity, issues
+
+
+def process_dataset(dataset_dir: Path) -> Tuple[Optional[Dict[str, object]], List[str]]:
     dataset_data: Dict[str, object] = {"dataset": dataset_dir.name}
     issues: List[str] = []
 
@@ -360,24 +327,62 @@ def process_dataset(
     dataset_data["latest_run"] = latest_run.name
     dataset_data["run_dir"] = str(latest_run)
 
+    manifest, manifest_error = load_manifest(latest_run)
+    if manifest_error or not manifest:
+        issues.append(manifest_error or "Unknown metadata manifest error.")
+        return None, issues
+    dataset_data["metadata_manifest"] = manifest.get("manifest_path")
+    slot_map = build_manifest_slot_map(manifest)
+
     sbst_ratio_path = select_first(latest_run, "sbstRatio*_maflinked.out")
 
-    species2_data, species2_issues = process_species(
-        latest_run, "2", sbst_ratio_path, 1, cli, timeout
-    )
-    species3_data, species3_issues = process_species(
-        latest_run, "3", sbst_ratio_path, 2, cli, timeout
-    )
+    species1_meta = slot_map.get("org1")
+    if not species1_meta:
+        species1_data = {}
+        issues.append("org1: Missing metadata entry in manifest.")
+    else:
+        species1_data, species1_issues = process_species(
+            latest_run,
+            species1_meta,
+            None,
+            None,
+            include_tsv=False,
+            include_sbst_ratio=False,
+            include_pdfs=False,
+        )
+        issues.extend(species1_issues)
+    dataset_data["species1"] = species1_data
 
+    species2_meta = slot_map.get("org2")
+    if not species2_meta:
+        species2_data = {}
+        issues.append("org2: Missing metadata entry in manifest.")
+    else:
+        species2_data, species2_issues = process_species(
+            latest_run, species2_meta, sbst_ratio_path, 1
+        )
+        issues.extend(species2_issues)
     dataset_data["species2"] = species2_data
+
+    species3_meta = slot_map.get("org3")
+    if not species3_meta:
+        species3_data = {}
+        issues.append("org3: Missing metadata entry in manifest.")
+    else:
+        species3_data, species3_issues = process_species(
+            latest_run, species3_meta, sbst_ratio_path, 2
+        )
+        issues.extend(species3_issues)
     dataset_data["species3"] = species3_data
-    issues.extend(species2_issues)
-    issues.extend(species3_issues)
+
+    identity_values, identity_issues = collect_identity_metrics(latest_run, slot_map)
+    dataset_data.update(identity_values)
+    issues.extend(identity_issues)
 
     return dataset_data, issues
 
 
-def build_summary(root: Path, cli: str, timeout: int) -> Dict[str, object]:
+def build_summary(root: Path) -> Dict[str, object]:
     summary: Dict[str, object] = {"input_root": str(root), "datasets": [], "issues": []}
     dataset_entries = []
     aggregated_issues: List[str] = []
@@ -388,14 +393,14 @@ def build_summary(root: Path, cli: str, timeout: int) -> Dict[str, object]:
         if not entry.is_dir() or entry.name.isdigit():
             continue
         processed_candidate = True
-        dataset_data, issues = process_dataset(entry, cli, timeout)
+        dataset_data, issues = process_dataset(entry)
         if dataset_data:
             dataset_entries.append(dataset_data)
         if issues:
             aggregated_issues.extend([f"{entry.name}: {msg}" for msg in issues])
 
     if not processed_candidate:
-        dataset_data, issues = process_dataset(root, cli, timeout)
+        dataset_data, issues = process_dataset(root)
         if dataset_data:
             dataset_entries.append(dataset_data)
         if issues:
@@ -414,7 +419,7 @@ def main() -> None:
         print(f"Error: input directory does not exist: {input_root}", file=sys.stderr)
         sys.exit(1)
 
-    summary = build_summary(input_root, args.ncbi_cli, args.ncbi_timeout)
+    summary = build_summary(input_root)
     output_text = json.dumps(summary, ensure_ascii=False, indent=2)
 
     output_path: Optional[Path]

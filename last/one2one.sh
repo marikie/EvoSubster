@@ -10,7 +10,7 @@ m2omaf=$6
 o2omaf=$7
 o2omaf_maflinked=$8
 
-threadNum=2
+threadNum=8
 # lastdb
 echo "---lastdb"
 if [ ! -d $dbName ]; then

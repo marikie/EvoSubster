@@ -18,16 +18,25 @@ R_DIR="${R_DIR_OVERRIDE:-$R_DIR}"
 PATH="$LAST_DIR:$PATH"
 
 config_file="$SCRIPT_DIR/sbst_config.yaml"
+dwl_config_file="$SCRIPT_DIR/dwl_config.yaml"
 
 # Load YAML configuration using yq
 if [ ! -f "$config_file" ]; then
     echo "Configuration file not found!" 1>&2
     exit 1
 fi
+if [ ! -f "$dwl_config_file" ]; then
+    echo "Download configuration file not found!" 1>&2
+    exit 1
+fi
 
 # Function to get config values using yq
 get_config() {
     yq eval "$1" "$config_file"
+}
+
+get_dwl_config() {
+    yq eval "$1" "$dwl_config_file"
 }
 
 OUT_DIR_OVERRIDE=""
@@ -155,7 +164,11 @@ if [ -z "$org1ID" ] || [ -z "$org2ID" ] || [ -z "$org3ID" ]; then
 fi
 
 # Use config patterns to generate filenames
-default_out_dir=$(get_config '.paths.out_dir')
+default_out_dir=$(get_dwl_config '.paths.out_dir')
+if [ -z "$default_out_dir" ] || [ "$default_out_dir" = "null" ]; then
+    echo "Error: .paths.out_dir is not set in dwl_config.yaml" >&2
+    exit 1
+fi
 outDirBase="${OUT_DIR_OVERRIDE:-$default_out_dir}"
 if [ ! -d "$outDirBase" ]; then
     echo "---making $outDirBase"
@@ -166,6 +179,7 @@ if [ ! -d "$outDirBase" ]; then
 fi
 outDirPath="${outDirBase}/${org1ShortName}_${org2ShortName}_${org3ShortName}"
 
+gcContent_org1=$(get_config '.patterns.gc_content' | sed "s/{org_short}/$org1ShortName/g" | sed "s/{date}/$DATE/g")
 gcContent_org2=$(get_config '.patterns.gc_content' | sed "s/{org_short}/$org2ShortName/g" | sed "s/{date}/$DATE/g")
 gcContent_org3=$(get_config '.patterns.gc_content' | sed "s/{org_short}/$org3ShortName/g" | sed "s/{date}/$DATE/g")
 
@@ -258,6 +272,12 @@ echo "pwd: $(pwd)"
 
 # GC content
 echo "$(get_config '.messages.gc_content')"
+if [ ! -e "$gcContent_org1" ]; then
+echo "time bash $LAST_DIR/gc_content.sh $org1FASTA >$gcContent_org1"
+time bash "$LAST_DIR/gc_content.sh" "$org1FASTA" >"$gcContent_org1"
+else
+	echo "$gcContent_org1 already exists"
+fi
 if [ ! -e "$gcContent_org2" ]; then
 echo "time bash $LAST_DIR/gc_content.sh $org2FASTA >$gcContent_org2"
 time bash "$LAST_DIR/gc_content.sh" "$org2FASTA" >"$gcContent_org2"

@@ -1,6 +1,5 @@
 paths:
-  # Change the path to the directory to store outputs
-  out_dir: "/absolute/path/to/outputs"
+  # Output directory is now configured in dwl_config.yaml
 
 # Script settings
 settings:
