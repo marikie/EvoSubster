@@ -46,6 +46,12 @@ create_pdf <- function(graph_path, data, value_col) {
     mutate(pos = pos_in_group + offset)
 
   value_sym <- rlang::sym(value_col)
+  data[[value_col]][!is.finite(data[[value_col]])] <- NA_real_
+  finite_values <- data[[value_col]][is.finite(data[[value_col]])]
+  if (length(finite_values) == 0) {
+    warning(sprintf("No finite values detected for %s; defaulting to zeros.", value_col))
+    finite_values <- 0
+  }
 
   # X labels: oriType in the arranged order
   x_breaks <- data$pos
@@ -55,14 +61,17 @@ create_pdf <- function(graph_path, data, value_col) {
   color_array <- RColorBrewer::brewer.pal(6, "Dark2")
   fill_map <- setNames(color_array, group_order)
 
-  yr <- range(data[[value_col]], na.rm = TRUE)
-  max_abs <- max(abs(yr[1]), abs(yr[2]))
+  yr <- range(finite_values, na.rm = TRUE)
+  max_abs <- max(abs(yr))
+  if (!is.finite(max_abs) || max_abs == 0) {
+    max_abs <- 1
+  }
   # Create symmetric range around 0
   ylim_high <- max_abs * 1.4 # Space above for rectangles and text
   ylim_low <- -max_abs * 1.4 # Equal space below for labels and grid
 
   # Calculate max integer for grid breaks
-  max_int <- ceiling(max_abs)
+  max_int <- max(1, ceiling(max_abs))
 
   # Position rectangles and labels relative to symmetric limits
   yrect_low <- ylim_high - 0.10 * (ylim_high - ylim_low)
@@ -110,10 +119,10 @@ create_pdf <- function(graph_path, data, value_col) {
       data = data,
       aes(x = pos, xend = pos, y = 0, yend = !!value_sym, color = trans),
       inherit.aes = FALSE,
-      linewidth = 0.8, alpha = 0.9, show.legend = FALSE
+      linewidth = 0.8, alpha = 0.9, show.legend = FALSE, na.rm = TRUE
     ) +
     scale_color_manual(values = fill_map, guide = "none") +
-    geom_point(size = 4, aes(color = trans), show.legend = FALSE) +
+    geom_point(size = 4, aes(color = trans), show.legend = FALSE, na.rm = TRUE) +
     # Custom x labels: outer letters in black, middle letter in group color
     geom_text(
       data = labels_df, aes(x = pos, y = y_label3, label = c3),
@@ -175,7 +184,10 @@ add_logRatio <- function(data) {
 
   # Add transition column to data
   # Add observed figure of mutNum/totalRootNum
-  obs_mut_over_ori <- data$mutNum / data$totalRootNum
+  obs_mut_over_ori <- ifelse(is.finite(data$totalRootNum) & data$totalRootNum > 0,
+    data$mutNum / data$totalRootNum,
+    NA_real_
+  )
 
   # all_sbst_sum <- data %>%
   #   select(mutNum) %>%
@@ -186,13 +198,26 @@ add_logRatio <- function(data) {
   #   pull(totalRootNum) %>%
   #   sum()
   # expected_sbst_over_ori <- (all_sbst_sum / all_ori_sum) / 3
-  mean_obs_sbst_over_ori <- mean(obs_mut_over_ori, na.rm = TRUE)
+  positive_rates <- obs_mut_over_ori[is.finite(obs_mut_over_ori) & obs_mut_over_ori > 0]
+  mean_obs_sbst_over_ori <- if (length(positive_rates) > 0) mean(positive_rates) else NA_real_
+  if (!is.finite(mean_obs_sbst_over_ori) || mean_obs_sbst_over_ori <= 0) {
+    warning("Mean observed substitution rate is non-positive; log ratios will be NA.")
+    mean_obs_sbst_over_ori <- NA_real_
+  }
+
+  if (!is.na(mean_obs_sbst_over_ori) && mean_obs_sbst_over_ori > 0) {
+    ratio_base <- obs_mut_over_ori / mean_obs_sbst_over_ori
+    ratio_base[!is.finite(ratio_base) | ratio_base <= 0] <- NA_real_
+    log_ratio_mean <- log2(ratio_base)
+  } else {
+    log_ratio_mean <- rep(NA_real_, length(obs_mut_over_ori))
+  }
 
   data <- data %>%
     mutate(
       obs_mut_over_ori = obs_mut_over_ori,
       # logRatio_exp = log2(obs_mut_over_ori / expected_sbst_over_ori),
-      logRatio_mean = log2(obs_mut_over_ori / mean_obs_sbst_over_ori)
+      logRatio_mean = log_ratio_mean
     )
   # print(paste("logRatio_exp: ", data$logRatio_exp))
   # print(paste("logRatio_mean: ", data$logRatio_mean))
