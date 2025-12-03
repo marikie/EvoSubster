@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 IDENTITY_PREFIX = "# substitution percent identity:"
+GC_CONTENT_PREFIX = "Total GC content: "
 
 
 def parse_args() -> argparse.Namespace:
@@ -32,7 +33,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output",
-        help="Optional file path where the JSON summary will be written. Defaults to stdout.",
+        help=(
+            "Optional file path for the JSON summary. "
+            "Defaults to <input_dir>/<input_dir_name>_summary.json."
+        ),
     )
     parser.add_argument(
         "--ncbi-cli",
@@ -218,7 +222,15 @@ def extract_sbst_ratio_line(sbst_path: Path, line_index: int) -> Optional[str]:
 
 def read_file_lines(path: Path) -> List[str]:
     content = path.read_text(encoding="utf-8").splitlines()
-    return [line.strip() for line in content if line.strip()]
+    normalized: List[str] = []
+    for raw_line in content:
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith(GC_CONTENT_PREFIX):
+            line = line[len(GC_CONTENT_PREFIX) :].lstrip()
+        normalized.append(line)
+    return normalized
 
 
 def process_species(
@@ -405,8 +417,17 @@ def main() -> None:
     summary = build_summary(input_root, args.ncbi_cli, args.ncbi_timeout)
     output_text = json.dumps(summary, ensure_ascii=False, indent=2)
 
+    output_path: Optional[Path]
     if args.output:
-        output_path = Path(args.output).resolve()
+        if args.output.strip() == "-":
+            output_path = None
+        else:
+            output_path = Path(args.output).resolve()
+    else:
+        default_name = f"{input_root.name}_summary.json"
+        output_path = input_root / default_name
+
+    if output_path is not None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(output_text, encoding="utf-8")
 

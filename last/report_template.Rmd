@@ -1,9 +1,15 @@
 ---
 title: "Substitution Summary Report"
-output: word_document
+output:
+  word_document:
+    highlight: null
+    pandoc_args:
+      - "--dpi=72"
+      - "--syntax-highlighting=tango"
 params:
   input_json: NULL
   preview_dir: NULL
+  images_dir: NULL
   pdftools_available: FALSE
 ---
 
@@ -30,12 +36,21 @@ summary_data <- fromJSON(params$input_json, simplifyVector = FALSE)
 preview_dir <- params$preview_dir %||% file.path(tempdir(), "pdf_previews")
 dir.create(preview_dir, recursive = TRUE, showWarnings = FALSE)
 
+# Use per-run images directory (passed from render_report.sh) and fall back to local images/
+rmd_dir <- dirname(knitr::current_input(dir = TRUE))
+if (is.null(rmd_dir) || !nzchar(rmd_dir)) {
+  rmd_dir <- getwd()
+}
+images_dir <- params$images_dir %||% file.path(rmd_dir, "images")
+dir.create(images_dir, recursive = TRUE, showWarnings = FALSE)
+images_rel_base <- file.path("images", basename(images_dir))
+
 has_pdftools <- isTRUE(params$pdftools_available)
 if (has_pdftools) {
   suppressPackageStartupMessages(library(pdftools))
 }
 
-render_pdf_preview <- function(pdf_path, preview_dir, dpi = 200) {
+render_pdf_preview <- function(pdf_path, preview_dir, images_dir, dpi = 200) {
   if (!has_pdftools) {
     return(NULL)
   }
@@ -45,19 +60,30 @@ render_pdf_preview <- function(pdf_path, preview_dir, dpi = 200) {
   }
 
   hash <- unname(tools::md5sum(pdf_path))
-  preview_template <- file.path(preview_dir, sprintf("%s-%%d.%%s", hash))
+  preview_template <- file.path(preview_dir, paste0(hash, "-%d.%s"))
   first_page_path <- sprintf(preview_template, 1, "png")
 
   if (!file.exists(first_page_path)) {
     tryCatch(
       {
-        pdftools::pdf_convert(
-          pdf = pdf_path,
-          format = "png",
-          pages = 1,
-          dpi = dpi,
-          filenames = preview_template
-        )
+        suppressWarnings({
+          capture.output(
+            {
+              capture.output(
+                pdftools::pdf_convert(
+                  pdf = pdf_path,
+                  format = "png",
+                  pages = 1,
+                  dpi = dpi,
+                  filenames = preview_template
+                ),
+                file = NULL,
+                type = "message"
+              )
+            },
+            file = NULL
+          )
+        })
       },
       error = function(e) {
         message(sprintf("Warning: failed to render preview for %s (%s)", pdf_path, e$message))
@@ -65,20 +91,31 @@ render_pdf_preview <- function(pdf_path, preview_dir, dpi = 200) {
     )
   }
 
-  if (file.exists(first_page_path)) first_page_path else NULL
+  if (!file.exists(first_page_path)) {
+    message(sprintf("Preview file not found: %s (template: %s)", first_page_path, preview_template))
+    NULL
+  } else {
+    preview_abs <- normalizePath(first_page_path, mustWork = TRUE)
+    preview_basename <- basename(preview_abs)
+    dest_path <- file.path(images_dir, preview_basename)
+    if (!file.exists(dest_path)) {
+      file.copy(preview_abs, dest_path, overwrite = FALSE)
+    }
+    dest_path
+  }
 }
 ```
 
 ```{r issues_chunk, echo=FALSE, results='asis'}
 if (length(summary_data$issues) > 0) {
-  cat("## 警告\n\n")
+  cat("## Warnings\n\n")
   cat(paste0("- ", summary_data$issues, collapse = "\n"), "\n\n")
 }
 ```
 
 ```{r report_chunk, echo=FALSE, results='asis'}
 if (length(summary_data$datasets) == 0) {
-  cat("データセットが見つかりませんでした。\n")
+  cat("Dataset not found.\n")
 } else {
   walk(summary_data$datasets, function(ds) {
     cat(glue("## Dataset: {ds$dataset}\n\n"))
@@ -152,17 +189,17 @@ if (length(summary_data$datasets) == 0) {
           str_to_title()
 
         if (length(paths) == 0) {
-          cat(glue("- {nice_label}: (not found)\n\n"))
+          cat(glue("\n\n**{nice_label}** (not found)\n\n"))
         } else {
-          cat(glue("- {nice_label}:\n\n"))
+          cat(glue("\n\n**{nice_label}**\n\n"))
           walk(paths, function(pdf_path) {
-            cat(glue("  - `{pdf_path}`\n\n"))
-            preview <- render_pdf_preview(pdf_path, preview_dir)
+            cat(glue("File: `{pdf_path}`\n\n"))
+            preview <- render_pdf_preview(pdf_path, preview_dir, images_dir)
             if (!is.null(preview)) {
-              knitr::include_graphics(preview)
-              cat("\n")
+              preview_rel <- file.path(images_rel_base, basename(preview))
+              cat(glue("\n![]({preview_rel}){{width=16.5cm}}\n\n"))
             } else {
-              cat("    (プレビュー生成に失敗しました)\n\n")
+              cat("(Failed to generate preview)\n\n")
             }
           })
         }
@@ -172,136 +209,6 @@ if (length(summary_data$datasets) == 0) {
     })
   })
 }
-```
----
-title: "Substitution Summary Report"
-output: html_document
-params:
-  input_json: NULL
----
 
-```{r setup, include=FALSE}
-library(jsonlite)
-library(dplyr)
-library(tidyr)
-library(purrr)
-library(glue)
-library(stringr)
-library(knitr)
-
-`%||%` <- function(x, y) {
-  if (is.null(x) || length(x) == 0) {
-    y
-  } else {
-    x
-  }
-}
-
-if (is.null(params$input_json)) {
-  stop("Please supply params$input_json pointing to the Python summary output.")
-}
-
-summary_data <- fromJSON(params$input_json, simplifyVector = FALSE)
-```
-
-```{r issues, echo=FALSE, results='asis'}
-if (length(summary_data$issues) > 0) {
-  cat("## Warnings\n\n")
-  cat(paste0("- ", summary_data$issues, collapse = "\n"), "\n\n")
-}
-```
-
-```{r report, echo=FALSE, results='asis'}
-if (length(summary_data$datasets) == 0) {
-  cat("No datasets available.\n")
-} else {
-  walk(summary_data$datasets, function(ds) {
-    cat(glue("## Dataset: {ds$dataset}\n\n"))
-    cat(glue("- Latest run: `{ds$latest_run %||% 'N/A'}`  \n"))
-    cat(glue("- Run directory: `{ds$run_dir %||% 'N/A'}`\n\n"))
-
-    species_tbl <- tibble(
-      species = c("Species B", "Species C"),
-      accession = c(
-        ds$species2$accession %||% NA_character_,
-        ds$species3$accession %||% NA_character_
-      ),
-      organism = c(
-        ds$species2$ncbi_lookup$species_name %||% NA_character_,
-        ds$species3$ncbi_lookup$species_name %||% NA_character_
-      ),
-      percent_identity = c(
-        str_remove(ds$species2$train_identity_line %||% NA_character_, "^# substitution percent identity:\\s*"),
-        str_remove(ds$species3$train_identity_line %||% NA_character_, "^# substitution percent identity:\\s*")
-      ),
-      substitution_ratio = c(
-        ds$species2$sbst_ratio_entry %||% NA_character_,
-        ds$species3$sbst_ratio_entry %||% NA_character_
-      ),
-      gc_content = c(
-        paste(ds$species2$gc_content %||% "", collapse = "<br>"),
-        paste(ds$species3$gc_content %||% "", collapse = "<br>")
-      )
-    ) %>%
-      replace_na(
-        list(
-          accession = "(missing)",
-          organism = "(missing)",
-          percent_identity = "(missing)",
-          substitution_ratio = "(missing)",
-          gc_content = "(missing)"
-        )
-      )
-
-    print(
-      kable(
-        species_tbl,
-        escape = FALSE,
-        col.names = c("Species", "Accession", "Organism", "Percent Identity", "Substitution Ratio", "GC Content")
-      )
-    )
-    cat("\n")
-
-    species_list <- list(
-      list(data = ds$species2, label = "Species B"),
-      list(data = ds$species3, label = "Species C")
-    )
-
-    walk(species_list, function(entry) {
-      species <- entry$data
-      label <- entry$label
-
-      cat(glue("### {label}\n\n"))
-
-      if (!is.null(species$ncbi_lookup$stderr) && nchar(species$ncbi_lookup$stderr) > 0) {
-        cat(glue("> NCBI CLI notice: {species$ncbi_lookup$stderr}\n\n"))
-      }
-
-      if (!is.null(species$gc_content_file)) {
-        cat(glue("GC content file: `{species$gc_content_file}`\n\n"))
-      }
-
-      cat("#### PDF Artifacts\n\n")
-      iwalk(species$pdfs, function(paths, pdf_key) {
-        nice_label <- pdf_key %>%
-          str_replace_all("_", " ") %>%
-          str_to_title()
-
-        if (length(paths) == 0) {
-          cat(glue("- {nice_label}: (not found)\n"))
-        } else {
-          cat(glue("- {nice_label}:\n\n"))
-          walk(paths, function(pdf_path) {
-            cat(glue("  - `{pdf_path}`\n\n"))
-            print(include_graphics(pdf_path))
-            cat("\n")
-          })
-        }
-      })
-
-      cat("\n")
-    })
-  })
-}
 ```
 

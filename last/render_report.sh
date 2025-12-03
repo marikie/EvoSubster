@@ -23,7 +23,7 @@ EOF
 }
 
 INPUT_JSON=""
-OUTPUT_NAME="fungi_summary.docx"
+OUTPUT_NAME=""
 OUTPUT_FORMAT="word_document"
 
 while [[ $# -gt 0 ]]; do
@@ -79,25 +79,116 @@ print(os.path.abspath(sys.argv[1]))
 PY
 )"
 
-OUTPUT_PATH="$(python - "$OUTPUT_NAME" <<'PY'
+if [[ -n "$OUTPUT_NAME" ]]; then
+    OUTPUT_PATH="$(python - "$OUTPUT_NAME" <<'PY'
 import os, sys
 print(os.path.abspath(sys.argv[1]))
 PY
 )"
+else
+    OUTPUT_PATH="$(python - "$INPUT_JSON_ABS" <<'PY'
+import os, sys
+json_path = os.path.abspath(sys.argv[1])
+base = os.path.splitext(os.path.basename(json_path))[0] or "report"
+default_docx = base + ".docx"
+print(os.path.join(os.path.dirname(json_path), default_docx))
+PY
+)"
+fi
 
-PREVIEW_DIR="$(mktemp -d)"
-cleanup() {
-    rm -rf "$PREVIEW_DIR"
+PREVIEW_DIR="$(python - "$INPUT_JSON_ABS" <<'PY'
+import os, sys
+json_dir = os.path.dirname(os.path.abspath(sys.argv[1]))
+preview_dir = os.path.join(json_dir, "tmp")
+os.makedirs(preview_dir, exist_ok=True)
+print(preview_dir)
+PY
+)"
+
+IMAGES_BASE_DIR="$SCRIPT_DIR/images"
+mkdir -p "$IMAGES_BASE_DIR"
+IMAGES_DIR="$(mktemp -d "$IMAGES_BASE_DIR/run.XXXXXX")"
+
+cleanup_images() {
+    rm -rf "$IMAGES_DIR"
 }
-trap cleanup EXIT
+trap cleanup_images EXIT
 
-Rscript --vanilla - "$RMD_PATH" "$INPUT_JSON_ABS" "$OUTPUT_PATH" "$OUTPUT_FORMAT" "$PREVIEW_DIR" <<'RSCRIPT'
+Rscript --vanilla - "$RMD_PATH" "$INPUT_JSON_ABS" "$OUTPUT_PATH" "$OUTPUT_FORMAT" "$PREVIEW_DIR" "$IMAGES_DIR" <<'RSCRIPT'
 args <- commandArgs(trailingOnly = TRUE)
 rmd_path <- args[[1]]
 input_json <- args[[2]]
 output_file <- args[[3]]
 output_format <- args[[4]]
 preview_dir <- args[[5]]
+images_dir <- args[[6]]
+
+adjust_docx_image_widths <- function(docx_path, target_cm = 16.5) {
+  if (!requireNamespace("xml2", quietly = TRUE)) {
+    message("Skipping width normalization; 'xml2' package not available.")
+    return(invisible(FALSE))
+  }
+
+  target_emu <- as.integer(round(target_cm / 2.54 * 914400))
+  work_dir <- tempfile("docx_fix_")
+  dir.create(work_dir, recursive = TRUE, showWarnings = FALSE)
+  on.exit(unlink(work_dir, recursive = TRUE, force = TRUE), add = TRUE)
+
+  utils::unzip(docx_path, exdir = work_dir)
+  doc_xml_path <- file.path(work_dir, "word", "document.xml")
+  if (!file.exists(doc_xml_path)) {
+    return(invisible(FALSE))
+  }
+
+  doc <- xml2::read_xml(doc_xml_path)
+  ns <- xml2::xml_ns(doc)
+  extent_nodes <- xml2::xml_find_all(doc, ".//wp:extent", ns)
+  if (length(extent_nodes) == 0) {
+    return(invisible(FALSE))
+  }
+
+  changed <- FALSE
+  for (node in extent_nodes) {
+    parent_inline <- xml2::xml_parent(node)
+    pic_descr <- xml2::xml_find_first(parent_inline, ".//pic:pic/pic:nvPicPr/pic:cNvPr", ns)
+    descr <- if (inherits(pic_descr, "xml_missing")) NA_character_ else xml2::xml_attr(pic_descr, "descr")
+    if (is.na(descr) || !startsWith(descr, "images/")) {
+      next
+    }
+
+    cx_old <- suppressWarnings(as.numeric(xml2::xml_attr(node, "cx")))
+    cy_old <- suppressWarnings(as.numeric(xml2::xml_attr(node, "cy")))
+    if (!is.finite(cx_old) || cx_old <= 0) {
+      next
+    }
+
+    scale <- target_emu / cx_old
+    xml2::xml_set_attr(node, "cx", as.character(target_emu))
+    if (is.finite(cy_old) && cy_old > 0) {
+      xml2::xml_set_attr(node, "cy", as.character(round(cy_old * scale)))
+    }
+    changed <- TRUE
+  }
+
+  if (!changed) {
+    return(invisible(FALSE))
+  }
+
+  xml2::write_xml(doc, doc_xml_path)
+  old_wd <- getwd()
+  on.exit(setwd(old_wd), add = TRUE)
+  setwd(work_dir)
+  zip_path <- normalizePath(docx_path, mustWork = FALSE)
+  if (file.exists(zip_path)) {
+    file.remove(zip_path)
+  }
+  files_to_zip <- list.files(".", recursive = TRUE, all.files = TRUE)
+  zip_status <- system2("zip", c("-r9Xq", zip_path, files_to_zip), stdout = TRUE, stderr = TRUE)
+  if (!is.null(attr(zip_status, "status")) && attr(zip_status, "status") != 0) {
+    stop("Failed to repack DOCX: ", paste(zip_status, collapse = "\n"))
+  }
+  invisible(TRUE)
+}
 
 if (!nzchar(output_format)) {
   output_format <- NULL
@@ -113,6 +204,10 @@ if (!file.exists(input_json)) {
 
 if (!dir.exists(preview_dir)) {
   dir.create(preview_dir, recursive = TRUE, showWarnings = FALSE)
+}
+
+if (!dir.exists(images_dir)) {
+  dir.create(images_dir, recursive = TRUE, showWarnings = FALSE)
 }
 
 packages <- c("rmarkdown")
@@ -133,11 +228,17 @@ rmarkdown::render(
   params = list(
     input_json = input_json,
     preview_dir = preview_dir,
+    images_dir = images_dir,
     pdftools_available = pdt_available
   ),
   output_file = output_file,
   output_format = output_format
 )
+
+format_str <- tolower(paste(output_format, collapse = ""))
+if (nzchar(format_str) && grepl("word_document", format_str, fixed = TRUE)) {
+  try(adjust_docx_image_widths(output_file), silent = TRUE)
+}
 RSCRIPT
 
 echo "Rendered report: $OUTPUT_PATH"
