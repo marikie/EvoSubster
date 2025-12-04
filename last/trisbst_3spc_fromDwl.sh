@@ -46,6 +46,38 @@ make_short_name() {
     echo "${first_trimmed}${second_trimmed}${suffix}"
 }
 
+has_fasta_files() {
+    local org_dir="$1"
+    local accession="$2"
+    local pattern="${fasta_pattern_template//\{org_id\}/$accession}"
+
+    if compgen -G "$org_dir/$pattern" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    if compgen -G "$org_dir"/*.fna >/dev/null 2>&1; then
+        return 0
+    fi
+
+    return 1
+}
+
+find_first_fasta() {
+    local org_dir="$1"
+    local accession="$2"
+    local pattern="${fasta_pattern_template//\{org_id\}/$accession}"
+    local candidate
+
+    candidate=$(compgen -G "$org_dir/$pattern" | head -n1)
+    if [ -n "$candidate" ]; then
+        echo "$candidate"
+        return
+    fi
+
+    candidate=$(compgen -G "$org_dir"/*.fna | head -n1)
+    echo "$candidate"
+}
+
 # Function to derive organism full name from NCBI Datasets summary JSON
 # - Writes summary JSON to "$base_genomes/<orgFullName>/<accession>.json" (final_dir_name honors overrides)
 # - Returns: "<final_dir_name>|<summary_json_path>|<raw_organism_name>|<calculated_full_name>"
@@ -201,6 +233,12 @@ if [ -z "$default_out_dir" ] || [ "$default_out_dir" = "null" ]; then
     exit 1
 fi
 
+fasta_pattern_template=$(get_config '.patterns.fasta')
+if [ -z "$fasta_pattern_template" ] || [ "$fasta_pattern_template" = "null" ]; then
+    echo "Error: .patterns.fasta is not set in dwl_config.yaml" >&2
+    exit 1
+fi
+
 out_dir_base="${OUT_DIR_OVERRIDE:-$default_out_dir}"
 if [ ! -d "$out_dir_base" ]; then
     if ! mkdir -p "$out_dir_base"; then
@@ -246,28 +284,36 @@ summary_jsons=("$org1SummaryJson" "$org2SummaryJson" "$org3SummaryJson")
 for i in {0..2}; do
     orgID=${ids[$i]}
     orgFullName=${names[$i]}
-    if [ ! -e "$base_genomes/$orgFullName/ncbi_dataset.zip" ]; then
-        echo "$(get_config '.messages.download' | sed "s/{org_full}/$orgFullName/g")"
-        cd "$base_genomes/$orgFullName"
-        
-        # Run download and check if it succeeded
-        if ! datasets download genome accession "$orgID" --include "$includes"; then
-            echo "Error: Failed to download genome for $orgFullName (ID: $orgID)" >&2
-            echo "Exiting process..." >&2
-            exit 1
-        fi
-        
-        # Verify the downloaded file exists and is not empty
-        if [ ! -s "ncbi_dataset.zip" ]; then
-            echo "Error: Download completed but ncbi_dataset.zip is empty or missing for $orgFullName" >&2
-            echo "Exiting process..." >&2
-            exit 1
-        fi
-        
-        echo "Successfully downloaded genome for $orgFullName"
-    else
-        echo "$(get_config '.messages.already_downloaded' | sed "s/{org_full}/$orgFullName/g")"
+    orgDir="$base_genomes/$orgFullName"
+    need_download=0
+
+    if ! has_fasta_files "$orgDir" "$orgID"; then
+        need_download=1
     fi
+
+    if [ "$need_download" -eq 0 ]; then
+        echo "$(get_config '.messages.already_downloaded' | sed "s/{org_full}/$orgFullName/g")"
+        continue
+    fi
+
+    echo "$(get_config '.messages.download' | sed "s/{org_full}/$orgFullName/g")"
+    cd "$orgDir"
+
+    # Run download and check if it succeeded
+    if ! datasets download genome accession "$orgID" --include "$includes"; then
+        echo "Error: Failed to download genome for $orgFullName (ID: $orgID)" >&2
+        echo "Exiting process..." >&2
+        exit 1
+    fi
+
+    # Verify the downloaded file exists and is not empty
+    if [ ! -s "ncbi_dataset.zip" ]; then
+        echo "Error: Download completed but ncbi_dataset.zip is empty or missing for $orgFullName" >&2
+        echo "Exiting process..." >&2
+        exit 1
+    fi
+
+    echo "Successfully downloaded genome for $orgFullName"
 done
 
 echo "All downloads completed successfully"
@@ -278,50 +324,57 @@ function processGenomeData() {
     local orgFullName=$1
     local orgID=$2
 
-    cd "$(get_config '.paths.base_genomes')/$orgFullName" || {
+    local orgDir="$base_genomes/$orgFullName"
+
+    cd "$orgDir" || {
         echo "Error: Cannot change directory to $orgFullName" >&2
         return 1
     }
 
-    if [ -z "$(ls *.fna 2>/dev/null)" ]; then
-        echo "Processing genome data for $orgFullName..."
-        
-        # Unzip with error checking
-        if ! unzip ncbi_dataset.zip; then
-            echo "Error: Failed to unzip data for $orgFullName" >&2
-            return 1
-        fi
-
-        cd ncbi_dataset/data || {
-            echo "Error: Cannot access data directory for $orgFullName" >&2
-            return 1
-        }
-
-        # Move files with error checking
-        mv $(ls -p | grep -v /) "$(get_config '.paths.base_genomes')/$orgFullName" || {
-            echo "Error: Failed to move files for $orgFullName" >&2
-            return 1
-        }
-
-        cd "$orgID" || {
-            echo "Error: Cannot access $orgID directory" >&2
-            return 1
-        }
-
-        mv * "$(get_config '.paths.base_genomes')/$orgFullName" || {
-            echo "Error: Failed to move $orgID files" >&2
-            return 1
-        }
-
-        cd "$(get_config '.paths.base_genomes')/$orgFullName" || return 1
-        rm -r ncbi_dataset || {
-            echo "Warning: Could not remove ncbi_dataset directory" >&2
-        }
-
-        echo "Successfully processed genome data for $orgFullName"
-    else
+    if has_fasta_files "$orgDir" "$orgID"; then
         echo "Genome files already exist for $orgFullName"
+        return 0
     fi
+
+    echo "Processing genome data for $orgFullName..."
+
+    if [ ! -s "ncbi_dataset.zip" ]; then
+        echo "Error: ncbi_dataset.zip is missing or empty for $orgFullName" >&2
+        return 1
+    fi
+
+    # Unzip with error checking
+    if ! unzip ncbi_dataset.zip; then
+        echo "Error: Failed to unzip data for $orgFullName" >&2
+        return 1
+    fi
+
+    cd ncbi_dataset/data || {
+        echo "Error: Cannot access data directory for $orgFullName" >&2
+        return 1
+    }
+
+    if ! mv $(ls -p | grep -v /) "$orgDir"; then
+        echo "Error: Failed to move files for $orgFullName" >&2
+        return 1
+    fi
+
+    cd "$orgID" || {
+        echo "Error: Cannot access $orgID directory" >&2
+        return 1
+    }
+
+    if ! mv * "$orgDir"; then
+        echo "Error: Failed to move $orgID files" >&2
+        return 1
+    fi
+
+    cd "$orgDir" || return 1
+    rm -r ncbi_dataset || {
+        echo "Warning: Could not remove ncbi_dataset directory" >&2
+    }
+
+    echo "Successfully processed genome data for $orgFullName"
 }
 
 # Process each genome sequentially
@@ -339,18 +392,9 @@ done
 
 echo "All genome data processed successfully"
 
-fasta_pat1=$(get_config '.patterns.fasta' | sed "s/{org_id}/$org1ID/g")
-fasta_pat2=$(get_config '.patterns.fasta' | sed "s/{org_id}/$org2ID/g")
-fasta_pat3=$(get_config '.patterns.fasta' | sed "s/{org_id}/$org3ID/g")
-
-org1FASTA=$(compgen -G "$(get_config '.paths.base_genomes')/$org1FullName/$fasta_pat1" | head -n1)
-org2FASTA=$(compgen -G "$(get_config '.paths.base_genomes')/$org2FullName/$fasta_pat2" | head -n1)
-org3FASTA=$(compgen -G "$(get_config '.paths.base_genomes')/$org3FullName/$fasta_pat3" | head -n1)
-
-# Fallback to first *.fna if accession-specific pattern not found
-if [ -z "$org1FASTA" ]; then org1FASTA=$(compgen -G "$(get_config '.paths.base_genomes')/$org1FullName/*.fna" | head -n1); fi
-if [ -z "$org2FASTA" ]; then org2FASTA=$(compgen -G "$(get_config '.paths.base_genomes')/$org2FullName/*.fna" | head -n1); fi
-if [ -z "$org3FASTA" ]; then org3FASTA=$(compgen -G "$(get_config '.paths.base_genomes')/$org3FullName/*.fna" | head -n1); fi
+org1FASTA=$(find_first_fasta "$base_genomes/$org1FullName" "$org1ID")
+org2FASTA=$(find_first_fasta "$base_genomes/$org2FullName" "$org2ID")
+org3FASTA=$(find_first_fasta "$base_genomes/$org3FullName" "$org3ID")
 
 echo "org1FASTA: ${org1FASTA:-NOT_FOUND}"
 echo "org2FASTA: ${org2FASTA:-NOT_FOUND}"

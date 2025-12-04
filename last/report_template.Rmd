@@ -5,7 +5,6 @@ output:
     highlight: null
     pandoc_args:
       - "--dpi=72"
-      - "--syntax-highlighting=tango"
 params:
   input_json: NULL
   preview_dir: NULL
@@ -35,6 +34,9 @@ if (is.null(params$input_json)) {
 summary_data <- fromJSON(params$input_json, simplifyVector = FALSE)
 preview_dir <- params$preview_dir %||% file.path(tempdir(), "pdf_previews")
 dir.create(preview_dir, recursive = TRUE, showWarnings = FALSE)
+
+input_root <- summary_data$input_root %||% ""
+missing_placeholder <- "\u2014"
 
 # Use per-run images directory (passed from render_report.sh) and fall back to local images/
 rmd_dir <- dirname(knitr::current_input(dir = TRUE))
@@ -104,6 +106,69 @@ render_pdf_preview <- function(pdf_path, preview_dir, images_dir, dpi = 200) {
     dest_path
   }
 }
+
+value_or_na <- function(x) {
+  if (is.null(x) || length(x) == 0) {
+    NA_character_
+  } else {
+    as.character(x)
+  }
+}
+
+organism_label <- function(metadata) {
+  if (is.null(metadata)) {
+    return(NA_character_)
+  }
+  candidates <- c(
+    metadata$raw_organism_name,
+    metadata$ncbi_full_name,
+    metadata$directory_name
+  )
+  for (candidate in candidates) {
+    if (!is.null(candidate) && nzchar(candidate)) {
+      return(candidate)
+    }
+  }
+  NA_character_
+}
+
+shorten_path <- function(path) {
+  if (is.null(path) || length(path) == 0) {
+    return(NULL)
+  }
+  if (length(path) > 1) {
+    return(vapply(path, shorten_path, character(1), USE.NAMES = FALSE))
+  }
+  if (!nzchar(path)) {
+    return(NULL)
+  }
+  root <- sub("/+$", "", input_root)
+  normalized_path <- path
+  prefix <- if (nzchar(root)) paste0(root, "/") else ""
+  if (nzchar(prefix) && stringr::str_starts(normalized_path, prefix)) {
+    remainder <- sub(prefix, "", normalized_path, fixed = TRUE)
+    remainder <- sub("^/+", "", remainder)
+    return(file.path("$out_dir", remainder))
+  }
+  normalized_path
+}
+
+format_path <- function(path) {
+  shortened <- shorten_path(path)
+  if (is.null(shortened) || !nzchar(shortened)) {
+    missing_placeholder
+  } else {
+    shortened
+  }
+}
+
+format_heading <- function(label, organism_text) {
+  if (is.null(organism_text) || is.na(organism_text) || !nzchar(organism_text)) {
+    label
+  } else {
+    glue("{label} (*{organism_text}*)")
+  }
+}
 ```
 
 ```{r issues_chunk, echo=FALSE, results='asis'}
@@ -119,81 +184,153 @@ if (length(summary_data$datasets) == 0) {
 } else {
   walk(summary_data$datasets, function(ds) {
     cat(glue("## Dataset: {ds$dataset}\n\n"))
-    cat(glue("- Latest run: `{ds$latest_run %||% 'N/A'}`  \n"))
-    cat(glue("- Run directory: `{ds$run_dir %||% 'N/A'}`\n\n"))
+    cat(glue("Latest run: `{ds$latest_run %||% missing_placeholder}`\n\n"))
 
-    species_tbl <- tibble(
-      species_label = c("Species B", "Species C"),
-      accession = c(
-        ds$species2$accession %||% NA_character_,
-        ds$species3$accession %||% NA_character_
-      ),
-      organism = c(
-        ds$species2$ncbi_lookup$species_name %||% NA_character_,
-        ds$species3$ncbi_lookup$species_name %||% NA_character_
-      ),
-      percent_identity = c(
-        str_remove(ds$species2$train_identity_line %||% NA_character_, "^# substitution percent identity:\\s*"),
-        str_remove(ds$species3$train_identity_line %||% NA_character_, "^# substitution percent identity:\\s*")
-      ),
-      substitution_ratio = c(
-        ds$species2$sbst_ratio_entry %||% NA_character_,
-        ds$species3$sbst_ratio_entry %||% NA_character_
-      ),
-      gc_content = c(
-        paste(ds$species2$gc_content %||% "", collapse = "\n"),
-        paste(ds$species3$gc_content %||% "", collapse = "\n")
-      )
+    get_species_entry <- function(slot) {
+      entry <- ds[[slot]]
+      if (is.null(entry)) {
+        list()
+      } else {
+        entry
+      }
+    }
+
+    slots <- c("species1", "species2", "species3")
+    labels <- c("Species A", "Species B", "Species C")
+
+    species_rows <- tibble(
+      species = labels,
+      slot = slots
     ) %>%
+      mutate(
+        role = map_chr(slot, ~ value_or_na((get_species_entry(.x)$metadata %||% list())$role)),
+        short_name = map_chr(slot, ~ value_or_na((get_species_entry(.x)$metadata %||% list())$short_name)),
+        accession = map_chr(slot, ~ value_or_na(get_species_entry(.x)$accession)),
+        organism = map_chr(slot, ~ organism_label(get_species_entry(.x)$metadata %||% list())),
+        substitution_ratio = map_chr(slot, ~ value_or_na(get_species_entry(.x)$sbst_ratio_entry)),
+        gc_content = map_chr(slot, ~ {
+          gc_vals <- get_species_entry(.x)$gc_content %||% character()
+          if (length(gc_vals) == 0) {
+            NA_character_
+          } else {
+            paste(gc_vals, collapse = "\n")
+          }
+        })
+      )
+
+    species_tbl <- species_rows %>%
+      select(-slot, -short_name) %>%
       replace_na(
         list(
-          accession = "(missing)",
-          organism = "(missing)",
-          percent_identity = "(missing)",
-          substitution_ratio = "(missing)",
-          gc_content = "(missing)"
+          role = missing_placeholder,
+          short_name = missing_placeholder,
+          accession = missing_placeholder,
+          organism = missing_placeholder,
+          substitution_ratio = missing_placeholder,
+          gc_content = missing_placeholder
+        )
+      ) %>%
+      mutate(
+        organism = if_else(
+          organism == missing_placeholder,
+          missing_placeholder,
+          glue("*{organism}*")
         )
       )
 
     print(
       kable(
         species_tbl,
-        col.names = c("Species", "Accession", "Organism", "Percent Identity", "Substitution Ratio", "GC Content")
+        col.names = c(
+          "Species",
+            "Role",
+          "Accession",
+          "Organism",
+          "Substitution Ratio",
+          "GC Content"
+        )
       )
     )
     cat("\n")
 
-    species_list <- list(
-      list(data = ds$species2, label = "Species B"),
-      list(data = ds$species3, label = "Species C")
+    short_labels <- ifelse(
+      is.na(species_rows$short_name) | species_rows$short_name == "",
+      species_rows$species,
+      species_rows$short_name
+    )
+    organism_labels <- species_rows$organism
+
+    idt_tbl <- tibble(
+      comparison = c(
+        glue("{short_labels[1]} vs {short_labels[2]}"),
+        glue("{short_labels[1]} vs {short_labels[3]}"),
+        glue("{short_labels[2]} vs {short_labels[3]}")
+      ),
+      percent_identity = c(
+        ds$idt_12 %||% NA_character_,
+        ds$idt_13 %||% NA_character_,
+        ds$idt_23 %||% NA_character_
+      )
+    ) %>%
+      replace_na(list(percent_identity = "(missing)"))
+
+    print(
+      kable(
+        idt_tbl,
+        col.names = c("Comparison", "Substitution Percent Identity")
+      )
+    )
+    cat("\n")
+
+    species_sections <- tibble(
+      slot = slots,
+      label = labels,
+      organism_name = organism_labels
+    ) %>%
+      filter(slot %in% c("species2", "species3"))
+
+    pdf_label_map <- c(
+      maflinked_norm = "Bar Plot: ",
+      maflinked_logratio = "Logratio Plot: ",
+      maflinked_ncds_norm = "Bar Plot (Non-coding): ",
+      maflinked_ncds_logratio = "Logratio Plot (Non-coding): ",
+      maflinked_dinuc_tsv = "Dinuc: ",
+      maflinked_dinuc_ncds_tsv = "Dinuc (Non-coding): "
     )
 
-    walk(species_list, function(entry) {
-      species <- entry$data
-      label <- entry$label
+    pwalk(species_sections, function(slot, label, organism_name) {
+      species <- ds[[slot]]
+      heading <- format_heading(label, organism_name)
 
-      cat(glue("### {label}\n\n"))
+      cat(glue("### {heading}\n\n"))
 
-      if (!is.null(species$ncbi_lookup$stderr) && nzchar(species$ncbi_lookup$stderr)) {
-        cat(glue("> NCBI CLI notice: {species$ncbi_lookup$stderr}\n\n"))
+      if (is.null(species)) {
+        cat("(No data for this species.)\n\n")
+        return(NULL)
       }
 
-      if (!is.null(species$gc_content_file)) {
-        cat(glue("GC content file: `{species$gc_content_file}`\n\n"))
+      cat("\n")
+
+      if (is.null(species$pdfs)) {
+        cat("Artifacts not collected for this species.\n\n")
+        return(NULL)
       }
 
-      cat("#### PDF Artifacts\n\n")
       iwalk(species$pdfs, function(paths, pdf_key) {
-        nice_label <- pdf_key %>%
-          str_replace_all("_", " ") %>%
-          str_to_title()
+        nice_label <- pdf_label_map[[pdf_key]]
+        if (is.null(nice_label)) {
+          nice_label <- pdf_key %>%
+            str_replace_all("_", " ") %>%
+            str_to_title()
+        }
 
         if (length(paths) == 0) {
           cat(glue("\n\n**{nice_label}** (not found)\n\n"))
         } else {
           cat(glue("\n\n**{nice_label}**\n\n"))
           walk(paths, function(pdf_path) {
-            cat(glue("File: `{pdf_path}`\n\n"))
+            display_label <- basename(pdf_path)
+            cat(glue("<span style=\"font-size:10.5pt\">{display_label}</span>\n\n"))
             preview <- render_pdf_preview(pdf_path, preview_dir, images_dir)
             if (!is.null(preview)) {
               preview_rel <- file.path(images_rel_base, basename(preview))

@@ -79,6 +79,31 @@ print(os.path.abspath(sys.argv[1]))
 PY
 )"
 
+DATASET_NAMES="$(
+python - "$INPUT_JSON_ABS" <<'PY'
+import json, sys
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+datasets = data.get("datasets") or []
+if not datasets:
+    print("Error: summary JSON contains no datasets.", file=sys.stderr)
+    sys.exit(1)
+required_keys = ("species1", "species2", "species3", "idt_12", "idt_13", "idt_23")
+for entry in datasets:
+    name = entry.get("dataset") or "unknown dataset"
+    missing = [key for key in required_keys if key not in entry]
+    if missing:
+        print(
+            f"Error: {name} is missing required fields from collect_run_summary.py: {', '.join(missing)}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+print(",".join(entry.get("dataset", "unknown") for entry in datasets))
+PY
+)"
+echo "Rendering datasets: $DATASET_NAMES"
+
 if [[ -n "$OUTPUT_NAME" ]]; then
     OUTPUT_PATH="$(python - "$OUTPUT_NAME" <<'PY'
 import os, sys
