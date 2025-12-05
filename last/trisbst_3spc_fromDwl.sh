@@ -529,9 +529,13 @@ if [ $? -ne 0 ]; then
 fi
 
 # Run downstream pipeline (no checkInnerGroupIdt argument anymore)
-trisbst_args=()
-if [ -n "$OUT_DIR_OVERRIDE" ]; then
-    trisbst_args+=("--out-dir" "$OUT_DIR_OVERRIDE")
-fi
-trisbst_args+=("$DATE" "$org1FASTA" "$org2FASTA" "$org3FASTA" "$org1GFF")
-bash "$LAST_DIR/trisbst_3spc.sh" "${trisbst_args[@]}"
+# trisbst_args=()
+# if [ -n "$OUT_DIR_OVERRIDE" ]; then
+#     trisbst_args+=("--out-dir" "$OUT_DIR_OVERRIDE")
+# fi
+# trisbst_args+=("$DATE" "$org1FASTA" "$org2FASTA" "$org3FASTA" "$org1GFF")
+# bash "$LAST_DIR/trisbst_3spc.sh" "${trisbst_args[@]}"
+cd "$run_date_dir"
+gcContent_org1=${org1ShortName}_gcContent_${DATE}.out
+echo "time bash $LAST_DIR/gc_content.sh $org1FASTA >$gcContent_org1"
+time bash "$LAST_DIR/gc_content.sh" "$org1FASTA" >"$gcContent_org1"
