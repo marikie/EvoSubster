@@ -11,9 +11,10 @@ R Markdown report can consume.
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 IDENTITY_PREFIX = "# substitution percent identity:"
 GC_CONTENT_PREFIX = "Total GC content: "
@@ -36,6 +37,12 @@ def parse_args() -> argparse.Namespace:
             "Optional file path for the JSON summary. "
             "Defaults to <input_dir>/<input_dir_name>_summary.json."
         ),
+    )
+    parser.add_argument(
+        "--idt-threshold",
+        type=float,
+        default=80.0,
+        help="Identity threshold; if any of idt12/idt13/idt23 is below this, the dataset is filtered out (default: 80).",
     )
     return parser.parse_args()
 
@@ -65,6 +72,176 @@ def matches_short_name(path: Path, short_name: str) -> bool:
         return False
     parts = path.stem.split("_")
     return any(part == short_name for part in parts)
+
+
+def extract_genus_label(metadata_entry: dict) -> Optional[str]:
+    candidates = [
+        metadata_entry.get("raw_organism_name"),
+        metadata_entry.get("ncbi_full_name"),
+        metadata_entry.get("directory_name"),
+        metadata_entry.get("short_name"),
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        sanitized = candidate.replace("_", " ").strip()
+        if not sanitized:
+            continue
+        token = sanitized.split()[0]
+        if token:
+            return token
+    return None
+
+
+def evaluate_genus_condition(slot_map: Dict[str, dict]) -> Tuple[Optional[bool], List[str]]:
+    patterns, issues = evaluate_genus_patterns(slot_map)
+    if patterns is None:
+        return None, issues
+    return patterns["pattern1"], issues
+
+
+def evaluate_genus_patterns(
+    slot_map: Dict[str, dict]
+) -> Tuple[Optional[Dict[str, bool]], List[str]]:
+    issues: List[str] = []
+    required_slots = ("org1", "org2", "org3")
+    genus_values: Dict[str, str] = {}
+
+    for slot in required_slots:
+        entry = slot_map.get(slot)
+        if not entry:
+            issues.append(f"{slot}: Missing metadata entry for genus evaluation.")
+            return None, issues
+        genus_label = extract_genus_label(entry)
+        if not genus_label:
+            issues.append(f"{slot}: Unable to derive genus from metadata.")
+            return None, issues
+        genus_values[slot] = genus_label.lower()
+
+    pattern1 = (
+        genus_values["org1"] != genus_values["org2"]
+        and genus_values["org1"] != genus_values["org3"]
+        and genus_values["org2"] == genus_values["org3"]
+    )
+    pattern3 = (
+        genus_values["org1"] == genus_values["org2"]
+        and genus_values["org2"] == genus_values["org3"]
+    )
+    pattern4 = (
+        genus_values["org1"] != genus_values["org2"]
+        and genus_values["org1"] != genus_values["org3"]
+        and genus_values["org2"] != genus_values["org3"]
+    )
+    pattern5 = (
+        (
+            genus_values["org1"] != genus_values["org2"]
+            and genus_values["org1"] == genus_values["org3"]
+            and genus_values["org2"] != genus_values["org3"]
+        )
+        or (
+            genus_values["org1"] == genus_values["org2"]
+            and genus_values["org1"] != genus_values["org3"]
+            and genus_values["org2"] != genus_values["org3"]
+        )
+    )
+
+    patterns = {
+        "pattern1": pattern1,
+        "pattern3": pattern3,
+        "pattern4": pattern4,
+        "pattern5": pattern5,
+    }
+    return patterns, issues
+
+
+def parse_identity_percentage(value: str) -> Optional[float]:
+    if not value:
+        return None
+    sanitized = value.replace("%", " ")
+    match = re.search(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", sanitized)
+    if not match:
+        return None
+    try:
+        return float(match.group())
+    except ValueError:
+        return None
+
+
+def evaluate_identity_condition(
+    identity_values: Dict[str, str]
+) -> Tuple[Optional[bool], List[str], Optional[Dict[str, float]]]:
+    issues: List[str] = []
+    numeric_values: Dict[str, float] = {}
+    required_keys = ("idt_12", "idt_13", "idt_23")
+
+    for key in required_keys:
+        raw_value = identity_values.get(key)
+        if raw_value is None:
+            issues.append(f"{key}: Identity value missing; cannot evaluate condition.")
+            return None, issues, None
+        parsed = parse_identity_percentage(raw_value)
+        if parsed is None:
+            issues.append(f"{key}: Unable to parse numeric identity from '{raw_value}'.")
+            return None, issues, None
+        numeric_values[key] = parsed
+
+    condition_met = numeric_values["idt_12"] < numeric_values["idt_23"] and numeric_values["idt_13"] < numeric_values["idt_23"]
+    return condition_met, issues, numeric_values
+
+
+def evaluate_filter_status(
+    slot_map: Dict[str, dict],
+    identity_values: Dict[str, str],
+    idt_threshold: float,
+) -> Tuple[Dict[str, Optional[bool]], List[str]]:
+    issues: List[str] = []
+    genus_patterns, genus_issues = evaluate_genus_patterns(slot_map)
+    identity_condition, identity_issues, numeric_identity_values = evaluate_identity_condition(
+        identity_values
+    )
+    issues.extend(genus_issues)
+    issues.extend(identity_issues)
+
+    genus_condition = genus_patterns["pattern1"] if genus_patterns else None
+    genus_pattern_same_all = genus_patterns["pattern3"] if genus_patterns else None
+    genus_pattern_all_different = genus_patterns["pattern4"] if genus_patterns else None
+    genus_pattern_two_vs_one = genus_patterns["pattern5"] if genus_patterns else None
+
+    threshold_condition: Optional[bool] = None
+    if numeric_identity_values is not None:
+        threshold_condition = all(value > idt_threshold for value in numeric_identity_values.values())
+
+    filter_flag: Optional[bool] = None
+
+    # Threshold gate: if below threshold, filter out before other rules
+    if threshold_condition is False:
+        filter_flag = True
+    else:
+        if genus_condition is True:
+            filter_flag = False
+        elif identity_condition is True:
+            if genus_pattern_same_all is True:
+                filter_flag = False
+            elif genus_pattern_all_different is True:
+                filter_flag = False
+            elif genus_pattern_two_vs_one is True:
+                filter_flag = True
+        elif identity_condition is False:
+            filter_flag = True
+
+    excluded = filter_flag is True
+    filter_details = {
+        "genus_condition_met": genus_condition,
+        "genus_pattern_same_all": genus_pattern_same_all,
+        "genus_pattern_all_different": genus_pattern_all_different,
+        "genus_pattern_two_vs_one": genus_pattern_two_vs_one,
+        "identity_condition_met": identity_condition,
+        "idt_threshold_condition": threshold_condition,
+        "idt_threshold_value": idt_threshold,
+        "filter_flag": filter_flag,
+        "excluded": excluded,
+    }
+    return filter_details, issues
 
 
 def filter_for_short_name(paths: Iterable[Path], short_name: str) -> List[Path]:
@@ -315,7 +492,7 @@ def collect_identity_metrics(
     return identity, issues
 
 
-def process_dataset(dataset_dir: Path) -> Tuple[Optional[Dict[str, object]], List[str]]:
+def process_dataset(dataset_dir: Path, idt_threshold: float) -> Tuple[Optional[Dict[str, object]], List[str]]:
     dataset_data: Dict[str, object] = {"dataset": dataset_dir.name}
     issues: List[str] = []
 
@@ -379,13 +556,29 @@ def process_dataset(dataset_dir: Path) -> Tuple[Optional[Dict[str, object]], Lis
     dataset_data.update(identity_values)
     issues.extend(identity_issues)
 
+    filter_status, filter_issues = evaluate_filter_status(slot_map, identity_values, idt_threshold)
+    dataset_data["filter_status"] = filter_status
+    issues.extend(filter_issues)
+
     return dataset_data, issues
 
 
-def build_summary(root: Path) -> Dict[str, object]:
-    summary: Dict[str, object] = {"input_root": str(root), "datasets": [], "issues": []}
-    dataset_entries = []
-    aggregated_issues: List[str] = []
+def format_issue_list(issues_map: Dict[str, List[str]], allowed: Optional[Set[str]] = None) -> List[str]:
+    messages: List[str] = []
+    for dataset_name in sorted(issues_map.keys()):
+        if allowed is not None and dataset_name not in allowed:
+            continue
+        for issue in issues_map[dataset_name]:
+            messages.append(f"{dataset_name}: {issue}")
+    return messages
+
+
+def build_summary(root: Path, idt_threshold: float) -> Tuple[Dict[str, object], Dict[str, object]]:
+    summary_all: Dict[str, object] = {"input_root": str(root), "datasets": [], "issues": []}
+    summary_filtered: Dict[str, object] = {"input_root": str(root), "datasets": [], "issues": []}
+    dataset_entries: List[Dict[str, object]] = []
+    filtered_entries: List[Dict[str, object]] = []
+    aggregated_issues: Dict[str, List[str]] = {}
 
     processed_candidate = False
 
@@ -393,22 +586,36 @@ def build_summary(root: Path) -> Dict[str, object]:
         if not entry.is_dir() or entry.name.isdigit():
             continue
         processed_candidate = True
-        dataset_data, issues = process_dataset(entry)
+        dataset_data, issues = process_dataset(entry, idt_threshold)
+        dataset_name = entry.name
         if dataset_data:
             dataset_entries.append(dataset_data)
+            filter_info = dataset_data.get("filter_status", {})
+            if not filter_info.get("excluded"):
+                filtered_entries.append(dataset_data)
+            dataset_name = dataset_data.get("dataset", dataset_name)
         if issues:
-            aggregated_issues.extend([f"{entry.name}: {msg}" for msg in issues])
+            aggregated_issues.setdefault(dataset_name, []).extend(issues)
 
     if not processed_candidate:
-        dataset_data, issues = process_dataset(root)
+        dataset_data, issues = process_dataset(root, idt_threshold)
+        dataset_name = root.name
         if dataset_data:
             dataset_entries.append(dataset_data)
+            filter_info = dataset_data.get("filter_status", {})
+            if not filter_info.get("excluded"):
+                filtered_entries.append(dataset_data)
+            dataset_name = dataset_data.get("dataset", dataset_name)
         if issues:
-            aggregated_issues.extend([f"{root.name}: {msg}" for msg in issues])
+            aggregated_issues.setdefault(dataset_name, []).extend(issues)
 
-    summary["datasets"] = dataset_entries
-    summary["issues"] = aggregated_issues
-    return summary
+    summary_all["datasets"] = dataset_entries
+    summary_all["issues"] = format_issue_list(aggregated_issues)
+
+    filtered_names = {entry.get("dataset") for entry in filtered_entries if entry.get("dataset")}
+    summary_filtered["datasets"] = filtered_entries
+    summary_filtered["issues"] = format_issue_list(aggregated_issues, filtered_names)
+    return summary_all, summary_filtered
 
 
 def main() -> None:
@@ -419,22 +626,37 @@ def main() -> None:
         print(f"Error: input directory does not exist: {input_root}", file=sys.stderr)
         sys.exit(1)
 
-    summary = build_summary(input_root)
-    output_text = json.dumps(summary, ensure_ascii=False, indent=2)
+    summary_all, summary_filtered = build_summary(input_root, args.idt_threshold)
+    output_text = json.dumps(summary_all, ensure_ascii=False, indent=2)
+    filtered_output_text = json.dumps(summary_filtered, ensure_ascii=False, indent=2)
 
     output_path: Optional[Path]
+    filtered_output_path: Optional[Path]
+
+    def derive_filtered_path(base_path: Path) -> Path:
+        suffix = base_path.suffix or ".json"
+        stem = base_path.stem if base_path.suffix else base_path.name
+        return base_path.with_name(f"{stem}_filtered{suffix}")
+
     if args.output:
         if args.output.strip() == "-":
             output_path = None
+            filtered_output_path = None
         else:
             output_path = Path(args.output).resolve()
+            filtered_output_path = derive_filtered_path(output_path)
     else:
         default_name = f"{input_root.name}_summary.json"
         output_path = input_root / default_name
+        filtered_output_path = input_root / f"{input_root.name}_summary_filtered.json"
 
     if output_path is not None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(output_text, encoding="utf-8")
+
+    if filtered_output_path is not None:
+        filtered_output_path.parent.mkdir(parents=True, exist_ok=True)
+        filtered_output_path.write_text(filtered_output_text, encoding="utf-8")
 
     print(output_text)
 

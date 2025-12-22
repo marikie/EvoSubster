@@ -10,6 +10,7 @@ params:
   preview_dir: NULL
   images_dir: NULL
   pdftools_available: FALSE
+  page_break_between_datasets: TRUE
 ---
 
 ```{r init_chunk, include=FALSE}
@@ -182,7 +183,14 @@ if (length(summary_data$issues) > 0) {
 if (length(summary_data$datasets) == 0) {
   cat("Dataset not found.\n")
 } else {
-  walk(summary_data$datasets, function(ds) {
+  iwalk(summary_data$datasets, function(ds, idx) {
+    is_docx_output <- identical(knitr::opts_knit$get("rmarkdown.pandoc.to"), "docx")
+    if (idx > 1 && isTRUE(params$page_break_between_datasets) && is_docx_output) {
+      cat("\n")
+      cat("```{=openxml}\n")
+      cat("<w:p><w:r><w:br w:type=\"page\"/></w:r></w:p>\n")
+      cat("```\n\n")
+    }
     cat(glue("## Dataset: {ds$dataset}\n\n"))
     cat(glue("Latest run: `{ds$latest_run %||% missing_placeholder}`\n\n"))
 
@@ -316,7 +324,54 @@ if (length(summary_data$datasets) == 0) {
         return(NULL)
       }
 
-      iwalk(species$pdfs, function(paths, pdf_key) {
+      # Enforce plot ordering for key plots regardless of JSON/list ordering.
+      preferred_pdf_order <- c(
+        "maflinked_norm",
+        "maflinked_ncds_norm",
+        "maflinked_logratio",
+        "maflinked_ncds_logratio"
+      )
+
+      pdfs <- species$pdfs
+      pdf_keys <- names(pdfs)
+      if (is.null(pdf_keys) || !length(pdf_keys)) {
+        # Fallback: if pdfs is not a named list, keep the existing order.
+        iwalk(pdfs, function(paths, pdf_key) {
+          nice_label <- pdf_label_map[[pdf_key]]
+          if (is.null(nice_label)) {
+            nice_label <- pdf_key %>%
+              str_replace_all("_", " ") %>%
+              str_to_title()
+          }
+
+          if (length(paths) == 0) {
+            cat(glue("\n\n**{nice_label}** (not found)\n\n"))
+          } else {
+            cat(glue("\n\n**{nice_label}**\n\n"))
+            walk(paths, function(pdf_path) {
+              display_label <- basename(pdf_path)
+              cat(glue("<span style=\"font-size:10.5pt\">{display_label}</span>\n\n"))
+              preview <- render_pdf_preview(pdf_path, preview_dir, images_dir)
+              if (!is.null(preview)) {
+                preview_rel <- file.path(images_rel_base, basename(preview))
+                cat(glue("\n![]({preview_rel}){{width=16.5cm}}\n\n"))
+              } else {
+                cat("(Failed to generate preview)\n\n")
+              }
+            })
+          }
+        })
+        cat("\n")
+        return(NULL)
+      }
+
+      ordered_keys <- c(
+        intersect(preferred_pdf_order, pdf_keys),
+        setdiff(pdf_keys, preferred_pdf_order)
+      )
+
+      walk(ordered_keys, function(pdf_key) {
+        paths <- pdfs[[pdf_key]]
         nice_label <- pdf_label_map[[pdf_key]]
         if (is.null(nice_label)) {
           nice_label <- pdf_key %>%

@@ -1,6 +1,6 @@
 paths:
   # Change paths to the paths of your directory to store downloaded genomes
-  base_genomes: "/big/mrk/proj/sbst/genomes"
+  base_genomes: "/big/mrk/proj/sbst/genomes/Eukaryotes"
   # Directory to store downstream run outputs (trisbst_3spc.sh)
   out_dir: "/big/mrk/proj/sbst/data"
 

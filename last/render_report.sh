@@ -254,7 +254,8 @@ rmarkdown::render(
     input_json = input_json,
     preview_dir = preview_dir,
     images_dir = images_dir,
-    pdftools_available = pdt_available
+    pdftools_available = pdt_available,
+    page_break_between_datasets = TRUE
   ),
   output_file = output_file,
   output_format = output_format

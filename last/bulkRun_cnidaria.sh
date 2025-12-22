@@ -10,7 +10,7 @@ fi
 Date=$1
 
 script=${HOME}/sbst/scripts/last/trisbst_3spc_fromDwl.sh
-outDir=${HOME}/sbst/data/cnidaria/
+outDir=${HOME}/sbst/data/cnidaria
 logDir=${HOME}/sbst/log
 
 run_triple() {
@@ -44,30 +44,31 @@ run_triple() {
 
 # run_triple "poRu_poAu_poCy" GCA_964035705.1 GCA_022179025.1 GCA_964035525.1
 
-# run_triple "poRu_poLo_poLu" GCA_964035705.1 GCA_942486035.1 GCF_958299795.1
+run_triple "poRu_poLo_poLu" GCA_964035705.1 GCA_942486035.1 GCF_958299795.1
 
-run_triple "poGr_poVer_poDa" GCA_964027065.2 GCF_036669915.1 GCF_003704095.1
+# ------
+# run_triple "poGr_poVer_poDa" GCA_964027065.2 GCF_036669915.1 GCF_003704095.1
 
-run_triple "stPi_poVer_poDa" GCF_002571385.2 GCF_036669915.1 GCF_003704095.1
+# run_triple "stPi_poVer_poDa" GCF_002571385.2 GCF_036669915.1 GCF_003704095.1
 
-run_triple "ecHo_orFa_cySa" GCA_964199735.2 GCF_002042975.1 GCA_964194085.1
+# run_triple "ecHo_orFa_cySa" GCA_964199735.2 GCF_002042975.1 GCA_964194085.1
 
-run_triple "cySa_orFa_orFr" GCA_964194085.1 GCF_002042975.1 GCA_964199315.1
+# run_triple "cySa_orFa_orFr" GCA_964194085.1 GCF_002042975.1 GCA_964199315.1
 
-run_triple "paAt_paDa_paSw" GCA_025448195.2 GCA_025403605.1 GCA_025403585.1
+# run_triple "paAt_paDa_paSw" GCA_025448195.2 GCA_025403605.1 GCA_025403585.1
 
-run_triple "umNa_umCh_umPa" GCA_027574985.2 GCA_025448255.1 GCA_027575125.1
+# run_triple "umNa_umCh_umPa" GCA_027574985.2 GCA_025448255.1 GCA_027575125.1
 
-run_triple "umKa_umCh_umPa" GCA_025403525.1 GCA_025448255.1 GCA_027575125.1
+# run_triple "umKa_umCh_umPa" GCA_025403525.1 GCA_025448255.1 GCA_027575125.1
 
-run_triple "isTu_zoSo_zoPu" GCA_025447995.2 GCA_025331085.1 GCA_027575285.1
+# run_triple "isTu_zoSo_zoPu" GCA_025447995.2 GCA_025331085.1 GCA_027575285.1
 
-run_triple "pyMi_pyCa_pyMu" GCA_042846405.1 GCA_965234985.1 GCA_027575235.1
+# run_triple "pyMi_pyCa_pyMu" GCA_042846405.1 GCA_965234985.1 GCA_027575235.1
 
-run_triple "pyCa_pyMu_pyGr" GCA_965234985.1 GCA_027575235.1 GCA_026546935.1
+# run_triple "pyCa_pyMu_pyGr" GCA_965234985.1 GCA_027575235.1 GCA_026546935.1
 
-run_triple "epIl_epRa_epPl" GCA_026546655.1 GCA_026413505.1 GCA_025388665.1
+# run_triple "epIl_epRa_epPl" GCA_026546655.1 GCA_026413505.1 GCA_025388665.1
 
-run_triple "phMa_phSt_phSu" GCA_025400095.1 GCA_025400075.2 GCA_025434845.1
+# run_triple "phMa_phSt_phSu" GCA_025400095.1 GCA_025400075.2 GCA_025434845.1
 
-run_triple "paPa_coRu_heIm" GCA_035771165.1 GCA_964265095.1 GCA_045791825.1
+# run_triple "paPa_coRu_heIm" GCA_035771165.1 GCA_964265095.1 GCA_045791825.1
