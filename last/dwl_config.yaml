@@ -53,3 +53,5 @@ errors:
 
     Optional flags:
     - --out-dir /path/to/output (override downstream run directory)
+    - --idt-only (stop after last-train identity checks; skip downstream alignment/analysis)
+    - --thread N (set number of threads for last-train/lastal/lastdb; default: 8)
