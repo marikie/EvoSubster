@@ -26,10 +26,10 @@ errors:
     - The `--out-dir` flag is optional. If not provided, the outputs will be stored in the directory specified in `scripts/last/sbst_config.yaml`.
 # Options
 options:
-  checkInnerGroupIdt:
-    description: "Run inner group substitution percent identity check"
-    enabled_message: "Running inner group substitution percent identity check..."
-    completed_message: "Inner group substitution percent identity check completed"
+  checkIdt:
+    description: "Run substitution percent identity check"
+    enabled_message: "Running substitution percent identity check..."
+    completed_message: "Substitution percent identity check completed"
 
 # File patterns and suffixes
 patterns:

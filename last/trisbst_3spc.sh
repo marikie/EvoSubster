@@ -40,9 +40,42 @@ get_dwl_config() {
 }
 
 OUT_DIR_OVERRIDE=""
+IDT_ONLY=0
+THREAD_NUM_OVERRIDE=8
 POSITIONAL_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --idt-only)
+            IDT_ONLY=1
+            shift
+            continue
+            ;;
+        --thread)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: --thread requires a non-empty integer argument." >&2
+                exit 1
+            fi
+            if ! [[ "$2" =~ ^[0-9]+$ ]] || [[ "$2" -lt 1 ]]; then
+                echo "Error: --thread must be a positive integer (got: $2)." >&2
+                exit 1
+            fi
+            THREAD_NUM_OVERRIDE="$2"
+            shift 2
+            continue
+            ;;
+        --thread=*)
+            THREAD_NUM_OVERRIDE="${1#*=}"
+            if [[ -z "$THREAD_NUM_OVERRIDE" ]]; then
+                echo "Error: --thread requires a non-empty integer argument." >&2
+                exit 1
+            fi
+            if ! [[ "$THREAD_NUM_OVERRIDE" =~ ^[0-9]+$ ]] || [[ "$THREAD_NUM_OVERRIDE" -lt 1 ]]; then
+                echo "Error: --thread must be a positive integer (got: $THREAD_NUM_OVERRIDE)." >&2
+                exit 1
+            fi
+            shift
+            continue
+            ;;
         --out-dir)
             if [[ -z "${2:-}" ]]; then
                 echo "Error: --out-dir requires a non-empty path argument." >&2
@@ -139,6 +172,10 @@ org1FASTA=$2
 org2FASTA=$3
 org3FASTA=$4
 org1GFF=$5
+
+# Propagate thread count to child scripts (last_train.sh / one2one.sh).
+threadNum="$THREAD_NUM_OVERRIDE"
+export THREAD_NUM="$threadNum"
 
 # Extract the name of the parent directory of $org1FASTA
 org1DirName="$(basename $(dirname $org1FASTA))"
@@ -291,10 +328,20 @@ else
 	echo "$gcContent_org3 already exists"
 fi
 
-
+# Run last-train to check substitution percent identity between org1 and org2 
+echo "$(get_config '.options.checkIdt.enabled_message')"
+time bash "$LAST_DIR/last_train.sh" "$DATE" "$org1FASTA" "$org2FASTA" "$org1ShortName" "$org2ShortName"
+# Run last-train to check substitution percent identity between org1 and org3 
+echo "$(get_config '.options.checkIdt.enabled_message')"
+time bash "$LAST_DIR/last_train.sh" "$DATE" "$org1FASTA" "$org3FASTA" "$org1ShortName" "$org3ShortName"
 # Run last-train to check substitution percent identity between org2 and org3 (inner group)
-echo "$(get_config '.options.checkInnerGroupIdt.enabled_message')"
+echo "$(get_config '.options.checkIdt.enabled_message')"
 time bash "$LAST_DIR/last_train.sh" "$DATE" "$org2FASTA" "$org3FASTA" "$org2ShortName" "$org3ShortName"
+
+if [ "$IDT_ONLY" -eq 1 ]; then
+    echo "---idt-only is enabled; exiting after last-train identity checks."
+    exit 0
+fi
 
 # one2one for org1-org2
 echo "$(get_config '.messages.one2one' | sed "s/{org1_short}/$org1ShortName/g" | sed "s/{org2_short}/$org2ShortName/g")"

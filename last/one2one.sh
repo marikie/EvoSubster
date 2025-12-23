@@ -10,7 +10,7 @@ m2omaf=$6
 o2omaf=$7
 o2omaf_maflinked=$8
 
-threadNum=8
+threadNum=${THREAD_NUM:-8}
 # lastdb
 echo "---lastdb"
 if [ ! -d $dbName ]; then
@@ -74,3 +74,11 @@ else
 	echo "$o2omaf_maflinked already exists"
 fi
 # maf-linked: maf-linked reads pair-wise sequence alignments in MAF format, and omits isolated alignments. It keeps groups of alignments that are nearby in both sequences. It may be useful for genome-to-genome alignments: It removes alignments between non-homologous insertions of homologous transposons
+
+# Cleanup: remove many-to-one MAF after successful downstream generation.
+if [ -s "$o2omaf" ] && [ -s "$o2omaf_maflinked" ]; then
+	if [ -e "$m2omaf" ]; then
+		echo "cleanup: rm -f $m2omaf"
+		rm -f "$m2omaf"
+	fi
+fi

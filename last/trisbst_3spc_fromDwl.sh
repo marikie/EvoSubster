@@ -162,9 +162,42 @@ get_org_full_name_from_id() {
 }
 
 OUT_DIR_OVERRIDE=""
+IDT_ONLY=0
+THREAD_NUM_OVERRIDE=8
 POSITIONAL_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --idt-only)
+            IDT_ONLY=1
+            shift
+            continue
+            ;;
+        --thread)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: --thread requires a non-empty integer argument." >&2
+                exit 1
+            fi
+            if ! [[ "$2" =~ ^[0-9]+$ ]] || [[ "$2" -lt 1 ]]; then
+                echo "Error: --thread must be a positive integer (got: $2)." >&2
+                exit 1
+            fi
+            THREAD_NUM_OVERRIDE="$2"
+            shift 2
+            continue
+            ;;
+        --thread=*)
+            THREAD_NUM_OVERRIDE="${1#*=}"
+            if [[ -z "$THREAD_NUM_OVERRIDE" ]]; then
+                echo "Error: --thread requires a non-empty integer argument." >&2
+                exit 1
+            fi
+            if ! [[ "$THREAD_NUM_OVERRIDE" =~ ^[0-9]+$ ]] || [[ "$THREAD_NUM_OVERRIDE" -lt 1 ]]; then
+                echo "Error: --thread must be a positive integer (got: $THREAD_NUM_OVERRIDE)." >&2
+                exit 1
+            fi
+            shift
+            continue
+            ;;
         --out-dir)
             if [[ -z "${2:-}" ]]; then
                 echo "Error: --out-dir requires a non-empty path argument." >&2
@@ -528,14 +561,65 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+# Download taxonomy JSONs into metadata/ using tax_id from summary JSON.
+for i in {0..2}; do
+    short_name=${short_names[$i]}
+    accession=${ids[$i]}
+    meta_json=${metadata_json_copies[$i]}
+    tax_out="$metadata_dir/taxonomy_${short_name}_${accession}.json"
+
+    if [ -s "$tax_out" ]; then
+        echo "taxonomy JSON already exists: $tax_out"
+        continue
+    fi
+
+    if [ -z "$meta_json" ] || [ ! -f "$meta_json" ]; then
+        echo "Warning: Cannot fetch taxonomy JSON; metadata JSON missing for ${short_name} (${accession})." >&2
+        continue
+    fi
+
+    tax_id=$(jq -r '(.reports[0].organism.tax_id // .reports[0].biosample.description.organism.tax_id // empty) | tostring' "$meta_json" 2>/dev/null)
+    if [ -z "$tax_id" ] || [ "$tax_id" = "null" ]; then
+        echo "Warning: tax_id not found in metadata JSON for ${short_name} (${accession}); skipping taxonomy download." >&2
+        continue
+    fi
+
+    tmp_tax=$(mktemp) || {
+        echo "Warning: Unable to create temporary file for taxonomy download (tax_id=$tax_id)." >&2
+        continue
+    }
+    if datasets summary taxonomy taxon "$tax_id" >"$tmp_tax"; then
+        if [ -s "$tmp_tax" ]; then
+            if ! mv "$tmp_tax" "$tax_out" 2>/dev/null; then
+                if ! cp "$tmp_tax" "$tax_out"; then
+                    echo "Warning: Failed to write taxonomy JSON to $tax_out (tax_id=$tax_id)." >&2
+                fi
+                rm -f "$tmp_tax"
+            fi
+            echo "Downloaded taxonomy JSON: $tax_out"
+        else
+            echo "Warning: taxonomy download returned empty output (tax_id=$tax_id) for ${short_name} (${accession})." >&2
+            rm -f "$tmp_tax"
+        fi
+    else
+        echo "Warning: Failed to download taxonomy JSON (tax_id=$tax_id) for ${short_name} (${accession})." >&2
+        rm -f "$tmp_tax"
+    fi
+done
+
 # Run downstream pipeline (no checkInnerGroupIdt argument anymore)
-# trisbst_args=()
-# if [ -n "$OUT_DIR_OVERRIDE" ]; then
-#     trisbst_args+=("--out-dir" "$OUT_DIR_OVERRIDE")
-# fi
-# trisbst_args+=("$DATE" "$org1FASTA" "$org2FASTA" "$org3FASTA" "$org1GFF")
-# bash "$LAST_DIR/trisbst_3spc.sh" "${trisbst_args[@]}"
-cd "$run_date_dir"
-gcContent_org1=${org1ShortName}_gcContent_${DATE}.out
-echo "time bash $LAST_DIR/gc_content.sh $org1FASTA >$gcContent_org1"
-time bash "$LAST_DIR/gc_content.sh" "$org1FASTA" >"$gcContent_org1"
+trisbst_args=()
+if [ -n "$OUT_DIR_OVERRIDE" ]; then
+    trisbst_args+=("--out-dir" "$OUT_DIR_OVERRIDE")
+fi
+trisbst_args+=("--thread" "$THREAD_NUM_OVERRIDE")
+if [ "$IDT_ONLY" -eq 1 ]; then
+    trisbst_args+=("--idt-only")
+fi
+trisbst_args+=("$DATE" "$org1FASTA" "$org2FASTA" "$org3FASTA" "$org1GFF")
+bash "$LAST_DIR/trisbst_3spc.sh" "${trisbst_args[@]}"
+
+# cd "$run_date_dir"
+# gcContent_org1=${org1ShortName}_gcContent_${DATE}.out
+# echo "time bash $LAST_DIR/gc_content.sh $org1FASTA >$gcContent_org1"
+# time bash "$LAST_DIR/gc_content.sh" "$org1FASTA" >"$gcContent_org1"

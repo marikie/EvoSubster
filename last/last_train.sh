@@ -14,7 +14,7 @@ org3ShortName=$5
 
 dbName="${org2ShortName}db_${DATE}"
 trainFile="${org2ShortName}2${org3ShortName}_${DATE}.train"
-threadNum=8
+threadNum=${THREAD_NUM:-8}
 
 # lastdb
 echo "---lastdb"
