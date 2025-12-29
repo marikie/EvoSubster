@@ -36,7 +36,18 @@ parse_args <- function() {
   parser$add_argument("--output-dir", help = "Directory for PCA outputs (default: <input_dir>/pca).")
   parser$add_argument("--max-clusters", type = "integer", default = 10L, help = "Maximum clusters to evaluate.")
   parser$add_argument("--random-state", type = "integer", default = 42L, help = "Random seed.")
-  parser$parse_args()
+  parser$add_argument(
+    "--cluster-boundary",
+    default = "hull",
+    help = "Boundary overlay for classification-level plots: none|ellipse|hull (default: hull)."
+  )
+  args <- parser$parse_args()
+  allowed <- c("none", "ellipse", "hull")
+  args$cluster_boundary <- tolower(args$cluster_boundary %||% "hull")
+  if (!args$cluster_boundary %in% allowed) {
+    stop(sprintf("--cluster-boundary must be one of: %s", paste(allowed, collapse = ", ")))
+  }
+  args
 }
 
 warn <- function(msg) message(sprintf("Warning: %s", msg))
@@ -66,7 +77,7 @@ load_manifest_lookup <- function(manifest_path) {
   metadata_dir <- resolve_path(metadata_dir_value, dirname(manifest_path))
   if (is.null(metadata_dir) || !dir.exists(metadata_dir)) {
     stop(sprintf("metadata_dir does not exist: %s", metadata_dir_value))
-}
+  }
 
   lookup <- list()
   organisms <- manifest$organisms %||% list()
@@ -118,7 +129,7 @@ extract_tax_id <- function(metadata) {
 ensure_taxonomy_json <- function(taxonomy_path, metadata, short_name, accession) {
   if (!is.null(taxonomy_path) && file.exists(taxonomy_path) && file.size(taxonomy_path) > 0) {
     return(TRUE)
-}
+  }
   tax_id <- extract_tax_id(metadata)
   if (is.null(tax_id)) {
     warn(sprintf("%s: tax_id not found; cannot fetch taxonomy JSON.", short_name))
@@ -353,12 +364,12 @@ load_tsv_vectors <- function(tsv_path, reference_order = NULL) {
       order = df_sorted$mutType
     )
   } else {
-  df_indexed <- df %>%
-    filter(.data$mutType %in% reference_order) %>%
-    arrange(match(.data$mutType, reference_order))
-  if (!all(reference_order %in% df_indexed$mutType)) {
+    df_indexed <- df %>%
+      filter(.data$mutType %in% reference_order) %>%
+      arrange(match(.data$mutType, reference_order))
+    if (!all(reference_order %in% df_indexed$mutType)) {
       stop(sprintf("TSV file %s does not contain expected mutType values.", basename(tsv_path)))
-  }
+    }
     observed <- compute_observed_vector(df_indexed)
     list(
       logratio = compute_logratio_vector(df_indexed, observed),
@@ -397,9 +408,9 @@ plot_metrics <- function(metrics_path, inertia, silhouette) {
   p1 <- if (length(inertia) > 0) {
     df <- tibble(k = seq_along(inertia) + 1, inertia = inertia)
     ggplot(df, aes(x = .data$k, y = .data$inertia)) +
-    geom_line(color = "blue") +
-    geom_point(color = "blue") +
-    labs(title = "Elbow Method", x = "Number of Clusters", y = "Inertia") +
+      geom_line(color = "blue") +
+      geom_point(color = "blue") +
+      labs(title = "Elbow Method", x = "Number of Clusters", y = "Inertia") +
       theme_minimal()
   } else {
     ggplot() +
@@ -409,9 +420,9 @@ plot_metrics <- function(metrics_path, inertia, silhouette) {
   p2 <- if (length(silhouette) > 0) {
     df <- tibble(k = seq_along(silhouette) + 1, silhouette = silhouette)
     ggplot(df, aes(x = .data$k, y = .data$silhouette)) +
-    geom_line(color = "red") +
-    geom_point(color = "red") +
-    labs(title = "Silhouette Scores", x = "Number of Clusters", y = "Silhouette Score") +
+      geom_line(color = "red") +
+      geom_point(color = "red") +
+      labs(title = "Silhouette Scores", x = "Number of Clusters", y = "Silhouette Score") +
       theme_minimal()
   } else {
     ggplot() +
@@ -454,7 +465,7 @@ write_pc_loadings <- function(rotation_matrix, feature_names, output_dir, prefix
   }
 }
 
-plot_pca_scatter <- function(output_path, pca_data, species_labels, color_labels, cluster_labels, label_name, feature_desc) {
+plot_pca_scatter <- function(output_path, pca_data, species_labels, color_labels, cluster_labels, label_name, feature_desc, cluster_boundary = "none") {
   df <- tibble(
     PC1 = pca_data[, 1],
     PC2 = pca_data[, 2],
@@ -465,8 +476,58 @@ plot_pca_scatter <- function(output_path, pca_data, species_labels, color_labels
   palette <- scales::hue_pal()(length(unique(df$label)))
   names(palette) <- unique(df$label)
   classification_label <- stringr::str_to_title(label_name)
+  boundary_mode <- tolower(cluster_boundary %||% "none")
   p <- ggplot(df, aes(x = .data$PC1, y = .data$PC2, color = .data$label)) +
     geom_point(size = 3, alpha = 0.85) +
+    {
+      if (boundary_mode == "ellipse") {
+        df_ellipses <- df %>%
+          dplyr::group_by(.data$cluster) %>%
+          dplyr::filter(dplyr::n() >= 3) %>%
+          dplyr::ungroup()
+        if (nrow(df_ellipses) == 0) {
+          return(NULL)
+        }
+        ggplot2::stat_ellipse(
+          data = df_ellipses,
+          mapping = ggplot2::aes(x = .data$PC1, y = .data$PC2, group = .data$cluster),
+          inherit.aes = FALSE,
+          type = "norm",
+          level = 0.95,
+          linewidth = 0.6,
+          linetype = "dashed",
+          color = "#4d4d4d",
+          show.legend = FALSE
+        )
+      } else if (boundary_mode == "hull") {
+        df_hulls <- df %>%
+          dplyr::group_by(.data$cluster) %>%
+          dplyr::filter(dplyr::n() >= 3) %>%
+          dplyr::group_modify(function(.x, .y) {
+            idx <- grDevices::chull(as.numeric(.x$PC1), as.numeric(.x$PC2))
+            hull <- .x[idx, c("PC1", "PC2"), drop = FALSE]
+            hull <- dplyr::bind_rows(hull, hull[1, , drop = FALSE])
+            # NOTE: Do not return grouping columns (e.g., cluster) from group_modify().
+            # dplyr will add them back automatically from the grouping keys.
+            tibble::tibble(PC1 = hull$PC1, PC2 = hull$PC2)
+          }) %>%
+          dplyr::ungroup()
+        if (nrow(df_hulls) == 0) {
+          return(NULL)
+        }
+        ggplot2::geom_path(
+          data = df_hulls,
+          mapping = ggplot2::aes(x = .data$PC1, y = .data$PC2, group = .data$cluster),
+          inherit.aes = FALSE,
+          linewidth = 0.6,
+          linetype = "dashed",
+          color = "#4d4d4d",
+          show.legend = FALSE
+        )
+      } else {
+        NULL
+      }
+    } +
     geom_text_repel(
       aes(label = .data$species),
       size = 3,
@@ -540,7 +601,7 @@ save_results <- function(csv_path, files, pca_data, cluster_labels, metadata_rec
   readr::write_csv(df, csv_path)
 }
 
-run_pca_for_indices <- function(vectors, feature_order, indices, output_prefix, plot_levels, metadata_records, files, classification_levels, species_labels, max_clusters, random_state, output_dir) {
+run_pca_for_indices <- function(vectors, feature_order, indices, output_prefix, plot_levels, metadata_records, files, classification_levels, species_labels, max_clusters, random_state, output_dir, cluster_boundary) {
   if (length(indices) < 2) stop(sprintf("%s PCA requires at least two samples.", output_prefix))
   subset_vectors <- vectors[indices]
   matrix_data <- do.call(rbind, subset_vectors)
@@ -559,20 +620,20 @@ run_pca_for_indices <- function(vectors, feature_order, indices, output_prefix, 
   if (cluster_info$best_k >= sample_count) {
     cluster_labels <- seq_len(sample_count)
   } else {
-  final_model <- kmeans(pca_data, centers = cluster_info$best_k, nstart = 10)
-  cluster_labels <- final_model$cluster
+    final_model <- kmeans(pca_data, centers = cluster_info$best_k, nstart = 10)
+    cluster_labels <- final_model$cluster
   }
   feature_desc <- if (grepl("observed", output_prefix)) "#sbst/#ori" else "log2((#sbst/#ori)/mean)"
   if (length(plot_levels) > 0) {
     for (level in plot_levels) {
       color_labels <- vapply(metadata_records[indices], function(rec) rec$classifications[[level]] %||% "Unknown", character(1))
       plot_path <- file.path(output_dir, sprintf("pca_2d_clusters_%s_%s.png", output_prefix, gsub(" ", "_", level)))
-      plot_pca_scatter(plot_path, pca_data, species_labels[indices], color_labels, cluster_labels, level, feature_desc)
+      plot_pca_scatter(plot_path, pca_data, species_labels[indices], color_labels, cluster_labels, level, feature_desc, cluster_boundary = cluster_boundary)
     }
   }
   cluster_color_labels <- as.character(cluster_labels)
   cluster_plot_path <- file.path(output_dir, sprintf("pca_2d_clusters_%s_cluster.png", output_prefix))
-  plot_pca_scatter(cluster_plot_path, pca_data, species_labels[indices], cluster_color_labels, cluster_labels, "cluster", feature_desc)
+  plot_pca_scatter(cluster_plot_path, pca_data, species_labels[indices], cluster_color_labels, cluster_labels, "cluster", feature_desc, cluster_boundary = "none")
   save_results(
     file.path(output_dir, sprintf("clustering_results_%s.csv", output_prefix)),
     files[indices],
@@ -584,16 +645,16 @@ run_pca_for_indices <- function(vectors, feature_order, indices, output_prefix, 
   list(best_k = cluster_info$best_k, processed = length(indices))
 }
 
-process_variant <- function(vectors, feature_order, indices_all, indices_filtered, variant_label, plot_levels, metadata_records, files, classification_levels, species_labels, max_clusters, random_state, output_dir) {
+process_variant <- function(vectors, feature_order, indices_all, indices_filtered, variant_label, plot_levels, metadata_records, files, classification_levels, species_labels, max_clusters, random_state, output_dir, cluster_boundary) {
   normal_prefix <- variant_label
   filtered_prefix <- sprintf("%s_filtered", variant_label)
   normal_result <- run_pca_for_indices(
-    vectors, feature_order, indices_all, normal_prefix, plot_levels, metadata_records, files, classification_levels, species_labels, max_clusters, random_state, output_dir
+    vectors, feature_order, indices_all, normal_prefix, plot_levels, metadata_records, files, classification_levels, species_labels, max_clusters, random_state, output_dir, cluster_boundary
   )
   filtered_result <- list(best_k = NA, processed = 0, message = NULL)
   if (length(indices_filtered) >= 2) {
     filtered_inner <- run_pca_for_indices(
-      vectors, feature_order, indices_filtered, filtered_prefix, plot_levels, metadata_records, files, classification_levels, species_labels, max_clusters, random_state, output_dir
+      vectors, feature_order, indices_filtered, filtered_prefix, plot_levels, metadata_records, files, classification_levels, species_labels, max_clusters, random_state, output_dir, cluster_boundary
     )
     filtered_result$best_k <- filtered_inner$best_k
     filtered_result$processed <- filtered_inner$processed
@@ -716,7 +777,7 @@ main <- function() {
       observed_vectors[[length(observed_vectors) + 1]] <- vectors$observed
       species_labels <- c(species_labels, genus_info$species)
       files <- c(files, tsv_file)
-    metadata_records[[length(metadata_records) + 1]] <- list(
+      metadata_records[[length(metadata_records) + 1]] <- list(
         accession = accession,
         short_name = short_name,
         date = date,
@@ -725,8 +786,8 @@ main <- function() {
         classifications = classification_map,
         dataset = dataset_name,
         filter_excluded = dataset_filter_flag
-    )
-  }
+      )
+    }
     added <- length(logratio_vectors) - samples_before
     if (added == 0) warn(sprintf("%s: No usable TSV files after validation; dataset skipped.", dataset_name))
   }
@@ -755,7 +816,8 @@ main <- function() {
     species_labels,
     args$max_clusters,
     args$random_state,
-    output_dir
+    output_dir,
+    args$cluster_boundary
   )
 
   observed_result <- process_variant(
@@ -771,7 +833,8 @@ main <- function() {
     species_labels,
     args$max_clusters,
     args$random_state,
-    output_dir
+    output_dir,
+    args$cluster_boundary
   )
 
   message("PCA clustering completed successfully.")
