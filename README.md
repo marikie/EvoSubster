@@ -1,4 +1,6 @@
-# EvoSubster: Let's investigate evolutionary substitution trends across diverse taxonomic groups ─=≡Σ((( つ•̀ω•́)つ !
+![logo](./egfigs/EvoSubsterLOGO_rect2.png)
+
+# Let's investigate evolutionary substitution trends across diverse taxonomic groups ─=≡Σ((( つ•̀ω•́)つ !
 
 ## Introduction
 
