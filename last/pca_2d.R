@@ -21,6 +21,7 @@ suppressPackageStartupMessages({
 })
 
 EPS <- 1e-12
+HULL_EXPANSION <- 1.10
 IDENTITY_PREFIX <- "# substitution percent identity:"
 DEFAULT_TSV_PATTERN <- "*_maflinked_ncds.tsv"
 CLASSIFICATION_ORDER <- c("domain", "kingdom", "phylum", "class", "order", "family", "genus", "species")
@@ -465,7 +466,7 @@ write_pc_loadings <- function(rotation_matrix, feature_names, output_dir, prefix
   }
 }
 
-plot_pca_scatter <- function(output_path, pca_data, species_labels, color_labels, cluster_labels, label_name, feature_desc, cluster_boundary = "none") {
+plot_pca_scatter <- function(output_path, pca_data, species_labels, color_labels, cluster_labels, label_name, feature_desc, cluster_boundary = "none", show_labels = TRUE) {
   df <- tibble(
     PC1 = pca_data[, 1],
     PC2 = pca_data[, 2],
@@ -504,8 +505,18 @@ plot_pca_scatter <- function(output_path, pca_data, species_labels, color_labels
           dplyr::group_by(.data$cluster) %>%
           dplyr::filter(dplyr::n() >= 3) %>%
           dplyr::group_modify(function(.x, .y) {
+            # Compute centroid
+            center_x <- mean(.x$PC1)
+            center_y <- mean(.x$PC2)
+
+            # Identify hull points
             idx <- grDevices::chull(as.numeric(.x$PC1), as.numeric(.x$PC2))
             hull <- .x[idx, c("PC1", "PC2"), drop = FALSE]
+
+            # Expand hull points radially from centroid
+            hull$PC1 <- center_x + (hull$PC1 - center_x) * HULL_EXPANSION
+            hull$PC2 <- center_y + (hull$PC2 - center_y) * HULL_EXPANSION
+
             hull <- dplyr::bind_rows(hull, hull[1, , drop = FALSE])
             # NOTE: Do not return grouping columns (e.g., cluster) from group_modify().
             # dplyr will add them back automatically from the grouping keys.
@@ -528,22 +539,28 @@ plot_pca_scatter <- function(output_path, pca_data, species_labels, color_labels
         NULL
       }
     } +
-    geom_text_repel(
-      aes(label = .data$species),
-      size = 3,
-      box.padding = 0.5,
-      point.padding = 0.35,
-      max.overlaps = Inf,
-      min.segment.length = 0,
-      force = 4,
-      force_pull = 0.1,
-      max.iter = 5000,
-      max.time = 5,
-      seed = 42,
-      segment.color = "#8c8c8c",
-      segment.size = 0.25,
-      fontface = "italic"
-    ) +
+    {
+      if (show_labels) {
+        geom_text_repel(
+          aes(label = .data$species),
+          size = 3,
+          box.padding = 0.5,
+          point.padding = 0.35,
+          max.overlaps = Inf,
+          min.segment.length = 0,
+          force = 4,
+          force_pull = 0.1,
+          max.iter = 5000,
+          max.time = 5,
+          seed = 42,
+          segment.color = "#8c8c8c",
+          segment.size = 0.25,
+          fontface = "italic"
+        )
+      } else {
+        NULL
+      }
+    } +
     scale_color_manual(values = palette, name = classification_label) +
     labs(
       title = sprintf("K-means Clustering (k=%d)", length(unique(cluster_labels))),
@@ -609,7 +626,7 @@ run_pca_for_indices <- function(vectors, feature_order, indices, output_prefix, 
   pca <- prcomp(scaled_data, center = FALSE, scale. = FALSE)
   pca_data <- pca$x[, 1:2, drop = FALSE]
   if (is.null(colnames(pca$rotation))) {
-    colnames(pca$rotation) <- feature_names
+    colnames(pca$rotation) <- feature_order
   }
   write_pc_loadings(pca$rotation, feature_order, output_dir, output_prefix)
   cluster_info <- determine_clusters(pca_data, max_clusters, random_state)
@@ -627,8 +644,18 @@ run_pca_for_indices <- function(vectors, feature_order, indices, output_prefix, 
   if (length(plot_levels) > 0) {
     for (level in plot_levels) {
       color_labels <- vapply(metadata_records[indices], function(rec) rec$classifications[[level]] %||% "Unknown", character(1))
+
+      # Original: Labels + Boundary (if enabled)
       plot_path <- file.path(output_dir, sprintf("pca_2d_clusters_%s_%s.png", output_prefix, gsub(" ", "_", level)))
-      plot_pca_scatter(plot_path, pca_data, species_labels[indices], color_labels, cluster_labels, level, feature_desc, cluster_boundary = cluster_boundary)
+      plot_pca_scatter(plot_path, pca_data, species_labels[indices], color_labels, cluster_labels, level, feature_desc, cluster_boundary = cluster_boundary, show_labels = TRUE)
+
+      # Variant 1: No Labels + Boundary (if enabled) (_noName)
+      plot_path_noName <- file.path(output_dir, sprintf("pca_2d_clusters_%s_%s_noName.png", output_prefix, gsub(" ", "_", level)))
+      plot_pca_scatter(plot_path_noName, pca_data, species_labels[indices], color_labels, cluster_labels, level, feature_desc, cluster_boundary = cluster_boundary, show_labels = FALSE)
+
+      # Variant 2: No Labels + No Boundary (_pcaOnly_noName)
+      plot_path_pcaOnly <- file.path(output_dir, sprintf("pca_2d_clusters_%s_%s_pcaOnly_noName.png", output_prefix, gsub(" ", "_", level)))
+      plot_pca_scatter(plot_path_pcaOnly, pca_data, species_labels[indices], color_labels, cluster_labels, level, feature_desc, cluster_boundary = "none", show_labels = FALSE)
     }
   }
   cluster_color_labels <- as.character(cluster_labels)
@@ -669,8 +696,10 @@ process_variant <- function(vectors, feature_order, indices_all, indices_filtere
     write_empty_results_csv(file.path(output_dir, sprintf("clustering_results_%s.csv", filtered_prefix)), classification_levels)
     if (length(plot_levels) > 0) {
       for (level in plot_levels) {
-        placeholder_path <- file.path(output_dir, sprintf("pca_2d_clusters_%s_%s.png", filtered_prefix, gsub(" ", "_", level)))
-        write_placeholder_plot(placeholder_path, message_text)
+        base_name <- sprintf("pca_2d_clusters_%s_%s", filtered_prefix, gsub(" ", "_", level))
+        write_placeholder_plot(file.path(output_dir, paste0(base_name, ".png")), message_text)
+        write_placeholder_plot(file.path(output_dir, paste0(base_name, "_noName.png")), message_text)
+        write_placeholder_plot(file.path(output_dir, paste0(base_name, "_pcaOnly_noName.png")), message_text)
       }
     }
   }
