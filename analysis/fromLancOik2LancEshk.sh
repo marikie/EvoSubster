@@ -1,3 +1,0 @@
-#!/bin/bash
-
-ls ~/oikopleura/lanc_oik_last/searchAlignedSegmentsClose2EachOther_from_eachOikPart_OnePartInLanc_alignment_20230706_sortedByQuery_20230903/diffOnRef_sameOnQuery/MAF | xargs -I@ python ~/scripts/analysis/fromLancOik2LancEshk.py ~/oikopleura/lanc_oik_last/searchAlignedSegmentsClose2EachOther_from_eachOikPart_OnePartInLanc_alignment_20230706_sortedByQuery_20230903/diffOnRef_sameOnQuery/MAF/@ ~/oikopleura/lanc_eshark_last/eachESharkPart_OnePartInLanc_alignment_20230919_sortedByRef.maf ~/oikopleura/lanc_eshark_last/fromLancOik2LancEshk_diffOnRef_sameOnQuery_inLancOik_20231002
