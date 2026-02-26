@@ -241,20 +241,13 @@ if (length(missing_pkgs) > 0) {
   stop(sprintf("Missing required R packages: %s", paste(missing_pkgs, collapse = ", ")))
 }
 
-if (!requireNamespace("pdftools", quietly = TRUE)) {
-  message("Attempting to install 'pdftools' package for PDF preview support...")
-  utils::install.packages("pdftools", repos = "https://cloud.r-project.org")
-}
-
-pdt_available <- requireNamespace("pdftools", quietly = TRUE)
-
 rmarkdown::render(
   input = rmd_path,
   params = list(
     input_json = input_json,
     preview_dir = preview_dir,
     images_dir = images_dir,
-    pdftools_available = pdt_available,
+    pdftools_available = FALSE,
     page_break_between_datasets = TRUE
   ),
   output_file = output_file,
