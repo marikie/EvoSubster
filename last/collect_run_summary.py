@@ -19,6 +19,17 @@ from typing import Dict, Iterable, List, Optional, Set, Tuple
 IDENTITY_PREFIX = "# substitution percent identity:"
 GC_CONTENT_PREFIX = "Total GC content: "
 
+RANK_ORDER: List[str] = [
+    "superkingdom",
+    "kingdom",
+    "phylum",
+    "class",
+    "order",
+    "family",
+    "genus",
+    "species",
+]
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -269,6 +280,45 @@ def load_json_file(path: Path) -> Tuple[Optional[dict], Optional[str]]:
         return None, f"Failed to read {path}: {exc}"
 
 
+def load_taxonomy_classification(
+    metadata_dir: Optional[str],
+    short_name: Optional[str],
+    accession: Optional[str],
+) -> List[Dict[str, object]]:
+    """Read taxonomy JSON and return classification as an ordered list.
+
+    Returns a list of ``{"rank": ..., "name": ..., "id": ...}`` dicts in
+    RANK_ORDER sequence.  Returns an empty list when the file is missing or
+    the classification block cannot be found.
+    """
+    if not metadata_dir or not short_name or not accession:
+        return []
+    tax_path = Path(metadata_dir) / f"taxonomy_{short_name}_{accession}.json"
+    if not tax_path.exists():
+        return []
+    payload, error = load_json_file(tax_path)
+    if error or payload is None:
+        return []
+    reports = payload.get("reports")
+    if reports and isinstance(reports, list) and reports:
+        taxonomy = reports[0].get("taxonomy", {})
+    else:
+        taxonomy = payload.get("taxonomy", {})
+    classification = taxonomy.get("classification", {})
+    result: List[Dict[str, object]] = []
+    for rank in RANK_ORDER:
+        entry = classification.get(rank)
+        if entry:
+            result.append(
+                {
+                    "rank": rank,
+                    "name": entry.get("name"),
+                    "id": entry.get("id"),
+                }
+            )
+    return result
+
+
 def load_manifest(run_dir: Path) -> Tuple[Optional[dict], Optional[str]]:
     manifest_path = run_dir / "metadata" / "metadata_manifest.json"
     if not manifest_path.exists():
@@ -351,6 +401,7 @@ def process_species(
     include_tsv: bool = True,
     include_sbst_ratio: bool = True,
     include_pdfs: bool = True,
+    metadata_dir: Optional[str] = None,
 ) -> Tuple[Dict[str, object], List[str]]:
     data: Dict[str, object] = {"metadata": sanitize_metadata(metadata)}
     issues: List[str] = []
@@ -367,6 +418,10 @@ def process_species(
     metadata_json = metadata.get("metadata_json")
     if metadata_json:
         data["metadata_json"] = metadata_json
+
+    data["taxonomy_classification"] = load_taxonomy_classification(
+        metadata_dir, short_name, accession
+    )
 
     if include_tsv:
         tsv_path = select_first_for_short_name(run_dir, f"*_*{short_name}_*.tsv", short_name)
@@ -510,6 +565,7 @@ def process_dataset(dataset_dir: Path, idt_threshold: float) -> Tuple[Optional[D
         return None, issues
     dataset_data["metadata_manifest"] = manifest.get("manifest_path")
     slot_map = build_manifest_slot_map(manifest)
+    metadata_dir: Optional[str] = manifest.get("metadata_dir")
 
     sbst_ratio_path = select_first(latest_run, "sbstRatio*_maflinked.out")
 
@@ -526,6 +582,7 @@ def process_dataset(dataset_dir: Path, idt_threshold: float) -> Tuple[Optional[D
             include_tsv=False,
             include_sbst_ratio=False,
             include_pdfs=False,
+            metadata_dir=metadata_dir,
         )
         issues.extend(species1_issues)
     dataset_data["species1"] = species1_data
@@ -536,7 +593,7 @@ def process_dataset(dataset_dir: Path, idt_threshold: float) -> Tuple[Optional[D
         issues.append("org2: Missing metadata entry in manifest.")
     else:
         species2_data, species2_issues = process_species(
-            latest_run, species2_meta, sbst_ratio_path, 1
+            latest_run, species2_meta, sbst_ratio_path, 1, metadata_dir=metadata_dir
         )
         issues.extend(species2_issues)
     dataset_data["species2"] = species2_data
@@ -547,7 +604,7 @@ def process_dataset(dataset_dir: Path, idt_threshold: float) -> Tuple[Optional[D
         issues.append("org3: Missing metadata entry in manifest.")
     else:
         species3_data, species3_issues = process_species(
-            latest_run, species3_meta, sbst_ratio_path, 2
+            latest_run, species3_meta, sbst_ratio_path, 2, metadata_dir=metadata_dir
         )
         issues.extend(species3_issues)
     dataset_data["species3"] = species3_data
@@ -571,6 +628,32 @@ def format_issue_list(issues_map: Dict[str, List[str]], allowed: Optional[Set[st
         for issue in issues_map[dataset_name]:
             messages.append(f"{dataset_name}: {issue}")
     return messages
+
+
+def _classification_sort_key(dataset_data: Dict[str, object]) -> Tuple:
+    """Build a sort key for a dataset entry based on taxonomy classification.
+
+    Primary key: classification names for all three species (species1, species2,
+    species3) in RANK_ORDER sequence.  Secondary key: dataset name for
+    alphabetical tie-breaking.
+    """
+
+    def names_for_species(slot: str) -> Tuple[str, ...]:
+        species = dataset_data.get(slot) or {}
+        classification = species.get("taxonomy_classification") or []
+        name_map = {
+            item["rank"]: item.get("name") or ""
+            for item in classification
+            if isinstance(item, dict) and "rank" in item
+        }
+        return tuple(name_map.get(rank, "") for rank in RANK_ORDER)
+
+    return (
+        names_for_species("species1"),
+        names_for_species("species2"),
+        names_for_species("species3"),
+        str(dataset_data.get("dataset", "")),
+    )
 
 
 def build_summary(root: Path, idt_threshold: float) -> Tuple[Dict[str, object], Dict[str, object]]:
@@ -608,6 +691,9 @@ def build_summary(root: Path, idt_threshold: float) -> Tuple[Dict[str, object], 
             dataset_name = dataset_data.get("dataset", dataset_name)
         if issues:
             aggregated_issues.setdefault(dataset_name, []).extend(issues)
+
+    dataset_entries.sort(key=_classification_sort_key)
+    filtered_entries.sort(key=_classification_sort_key)
 
     summary_all["datasets"] = dataset_entries
     summary_all["issues"] = format_issue_list(aggregated_issues)

@@ -261,6 +261,28 @@ if (length(summary_data$datasets) == 0) {
     )
     cat("\n")
 
+    # Taxonomy classification table per species
+    taxonomy_slots <- tibble(
+      slot  = c("species1", "species2", "species3"),
+      label = c("Species A", "Species B", "Species C")
+    )
+    pwalk(taxonomy_slots, function(slot, label) {
+      entry    <- get_species_entry(slot)
+      classif  <- entry$taxonomy_classification %||% list()
+      if (length(classif) == 0) return(invisible(NULL))
+
+      org_name <- organism_label(entry$metadata %||% list())
+      heading  <- format_heading(label, org_name)
+      cat(glue("#### Taxonomy: {heading}\n\n"))
+
+      classif_tbl <- tibble(
+        rank = map_chr(classif, ~ str_to_title(.x[["rank"]] %||% "")),
+        name = map_chr(classif, ~ .x[["name"]] %||% missing_placeholder)
+      )
+      print(kable(classif_tbl, col.names = c("Rank", "Classification")))
+      cat("\n")
+    })
+
     short_labels <- ifelse(
       is.na(species_rows$short_name) | species_rows$short_name == "",
       species_rows$species,
