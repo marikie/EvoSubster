@@ -53,6 +53,3 @@ nextflow/work/
 nextflow/.nextflow.log.*
 nextflow/.nextflow.history
 
-# Claude Code configuration (contains research methodology)
-CLAUDE.md
-
