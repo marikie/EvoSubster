@@ -269,6 +269,30 @@ def load_json_file(path: Path) -> Tuple[Optional[dict], Optional[str]]:
         return None, f"Failed to read {path}: {exc}"
 
 
+def read_taxonomy_lineage(metadata_json_path: str) -> Tuple[Optional[dict], Optional[str]]:
+    """Read pre-fetched taxonomy classification from taxonomy_*.json alongside the metadata JSON."""
+    meta_path = Path(metadata_json_path)
+    tax_path = meta_path.parent / f"taxonomy_{meta_path.name}"
+    if not tax_path.exists():
+        return None, f"Taxonomy JSON not found: {tax_path}"
+    data, err = load_json_file(tax_path)
+    if err or not data:
+        return None, err
+    reports = data.get("reports") or []
+    if not reports:
+        return None, "No reports in taxonomy JSON"
+    classification = (reports[0].get("taxonomy") or {}).get("classification") or {}
+    ranks = ["domain", "kingdom", "phylum", "class", "order", "family", "genus", "species"]
+    result = {}
+    for rank in ranks:
+        entry = classification.get(rank)
+        if entry and entry.get("name"):
+            result[rank] = entry["name"]
+    if not result:
+        return None, "No classification data found in taxonomy JSON"
+    return result, None
+
+
 def load_manifest(run_dir: Path) -> Tuple[Optional[dict], Optional[str]]:
     manifest_path = run_dir / "metadata" / "metadata_manifest.json"
     if not manifest_path.exists():
@@ -367,6 +391,11 @@ def process_species(
     metadata_json = metadata.get("metadata_json")
     if metadata_json:
         data["metadata_json"] = metadata_json
+        lineage, tax_err = read_taxonomy_lineage(metadata_json)
+        if lineage:
+            data["taxonomy"] = lineage
+        elif tax_err:
+            issues.append(f"{slot}: {tax_err}")
 
     if include_tsv:
         tsv_path = select_first_for_short_name(run_dir, f"*_*{short_name}_*.tsv", short_name)

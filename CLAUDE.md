@@ -121,3 +121,8 @@ The `Alignment` class handles pairwise MAF entries (used by alignment utilities)
 - Shell: `#!/bin/bash`, quote variables, `$(...)` over backticks, idempotent (skip if output exists)
 - R: Parameters grouped at top, document external deps inline
 - Commits: Imperative mood, optionally scoped (e.g., `last: adjust TSV generation`)
+
+## Git
+
+gitの話をするときは `/big/mrk/proj/sbst/scripts` のリポジトリを指す。
+git操作は常に `git -C /big/mrk/proj/sbst/scripts` で実行すること。

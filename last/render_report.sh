@@ -139,7 +139,15 @@ cleanup_images() {
 }
 trap cleanup_images EXIT
 
-Rscript --vanilla - "$RMD_PATH" "$INPUT_JSON_ABS" "$OUTPUT_PATH" "$OUTPUT_FORMAT" "$PREVIEW_DIR" "$IMAGES_DIR" <<'RSCRIPT'
+# Check if pdftools R package is available
+PDFTOOLS_AVAIL="FALSE"
+if Rscript --vanilla \
+    -e "quit(status = if (requireNamespace('pdftools', quietly=TRUE)) 0L else 1L)" \
+    >/dev/null 2>&1; then
+    PDFTOOLS_AVAIL="TRUE"
+fi
+
+Rscript --vanilla - "$RMD_PATH" "$INPUT_JSON_ABS" "$OUTPUT_PATH" "$OUTPUT_FORMAT" "$PREVIEW_DIR" "$IMAGES_DIR" "$PDFTOOLS_AVAIL" <<'RSCRIPT'
 args <- commandArgs(trailingOnly = TRUE)
 rmd_path <- args[[1]]
 input_json <- args[[2]]
@@ -147,6 +155,7 @@ output_file <- args[[3]]
 output_format <- args[[4]]
 preview_dir <- args[[5]]
 images_dir <- args[[6]]
+pdftools_avail_str <- if (length(args) >= 7) args[[7]] else "FALSE"
 
 adjust_docx_image_widths <- function(docx_path, target_cm = 16.5) {
   if (!requireNamespace("xml2", quietly = TRUE)) {
@@ -247,7 +256,7 @@ rmarkdown::render(
     input_json = input_json,
     preview_dir = preview_dir,
     images_dir = images_dir,
-    pdftools_available = FALSE,
+    pdftools_available = identical(pdftools_avail_str, "TRUE"),
     page_break_between_datasets = TRUE
   ),
   output_file = output_file,

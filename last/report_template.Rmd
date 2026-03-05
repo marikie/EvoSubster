@@ -183,7 +183,15 @@ if (length(summary_data$issues) > 0) {
 if (length(summary_data$datasets) == 0) {
   cat("Dataset not found.\n")
 } else {
-  iwalk(summary_data$datasets, function(ds, idx) {
+  # Sort datasets by species2 (org2) taxonomy: domain > kingdom > phylum > class > order > family > genus > species
+  tax_ranks_sort <- c("domain", "kingdom", "phylum", "class", "order", "family", "genus", "species")
+  sort_keys <- vapply(summary_data$datasets, function(ds) {
+    tax <- (ds$species2$taxonomy %||% list())
+    paste(vapply(tax_ranks_sort, function(r) tax[[r]] %||% "", character(1)), collapse = "~")
+  }, character(1))
+  datasets_sorted <- summary_data$datasets[order(sort_keys)]
+
+  iwalk(datasets_sorted, function(ds, idx) {
     is_docx_output <- identical(knitr::opts_knit$get("rmarkdown.pandoc.to"), "docx")
     if (idx > 1 && isTRUE(params$page_break_between_datasets) && is_docx_output) {
       cat("\n")
@@ -289,6 +297,30 @@ if (length(summary_data$datasets) == 0) {
       )
     )
     cat("\n")
+
+    # Build taxonomy comparison table across the three species
+    tax_ranks <- c("domain", "kingdom", "phylum", "class", "order", "family", "genus", "species")
+    tax_data <- lapply(slots, function(slot) {
+      entry <- get_species_entry(slot)
+      tax <- entry$taxonomy %||% list()
+      vapply(tax_ranks, function(r) {
+        v <- tax[[r]]
+        if (is.null(v) || !nzchar(v)) missing_placeholder else as.character(v)
+      }, character(1))
+    })
+    tax_mat <- do.call(cbind, tax_data)
+    rownames(tax_mat) <- tax_ranks
+    # Keep only rows where at least one species has data
+    has_data <- apply(tax_mat, 1, function(row) any(row != missing_placeholder))
+    if (any(has_data)) {
+      tax_df <- as.data.frame(tax_mat[has_data, , drop = FALSE], stringsAsFactors = FALSE)
+      colnames(tax_df) <- labels
+      tax_df <- cbind(Rank = tools::toTitleCase(rownames(tax_df)), tax_df)
+      rownames(tax_df) <- NULL
+      cat("### Taxonomy\n\n")
+      print(kable(tax_df, col.names = c("Rank", labels)))
+      cat("\n")
+    }
 
     species_sections <- tibble(
       slot = slots,
