@@ -19,13 +19,6 @@ get_config() {
     yq eval "$1" "$config_file"
 }
 
-sanitize_for_path() {
-    local name="$1"
-    name=${name// /_}
-    name=${name//[^A-Za-z0-9._-]/_}
-    echo "$name"
-}
-
 make_short_name() {
     local full_name="$1"
     local suffix="$2"
@@ -46,122 +39,9 @@ make_short_name() {
     echo "${first_trimmed}${second_trimmed}${suffix}"
 }
 
-has_fasta_files() {
-    local org_dir="$1"
-    local accession="$2"
-    local pattern="${fasta_pattern_template//\{org_id\}/$accession}"
-
-    if compgen -G "$org_dir/$pattern" >/dev/null 2>&1; then
-        return 0
-    fi
-
-    if compgen -G "$org_dir"/*.fna >/dev/null 2>&1; then
-        return 0
-    fi
-
-    return 1
-}
-
-find_first_fasta() {
-    local org_dir="$1"
-    local accession="$2"
-    local pattern="${fasta_pattern_template//\{org_id\}/$accession}"
-    local candidate
-
-    candidate=$(compgen -G "$org_dir/$pattern" | head -n1)
-    if [ -n "$candidate" ]; then
-        echo "$candidate"
-        return
-    fi
-
-    candidate=$(compgen -G "$org_dir"/*.fna | head -n1)
-    echo "$candidate"
-}
-
-# Function to derive organism full name from NCBI Datasets summary JSON
-# - Writes summary JSON to "$base_genomes/<orgFullName>/<accession>.json" (final_dir_name honors overrides)
-# - Returns: "<final_dir_name>|<summary_json_path>|<raw_organism_name>|<calculated_full_name>"
-get_org_full_name_from_id() {
-    local accession="$1"
-    local override_name="$2"
-    local tmp_json
-    tmp_json=$(mktemp) || {
-        echo "Error: Unable to create temporary file for $accession summary." >&2
-        return 1
-    }
-
-    # Require jq
-    if ! command -v jq >/dev/null 2>&1; then
-        echo "Error: 'jq' is required but not found in PATH." >&2
-        rm -f "$tmp_json"
-        return 1
-    fi
-
-    # Fetch summary JSON
-    if ! datasets summary genome accession "$accession" > "$tmp_json"; then
-        echo "Error: Failed to run 'datasets summary' for $accession" >&2
-        rm -f "$tmp_json"
-        return 1
-    fi
-
-    # Parse organism name
-    local raw_base_name
-    raw_base_name=$(jq -r 'try .reports[0].organism.organism_name catch ""' "$tmp_json")
-    if [ -z "$raw_base_name" ] || [ "$raw_base_name" = "null" ]; then
-        echo "Warning: '.reports[0].organism.organism_name' not found in temporary summary; using accession $accession" >&2
-        raw_base_name="$accession"
-    fi
-    local base_name
-    base_name=$(sanitize_for_path "$raw_base_name")
-
-    # Parse infraspecific names (optional)
-    local infra
-    infra=$(jq -r 'try ([.reports[0].organism.infraspecific_names[]] | map(tostring) | join("_")) catch ""' "$tmp_json")
-    infra=$(sanitize_for_path "$infra")
-
-    local calculated_full_name
-    if [ -n "$infra" ] && [ "$infra" != "null" ]; then
-        calculated_full_name="${base_name}_${infra}"
-    else
-        calculated_full_name="$base_name"
-    fi
-    calculated_full_name=$(sanitize_for_path "$calculated_full_name")
-
-    local final_dir_name
-    if [ -n "$override_name" ]; then
-        final_dir_name=$(sanitize_for_path "$override_name")
-    else
-        final_dir_name="$calculated_full_name"
-    fi
-
-    # Determine final JSON location
-    local destination_json=""
-    if [ -n "$base_genomes" ] && [ "$base_genomes" != "null" ]; then
-        local dest_dir="$base_genomes/$final_dir_name"
-        if ! mkdir -p "$dest_dir"; then
-            echo "Error: Unable to create directory $dest_dir for storing summary JSON." >&2
-            rm -f "$tmp_json"
-            return 1
-        fi
-        destination_json="$dest_dir/${accession}.json"
-    else
-        destination_json="${accession}.json"
-    fi
-
-    if ! mv "$tmp_json" "$destination_json"; then
-        echo "Warning: Failed to move summary JSON to $destination_json; attempting to copy instead." >&2
-        if ! cp "$tmp_json" "$destination_json"; then
-            echo "Error: Unable to place summary JSON for $accession." >&2
-            rm -f "$tmp_json"
-            return 1
-        fi
-        rm -f "$tmp_json"
-    fi
-
-    echo "$final_dir_name|$destination_json|$raw_base_name|$calculated_full_name"
-}
 
 OUT_DIR_OVERRIDE=""
+BASE_GENOMES_OVERRIDE=""
 IDT_ONLY=0
 THREAD_NUM_OVERRIDE=8
 POSITIONAL_ARGS=()
@@ -216,6 +96,24 @@ while [[ $# -gt 0 ]]; do
             shift
             continue
             ;;
+        --base-genomes)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: --base-genomes requires a non-empty path argument." >&2
+                exit 1
+            fi
+            BASE_GENOMES_OVERRIDE="$2"
+            shift 2
+            continue
+            ;;
+        --base-genomes=*)
+            BASE_GENOMES_OVERRIDE="${1#*=}"
+            if [[ -z "$BASE_GENOMES_OVERRIDE" ]]; then
+                echo "Error: --base-genomes requires a non-empty path argument." >&2
+                exit 1
+            fi
+            shift
+            continue
+            ;;
         --)
             shift
             POSITIONAL_ARGS+=("$@")
@@ -247,11 +145,12 @@ if [ -z "$DATE" ] || [ -z "$org1ID" ] || [ -z "$org2ID" ] || [ -z "$org3ID" ]; t
    exit 1
 fi
 
-base_genomes=$(get_config '.paths.base_genomes')
-if [ -z "$base_genomes" ] || [ "$base_genomes" = "null" ]; then
+default_base_genomes=$(get_config '.paths.base_genomes')
+if [ -z "$BASE_GENOMES_OVERRIDE" ] && ([ -z "$default_base_genomes" ] || [ "$default_base_genomes" = "null" ]); then
     echo "Error: .paths.base_genomes is not set in dwl_config.yaml" >&2
     exit 1
 fi
+base_genomes="${BASE_GENOMES_OVERRIDE:-$default_base_genomes}"
 
 if [ ! -d "$base_genomes" ]; then
     mkdir -p "$base_genomes" || {
@@ -266,12 +165,6 @@ if [ -z "$default_out_dir" ] || [ "$default_out_dir" = "null" ]; then
     exit 1
 fi
 
-fasta_pattern_template=$(get_config '.patterns.fasta')
-if [ -z "$fasta_pattern_template" ] || [ "$fasta_pattern_template" = "null" ]; then
-    echo "Error: .patterns.fasta is not set in dwl_config.yaml" >&2
-    exit 1
-fi
-
 out_dir_base="${OUT_DIR_OVERRIDE:-$default_out_dir}"
 if [ ! -d "$out_dir_base" ]; then
     if ! mkdir -p "$out_dir_base"; then
@@ -280,31 +173,18 @@ if [ ! -d "$out_dir_base" ]; then
     fi
 fi
 
-# Auto-generate org full names from NCBI Datasets summary (always capture metadata)
-org1Metadata=$(get_org_full_name_from_id "$org1ID" "") || exit 1
-org2Metadata=$(get_org_full_name_from_id "$org2ID" "") || exit 1
-org3Metadata=$(get_org_full_name_from_id "$org3ID" "") || exit 1
+# Download genome + taxonomy for each accession via dwl_organism.sh
+org1Result=$(bash "$LAST_DIR/dwl_organism.sh" "$org1ID" --out-dir "$base_genomes") || exit 1
+org2Result=$(bash "$LAST_DIR/dwl_organism.sh" "$org2ID" --out-dir "$base_genomes") || exit 1
+org3Result=$(bash "$LAST_DIR/dwl_organism.sh" "$org3ID" --out-dir "$base_genomes") || exit 1
 
-IFS='|' read -r org1FullName org1SummaryJson org1RawName org1NcbiFullName <<< "$org1Metadata"
-IFS='|' read -r org2FullName org2SummaryJson org2RawName org2NcbiFullName <<< "$org2Metadata"
-IFS='|' read -r org3FullName org3SummaryJson org3RawName org3NcbiFullName <<< "$org3Metadata"
+IFS='|' read -r org1FullName org1FASTA org1SummaryJson org1RawName org1NcbiFullName org1TaxJson <<< "$org1Result"
+IFS='|' read -r org2FullName org2FASTA org2SummaryJson org2RawName org2NcbiFullName org2TaxJson <<< "$org2Result"
+IFS='|' read -r org3FullName org3FASTA org3SummaryJson org3RawName org3NcbiFullName org3TaxJson <<< "$org3Result"
 
 echo "Derived org1FullName: $org1FullName"
 echo "Derived org2FullName: $org2FullName"
 echo "Derived org3FullName: $org3FullName"
-
-cd "$base_genomes" || {
-    echo "Error: Cannot change directory to $base_genomes" >&2
-    exit 1
-}
-for orgFullName in $org1FullName $org2FullName $org3FullName; do
-    if [ ! -d "$orgFullName" ]; then
-        mkdir "$orgFullName"
-    fi
-done
-
-includes=$(get_config '.download.includes'|tr -d ' '|tr '\n' ','|sed 's/,$//')
-echo "includes: $includes"
 
 # Create arrays
 ids=("$org1ID" "$org2ID" "$org3ID")
@@ -312,126 +192,8 @@ names=("$org1FullName" "$org2FullName" "$org3FullName")
 raw_names=("$org1RawName" "$org2RawName" "$org3RawName")
 ncbi_full_names=("$org1NcbiFullName" "$org2NcbiFullName" "$org3NcbiFullName")
 summary_jsons=("$org1SummaryJson" "$org2SummaryJson" "$org3SummaryJson")
-
-# Iterate over both arrays using an index
-for i in {0..2}; do
-    orgID=${ids[$i]}
-    orgFullName=${names[$i]}
-    orgDir="$base_genomes/$orgFullName"
-    need_download=0
-
-    if ! has_fasta_files "$orgDir" "$orgID"; then
-        need_download=1
-    fi
-
-    if [ "$need_download" -eq 0 ]; then
-        echo "$(get_config '.messages.already_downloaded' | sed "s/{org_full}/$orgFullName/g")"
-        continue
-    fi
-
-    echo "$(get_config '.messages.download' | sed "s/{org_full}/$orgFullName/g")"
-    cd "$orgDir"
-
-    # Run download and check if it succeeded
-    if ! datasets download genome accession "$orgID" --include "$includes"; then
-        echo "Error: Failed to download genome for $orgFullName (ID: $orgID)" >&2
-        echo "Exiting process..." >&2
-        exit 1
-    fi
-
-    # Verify the downloaded file exists and is not empty
-    if [ ! -s "ncbi_dataset.zip" ]; then
-        echo "Error: Download completed but ncbi_dataset.zip is empty or missing for $orgFullName" >&2
-        echo "Exiting process..." >&2
-        exit 1
-    fi
-
-    echo "Successfully downloaded genome for $orgFullName"
-done
-
-echo "All downloads completed successfully"
-
-# move files and delete unnecessary directories
-echo "$(get_config '.messages.move_files')"
-function processGenomeData() {
-    local orgFullName=$1
-    local orgID=$2
-
-    local orgDir="$base_genomes/$orgFullName"
-
-    cd "$orgDir" || {
-        echo "Error: Cannot change directory to $orgFullName" >&2
-        return 1
-    }
-
-    if has_fasta_files "$orgDir" "$orgID"; then
-        echo "Genome files already exist for $orgFullName"
-        return 0
-    fi
-
-    echo "Processing genome data for $orgFullName..."
-
-    if [ ! -s "ncbi_dataset.zip" ]; then
-        echo "Error: ncbi_dataset.zip is missing or empty for $orgFullName" >&2
-        return 1
-    fi
-
-    # Unzip with error checking
-    if ! unzip ncbi_dataset.zip; then
-        echo "Error: Failed to unzip data for $orgFullName" >&2
-        return 1
-    fi
-
-    cd ncbi_dataset/data || {
-        echo "Error: Cannot access data directory for $orgFullName" >&2
-        return 1
-    }
-
-    if ! mv $(ls -p | grep -v /) "$orgDir"; then
-        echo "Error: Failed to move files for $orgFullName" >&2
-        return 1
-    fi
-
-    cd "$orgID" || {
-        echo "Error: Cannot access $orgID directory" >&2
-        return 1
-    }
-
-    if ! mv * "$orgDir"; then
-        echo "Error: Failed to move $orgID files" >&2
-        return 1
-    fi
-
-    cd "$orgDir" || return 1
-    rm -r ncbi_dataset || {
-        echo "Warning: Could not remove ncbi_dataset directory" >&2
-    }
-
-    echo "Successfully processed genome data for $orgFullName"
-}
-
-# Process each genome sequentially
-for i in {0..2}; do
-    orgFullName=${names[$i]}
-    orgID=${ids[$i]}
-    
-    echo "Processing genome $((i+1)) of 3: $orgFullName"
-    if ! processGenomeData "$orgFullName" "$orgID"; then
-        echo "Error: Failed to process genome data for $orgFullName" >&2
-        echo "Exiting process..." >&2
-        exit 1
-    fi
-done
-
-echo "All genome data processed successfully"
-
-org1FASTA=$(find_first_fasta "$base_genomes/$org1FullName" "$org1ID")
-org2FASTA=$(find_first_fasta "$base_genomes/$org2FullName" "$org2ID")
-org3FASTA=$(find_first_fasta "$base_genomes/$org3FullName" "$org3ID")
-
-echo "org1FASTA: ${org1FASTA:-NOT_FOUND}"
-echo "org2FASTA: ${org2FASTA:-NOT_FOUND}"
-echo "org3FASTA: ${org3FASTA:-NOT_FOUND}"
+tax_jsons=("$org1TaxJson" "$org2TaxJson" "$org3TaxJson")
+fasta_paths=("$org1FASTA" "$org2FASTA" "$org3FASTA")
 
 for f in "$org1FASTA" "$org2FASTA" "$org3FASTA"; do
     if [ -z "$f" ]; then
@@ -463,7 +225,7 @@ run_date_dir="$(cd "$run_dir_root/$DATE" && pwd)"
 metadata_dir="$run_date_dir/metadata"
 
 # Check if GFF file exists in org1 (auto-detect)
-gffFilePath="$(get_config '.paths.base_genomes')/$org1FullName/genomic.gff"
+gffFilePath="$base_genomes/$org1FullName/genomic.gff"
 
 if [ -e "$gffFilePath" ]; then
     org1GFF="$gffFilePath" # set $org1GFF as the path to the gff file
@@ -474,7 +236,6 @@ else
 fi
 
 echo "--- Preparing metadata artifacts in $metadata_dir"
-declare -a fasta_paths=("$org1FASTA" "$org2FASTA" "$org3FASTA")
 declare -a gff_paths=("$org1GFF" "" "")
 declare -a metadata_json_copies=("" "" "")
 
@@ -561,49 +322,14 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Download taxonomy JSONs into metadata/ using tax_id from summary JSON.
+# Copy taxonomy JSONs (downloaded by dwl_organism.sh) to metadata dir with short_name prefix
 for i in {0..2}; do
+    tax_src=${tax_jsons[$i]}
     short_name=${short_names[$i]}
     accession=${ids[$i]}
-    meta_json=${metadata_json_copies[$i]}
-    tax_out="$metadata_dir/taxonomy_${short_name}_${accession}.json"
-
-    if [ -s "$tax_out" ]; then
-        echo "taxonomy JSON already exists: $tax_out"
-        continue
-    fi
-
-    if [ -z "$meta_json" ] || [ ! -f "$meta_json" ]; then
-        echo "Warning: Cannot fetch taxonomy JSON; metadata JSON missing for ${short_name} (${accession})." >&2
-        continue
-    fi
-
-    tax_id=$(jq -r '(.reports[0].organism.tax_id // .reports[0].biosample.description.organism.tax_id // empty) | tostring' "$meta_json" 2>/dev/null)
-    if [ -z "$tax_id" ] || [ "$tax_id" = "null" ]; then
-        echo "Warning: tax_id not found in metadata JSON for ${short_name} (${accession}); skipping taxonomy download." >&2
-        continue
-    fi
-
-    tmp_tax=$(mktemp) || {
-        echo "Warning: Unable to create temporary file for taxonomy download (tax_id=$tax_id)." >&2
-        continue
-    }
-    if datasets summary taxonomy taxon "$tax_id" >"$tmp_tax"; then
-        if [ -s "$tmp_tax" ]; then
-            if ! mv "$tmp_tax" "$tax_out" 2>/dev/null; then
-                if ! cp "$tmp_tax" "$tax_out"; then
-                    echo "Warning: Failed to write taxonomy JSON to $tax_out (tax_id=$tax_id)." >&2
-                fi
-                rm -f "$tmp_tax"
-            fi
-            echo "Downloaded taxonomy JSON: $tax_out"
-        else
-            echo "Warning: taxonomy download returned empty output (tax_id=$tax_id) for ${short_name} (${accession})." >&2
-            rm -f "$tmp_tax"
-        fi
-    else
-        echo "Warning: Failed to download taxonomy JSON (tax_id=$tax_id) for ${short_name} (${accession})." >&2
-        rm -f "$tmp_tax"
+    tax_dest="$metadata_dir/taxonomy_${short_name}_${accession}.json"
+    if [ -f "$tax_src" ] && [ ! -f "$tax_dest" ]; then
+        cp "$tax_src" "$tax_dest"
     fi
 done
 
@@ -618,8 +344,3 @@ if [ "$IDT_ONLY" -eq 1 ]; then
 fi
 trisbst_args+=("$DATE" "$org1FASTA" "$org2FASTA" "$org3FASTA" "$org1GFF")
 bash "$LAST_DIR/trisbst_3spc.sh" "${trisbst_args[@]}"
-
-# cd "$run_date_dir"
-# gcContent_org1=${org1ShortName}_gcContent_${DATE}.out
-# echo "time bash $LAST_DIR/gc_content.sh $org1FASTA >$gcContent_org1"
-# time bash "$LAST_DIR/gc_content.sh" "$org1FASTA" >"$gcContent_org1"

@@ -46,12 +46,9 @@ errors:
     - org1 accession ID << Outgroup >> (e.g. 'GCA_023078555.1')
     - org2 accession ID (e.g. 'GCA_900538255.1')
     - org3 accession ID (e.g. 'GCA_024500015.1')
-    Optional (auto-derived from NCBI Datasets summary when omitted):
-    - org1 full name
-    - org2 full name
-    - org3 full name
 
     Optional flags:
     - --out-dir /path/to/output (override downstream run directory)
+    - --base-genomes /path/to/genomes (override genome storage directory)
     - --idt-only (stop after last-train identity checks; skip downstream alignment/analysis)
     - --thread N (set number of threads for last-train/lastal/lastdb; default: 8)
