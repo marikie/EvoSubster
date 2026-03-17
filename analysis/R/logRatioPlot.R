@@ -6,10 +6,11 @@ library(showtext)
 library(sysfonts)
 library(rlang)
 
-generate_plots <- function(tsv_path) {
+generate_plots <- function(tsv_path, out_dir = dirname(tsv_path)) {
   data <- read.csv(tsv_path, sep = "\t", header = TRUE)
 
-  path_without_extension <- tools::file_path_sans_ext(tsv_path)
+  # Build output path using out_dir + basename without extension
+  path_without_extension <- file.path(out_dir, tools::file_path_sans_ext(basename(tsv_path)))
   # graph_path_exp <- paste(path_without_extension, "_logRatio_exp.pdf", sep = "")
   graph_path_mean <- paste(path_without_extension, "_logRatio.pdf", sep = "")
   data <- add_logRatio(data)
@@ -231,4 +232,5 @@ args <- commandArgs(trailingOnly = TRUE)
 
 # Access the arguments
 tsv_path <- args[1] # File path for the input data, .tsv file
-generate_plots(tsv_path)
+out_dir <- if (length(args) >= 2) args[2] else dirname(tsv_path)
+generate_plots(tsv_path, out_dir)

@@ -13,9 +13,11 @@ fi
 org1_org2=$1
 org1_org3=$2
 org1_org2_base=$(basename "$org1_org2" .maf)
-org1_org2_sorted="${org1_org2_base}_sorted.maf"
+org1_org2_dir=$(dirname "$org1_org2")
+org1_org2_sorted="${org1_org2_dir}/${org1_org2_base}_sorted.maf"
 org1_org3_base=$(basename "$org1_org3" .maf)
-org1_org3_sorted="${org1_org3_base}_sorted.maf"
+org1_org3_dir=$(dirname "$org1_org3")
+org1_org3_sorted="${org1_org3_dir}/${org1_org3_base}_sorted.maf"
 joinedFile=$3
 
 echo "---maf-joining the two .maf files"

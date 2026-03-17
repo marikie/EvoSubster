@@ -6,12 +6,12 @@ library(dplyr)
 
 # MODIFIED THE CODE FROM https://github.com/kartong88/Plot-Mutation-Landscape
 
-generate_plots <- function(tsv_path) {
+generate_plots <- function(tsv_path, out_dir = dirname(tsv_path)) {
   data <- read_and_transform_data(tsv_path)
   trinuc.lab <- data %>% pull(oriType)
 
-  # Extract the path without an extension from tsv_path
-  path_without_extension <- tools::file_path_sans_ext(tsv_path)
+  # Build output path using out_dir + basename without extension
+  path_without_extension <- file.path(out_dir, tools::file_path_sans_ext(basename(tsv_path)))
   # Create file paths for the plots (PNG)
   normgraph_path <- paste(path_without_extension, "_norm.pdf", sep = "")
   sbstgraph_path <- paste(path_without_extension, "_sbst.pdf", sep = "")
@@ -222,4 +222,5 @@ args <- commandArgs(trailingOnly = TRUE)
 
 # Access the arguments
 tsv_path <- args[1] # File path for the input data, .tsv file
-generate_plots(tsv_path)
+out_dir <- if (length(args) >= 2) args[2] else dirname(tsv_path)
+generate_plots(tsv_path, out_dir)

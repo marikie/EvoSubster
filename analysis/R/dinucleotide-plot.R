@@ -2,12 +2,13 @@
 
 args = commandArgs(trailingOnly=TRUE)
 
-if (length(args) != 1) {
-  stop("Please give me one file name")
+if (length(args) < 1 || length(args) > 2) {
+  stop("Usage: dinucleotide-plot.R <infile> [out_dir]")
 }
 
 inFile <- args[1]
-outFile <- paste(inFile, "pdf", sep=".")
+out_dir <- if (length(args) >= 2) args[2] else dirname(inFile)
+outFile <- file.path(out_dir, paste(basename(inFile), "pdf", sep="."))
 
 xlab <- "Substitutions / original dinucleotides (%)"
 

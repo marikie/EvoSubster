@@ -1,8 +1,7 @@
 #!/bin/bash
 
-argNum=$#
-if [ $argNum -ne 5 ]; then
-    echo "Usage: $0 <Today's Date> <org2FASTA> <org3FASTA> <org2ShortName> <org3ShortName>"
+if [ $# -lt 5 ] || [ $# -gt 6 ]; then
+    echo "Usage: $0 <Today's Date> <org2FASTA> <org3FASTA> <org2ShortName> <org3ShortName> [out_dir]"
     exit 1
 fi
 # Get arguments
@@ -11,22 +10,22 @@ org2FASTA=$2
 org3FASTA=$3
 org2ShortName=$4
 org3ShortName=$5
+out_dir="${6:-.}"
 
-dbName="${org2ShortName}db_${DATE}"
-trainFile="${org2ShortName}2${org3ShortName}_${DATE}.train"
+dbBasename="${org2ShortName}db_${DATE}"
+dbDir="${out_dir}/${dbBasename}"
+trainFile="${out_dir}/${org2ShortName}2${org3ShortName}_${DATE}.train"
 threadNum=${THREAD_NUM:-8}
 
 # lastdb
 echo "---lastdb"
-if [ ! -d $dbName ]; then
+if [ ! -d "$dbDir" ]; then
 	echo "making lastdb"
-	mkdir $dbName
-	cd $dbName
-	echo "time lastdb -P${threadNum} -c -uRY4 $dbName $org2FASTA"
-	time lastdb -P${threadNum} -c -uRY4 $dbName $org2FASTA
-	cd ..
+	mkdir -p "$dbDir"
+	(cd "$dbDir" && echo "time lastdb -P${threadNum} -c -uRY4 $dbBasename $org2FASTA" && \
+		time lastdb -P${threadNum} -c -uRY4 "$dbBasename" "$org2FASTA") || exit 1
 else
-	echo "$dbName already exists"
+	echo "$dbDir already exists"
 fi
 # -P4: makes it faster by using 4 threads (This has no effect on the results.)
 # -c: Soft-mask lowercase letters.  This means that, when we compare
@@ -37,9 +36,9 @@ fi
 
 # last-train
 echo "--last-train"
-if [ ! -e $trainFile ]; then
-	echo "time last-train -P${threadNum} --revsym -C2 $dbName/$dbName $org3FASTA >$trainFile"
-	time last-train -P${threadNum} --revsym -C2 $dbName/$dbName $org3FASTA >$trainFile
+if [ ! -e "$trainFile" ]; then
+	echo "time last-train -P${threadNum} --revsym -C2 $dbDir/$dbBasename $org3FASTA >$trainFile"
+	time last-train -P${threadNum} --revsym -C2 "$dbDir/$dbBasename" "$org3FASTA" >"$trainFile"
 else
 	echo "$trainFile already exists"
 fi

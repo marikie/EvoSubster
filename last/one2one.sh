@@ -4,24 +4,23 @@
 DATE=$1
 org1FASTA=$2
 org2FASTA=$3
-dbName=$4
+dbDir=$4
 trainFile=$5
 m2omaf=$6
 o2omaf=$7
 o2omaf_maflinked=$8
+dbBasename=$(basename "$dbDir")
 
 threadNum=${THREAD_NUM:-8}
 # lastdb
 echo "---lastdb"
-if [ ! -d $dbName ]; then
+if [ ! -d "$dbDir" ]; then
 	echo "making lastdb"
-	mkdir $dbName
-	cd $dbName
-	echo "time lastdb -P${threadNum} -c -uRY4 $dbName $org1FASTA"
-	time lastdb -P${threadNum} -c -uRY4 $dbName $org1FASTA
-	cd ..
+	mkdir -p "$dbDir"
+	(cd "$dbDir" && echo "time lastdb -P${threadNum} -c -uRY4 $dbBasename $org1FASTA" && \
+		time lastdb -P${threadNum} -c -uRY4 "$dbBasename" "$org1FASTA") || exit 1
 else
-	echo "$dbName already exists"
+	echo "$dbDir already exists"
 fi
 # -P4: makes it faster by using 4 threads (This has no effect on the results.)
 # -c: Soft-mask lowercase letters.  This means that, when we compare
@@ -32,9 +31,9 @@ fi
 
 # last-train
 echo "--last-train"
-if [ ! -e $trainFile ]; then
-	echo "time last-train -P${threadNum} --revsym -C2 $dbName/$dbName $org2FASTA >$trainFile"
-	time last-train -P${threadNum} --revsym -C2 $dbName/$dbName $org2FASTA >$trainFile
+if [ ! -e "$trainFile" ]; then
+	echo "time last-train -P${threadNum} --revsym -C2 $dbDir/$dbBasename $org2FASTA >$trainFile"
+	time last-train -P${threadNum} --revsym -C2 "$dbDir/$dbBasename" "$org2FASTA" >"$trainFile"
 else
 	echo "$trainFile already exists"
 fi
@@ -45,9 +44,9 @@ fi
 
 # lastal
 echo "---lastal"
-if [ ! -e $m2omaf ]; then
-	echo "time lastal -P${threadNum} -H1 -C2 --split-f=MAF+ -p $trainFile $dbName/$dbName $org2FASTA >$m2omaf"
-	time lastal -P${threadNum} -H1 -C2 --split-f=MAF+ -p $trainFile $dbName/$dbName $org2FASTA >$m2omaf
+if [ ! -e "$m2omaf" ]; then
+	echo "time lastal -P${threadNum} -H1 -C2 --split-f=MAF+ -p $trainFile $dbDir/$dbBasename $org2FASTA >$m2omaf"
+	time lastal -P${threadNum} -H1 -C2 --split-f=MAF+ -p "$trainFile" "$dbDir/$dbBasename" "$org2FASTA" >"$m2omaf"
 else
 	echo "$m2omaf already exists"
 fi
@@ -56,10 +55,10 @@ fi
 # -j4 and --split-f=MAF+: lastal can optionally write "p" lines, indicating the probability that each base is misaligned due to wrong gap placement. last-split, on the other hand, writes "p" lines indicating the probability that each base is aligned to the wrong genomic locus. You can combine both sources of error (roughly) by taking the maximum of the two error probabilities for each base.
 
 # last-split (without maf-linked)
-echo "---last-split (without maf-linked)" 
-if [ ! -e $o2omaf ]; then
+echo "---last-split (without maf-linked)"
+if [ ! -e "$o2omaf" ]; then
 	echo "time last-split -r $m2omaf >$o2omaf"
-	time last-split -r $m2omaf >$o2omaf
+	time last-split -r "$m2omaf" >"$o2omaf"
 else
 	echo "$o2omaf already exists"
 fi
@@ -67,9 +66,9 @@ fi
 
 # last-split (with maf-linked)
 echo "---last-split (with maf-linked)"
-if [ ! -e $o2omaf_maflinked ]; then
+if [ ! -e "$o2omaf_maflinked" ]; then
 	echo "maf-linked $o2omaf >$o2omaf_maflinked"
-	time maf-linked $o2omaf >$o2omaf_maflinked
+	time maf-linked "$o2omaf" >"$o2omaf_maflinked"
 else
 	echo "$o2omaf_maflinked already exists"
 fi

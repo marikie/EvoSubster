@@ -307,6 +307,61 @@ cd "$DATE"
 outDirPath=$(pwd)
 echo "pwd: $(pwd)"
 
+# Create subdirectory structure
+imf="intermediateFiles"
+stat_sn_wml="statistics/singlenuc/without_maflinked"
+stat_sn_ml="statistics/singlenuc"
+stat_dn_wml="statistics/dinuc/without_maflinked"
+stat_dn_ml="statistics/dinuc"
+stat_misc="statistics/misc"
+mkdir -p \
+    "$imf" \
+    "figs/singlenuc/ratio/without_maflinked" \
+    "figs/singlenuc/log-ratio/without_maflinked" \
+    "figs/dinuc/without_maflinked" \
+    "$stat_sn_wml" \
+    "$stat_dn_wml" \
+    "$stat_misc"
+
+# Prefix path variables with subdirectory locations
+gcContent_org1="${stat_misc}/${gcContent_org1}"
+gcContent_org2="${stat_misc}/${gcContent_org2}"
+gcContent_org3="${stat_misc}/${gcContent_org3}"
+sbstRatio="${stat_misc}/${sbstRatio}"
+sbstRatio_maflinked="${stat_misc}/${sbstRatio_maflinked}"
+m2o12="${imf}/${m2o12}"
+m2o13="${imf}/${m2o13}"
+o2o12="${imf}/${o2o12}"
+o2o13="${imf}/${o2o13}"
+train12="${imf}/${train12}"
+train13="${imf}/${train13}"
+o2o12_maflinked="${imf}/${o2o12_maflinked}"
+o2o13_maflinked="${imf}/${o2o13_maflinked}"
+joinedFile="${imf}/${joinedFile}"
+joinedFile_maflinked="${imf}/${joinedFile_maflinked}"
+joinedFile_ncds="${imf}/${joinedFile_ncds}"
+joinedFile_maflinked_ncds="${imf}/${joinedFile_maflinked_ncds}"
+org2tsv="${stat_sn_wml}/${org2tsv}"
+org3tsv="${stat_sn_wml}/${org3tsv}"
+org2tsv_maflinked="${stat_sn_ml}/${org2tsv_maflinked}"
+org3tsv_maflinked="${stat_sn_ml}/${org3tsv_maflinked}"
+org2tsv_errprb="${stat_sn_wml}/${org2tsv_errprb}"
+org3tsv_errprb="${stat_sn_wml}/${org3tsv_errprb}"
+org2tsv_maflinked_errprb="${stat_sn_ml}/${org2tsv_maflinked_errprb}"
+org3tsv_maflinked_errprb="${stat_sn_ml}/${org3tsv_maflinked_errprb}"
+org2_dinuc_tsv="${stat_dn_wml}/${org2_dinuc_tsv}"
+org3_dinuc_tsv="${stat_dn_wml}/${org3_dinuc_tsv}"
+org2_dinuc_tsv_maflinked="${stat_dn_ml}/${org2_dinuc_tsv_maflinked}"
+org3_dinuc_tsv_maflinked="${stat_dn_ml}/${org3_dinuc_tsv_maflinked}"
+org2tsv_ncds="${stat_sn_wml}/${org2tsv_ncds}"
+org3tsv_ncds="${stat_sn_wml}/${org3tsv_ncds}"
+org2tsv_maflinked_ncds="${stat_sn_ml}/${org2tsv_maflinked_ncds}"
+org3tsv_maflinked_ncds="${stat_sn_ml}/${org3tsv_maflinked_ncds}"
+org2_dinuc_tsv_ncds="${stat_dn_wml}/${org2_dinuc_tsv_ncds}"
+org3_dinuc_tsv_ncds="${stat_dn_wml}/${org3_dinuc_tsv_ncds}"
+org2_dinuc_tsv_maflinked_ncds="${stat_dn_ml}/${org2_dinuc_tsv_maflinked_ncds}"
+org3_dinuc_tsv_maflinked_ncds="${stat_dn_ml}/${org3_dinuc_tsv_maflinked_ncds}"
+
 # GC content
 echo "$(get_config '.messages.gc_content')"
 if [ ! -e "$gcContent_org1" ]; then
@@ -328,15 +383,15 @@ else
 	echo "$gcContent_org3 already exists"
 fi
 
-# Run last-train to check substitution percent identity between org1 and org2 
+# Run last-train to check substitution percent identity between org1 and org2
 echo "$(get_config '.options.checkIdt.enabled_message')"
-time bash "$LAST_DIR/last_train.sh" "$DATE" "$org1FASTA" "$org2FASTA" "$org1ShortName" "$org2ShortName"
-# Run last-train to check substitution percent identity between org1 and org3 
+time bash "$LAST_DIR/last_train.sh" "$DATE" "$org1FASTA" "$org2FASTA" "$org1ShortName" "$org2ShortName" "$imf"
+# Run last-train to check substitution percent identity between org1 and org3
 echo "$(get_config '.options.checkIdt.enabled_message')"
-time bash "$LAST_DIR/last_train.sh" "$DATE" "$org1FASTA" "$org3FASTA" "$org1ShortName" "$org3ShortName"
+time bash "$LAST_DIR/last_train.sh" "$DATE" "$org1FASTA" "$org3FASTA" "$org1ShortName" "$org3ShortName" "$imf"
 # Run last-train to check substitution percent identity between org2 and org3 (inner group)
 echo "$(get_config '.options.checkIdt.enabled_message')"
-time bash "$LAST_DIR/last_train.sh" "$DATE" "$org2FASTA" "$org3FASTA" "$org2ShortName" "$org3ShortName"
+time bash "$LAST_DIR/last_train.sh" "$DATE" "$org2FASTA" "$org3FASTA" "$org2ShortName" "$org3ShortName" "$imf"
 
 if [ "$IDT_ONLY" -eq 1 ]; then
     echo "---idt-only is enabled; exiting after last-train identity checks."
@@ -345,13 +400,13 @@ fi
 
 # one2one for org1-org2
 echo "$(get_config '.messages.one2one' | sed "s/{org1_short}/$org1ShortName/g" | sed "s/{org2_short}/$org2ShortName/g")"
-echo "bash $LAST_DIR/one2one.sh $DATE $org1FASTA $org2FASTA $dbName $train12 $m2o12 $o2o12 $o2o12_maflinked"
-bash "$LAST_DIR/one2one.sh" "$DATE" "$org1FASTA" "$org2FASTA" "$dbName" "$train12" "$m2o12" "$o2o12" "$o2o12_maflinked"
+echo "bash $LAST_DIR/one2one.sh $DATE $org1FASTA $org2FASTA ${imf}/${dbName} $train12 $m2o12 $o2o12 $o2o12_maflinked"
+bash "$LAST_DIR/one2one.sh" "$DATE" "$org1FASTA" "$org2FASTA" "${imf}/${dbName}" "$train12" "$m2o12" "$o2o12" "$o2o12_maflinked"
 
 # one2one for org1-org3
 echo "$(get_config '.messages.one2one' | sed "s/{org1_short}/$org1ShortName/g" | sed "s/{org2_short}/$org3ShortName/g")"
-echo "bash $LAST_DIR/one2one.sh $DATE $org1FASTA $org3FASTA $dbName $train13 $m2o13 $o2o13 $o2o13_maflinked"
-bash "$LAST_DIR/one2one.sh" "$DATE" "$org1FASTA" "$org3FASTA" "$dbName" "$train13" "$m2o13" "$o2o13" "$o2o13_maflinked"
+echo "bash $LAST_DIR/one2one.sh $DATE $org1FASTA $org3FASTA ${imf}/${dbName} $train13 $m2o13 $o2o13 $o2o13_maflinked"
+bash "$LAST_DIR/one2one.sh" "$DATE" "$org1FASTA" "$org3FASTA" "${imf}/${dbName}" "$train13" "$m2o13" "$o2o13" "$o2o13_maflinked"
 
 # maf-join the two .maf files (without maf-linked)
 echo "$(get_config '.messages.maf_join')"
@@ -490,7 +545,9 @@ bash "$LAST_DIR/generate_graphs.sh" \
     "$org3_dinuc_tsv_ncds" \
     "$org2_dinuc_tsv_maflinked_ncds" \
     "$org3_dinuc_tsv_maflinked_ncds" \
-    "$R_DIR"
+    "$R_DIR" \
+    "figs" \
+    "$stat_misc"
 
 # collect_pca_script="$LAST_DIR/collect_for_pca.sh"
 # if [ -x "$collect_pca_script" ]; then
