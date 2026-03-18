@@ -124,5 +124,10 @@ The `Alignment` class handles pairwise MAF entries (used by alignment utilities)
 
 ## Git
 
-gitの話をするときは `/big/mrk/proj/sbst/scripts` のリポジトリを指す。
-git操作は常に `git -C /big/mrk/proj/sbst/scripts` で実行すること。
+- Repository root is this directory (`scripts/`). Always run git via `git -C /big/mrk/proj/sbst/scripts`
+- **Branching**: Work on feature branches, merge to main when complete
+- **Commit granularity**: One commit per feature/change
+- **Commit messages**: English, imperative mood, optionally scoped (e.g., `last: add thread option`)
+- **Push**: Push directly to GitHub (`marikie/EvoSubster`)
+- **`.gitignore`**: Large intermediate files (`*.maf`, `*.train`, etc.) are not tracked. When encountering a new type of large intermediate file, ask the user before adding it to `.gitignore`
+- Do not modify files in `archive/` (kept for reference only)
