@@ -27,7 +27,11 @@ __pycache__/
 .DS_Store
 .idea/
 .vscode/
+.claude/
 Thumbs.db
+
+# Deprecated scripts (read-only reference)
+archive/
 
 # Temporary
 tmp/
