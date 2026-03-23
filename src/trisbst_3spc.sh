@@ -5,20 +5,22 @@ lastal --version
 # Resolve script locations and configuration relative to this script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-LAST_DIR="$SCRIPT_DIR"
-ANALYSIS_DIR="$ROOT_DIR/analysis"
-R_DIR="$ANALYSIS_DIR/R"
+ALIGN_DIR="$ROOT_DIR/src/align"
+COUNT_DIR="$ROOT_DIR/src/count"
+METRICS_DIR="$ROOT_DIR/src/metrics"
+R_DIR="$ROOT_DIR/src/visualize"
 
 # Allow callers to override directories, otherwise rely on inferred paths
-LAST_DIR="${LAST_DIR_OVERRIDE:-$LAST_DIR}"
-ANALYSIS_DIR="${ANALYSIS_DIR_OVERRIDE:-$ANALYSIS_DIR}"
+ALIGN_DIR="${ALIGN_DIR_OVERRIDE:-$ALIGN_DIR}"
+COUNT_DIR="${COUNT_DIR_OVERRIDE:-$COUNT_DIR}"
+METRICS_DIR="${METRICS_DIR_OVERRIDE:-$METRICS_DIR}"
 R_DIR="${R_DIR_OVERRIDE:-$R_DIR}"
 
 # Ensure helper scripts are discoverable without absolute paths
-PATH="$LAST_DIR:$PATH"
+PATH="$SCRIPT_DIR:$ALIGN_DIR:$PATH"
 
-config_file="$SCRIPT_DIR/sbst_config.yaml"
-dwl_config_file="$SCRIPT_DIR/dwl_config.yaml"
+config_file="$ROOT_DIR/config/sbst_config.yaml"
+dwl_config_file="$ROOT_DIR/config/dwl_config.yaml"
 
 # Load YAML configuration using yq
 if [ ! -f "$config_file" ]; then
@@ -365,33 +367,33 @@ org3_dinuc_tsv_maflinked_ncds="${stat_dn_ml}/${org3_dinuc_tsv_maflinked_ncds}"
 # GC content
 echo "$(get_config '.messages.gc_content')"
 if [ ! -e "$gcContent_org1" ]; then
-echo "time bash $LAST_DIR/gc_content.sh $org1FASTA >$gcContent_org1"
-time bash "$LAST_DIR/gc_content.sh" "$org1FASTA" >"$gcContent_org1"
+echo "time bash $METRICS_DIR/gc_content.sh $org1FASTA >$gcContent_org1"
+time bash "$METRICS_DIR/gc_content.sh" "$org1FASTA" >"$gcContent_org1"
 else
 	echo "$gcContent_org1 already exists"
 fi
 if [ ! -e "$gcContent_org2" ]; then
-echo "time bash $LAST_DIR/gc_content.sh $org2FASTA >$gcContent_org2"
-time bash "$LAST_DIR/gc_content.sh" "$org2FASTA" >"$gcContent_org2"
+echo "time bash $METRICS_DIR/gc_content.sh $org2FASTA >$gcContent_org2"
+time bash "$METRICS_DIR/gc_content.sh" "$org2FASTA" >"$gcContent_org2"
 else
 	echo "$gcContent_org2 already exists"
 fi
 if [ ! -e "$gcContent_org3" ]; then
-echo "time bash $LAST_DIR/gc_content.sh $org3FASTA >$gcContent_org3"
-time bash "$LAST_DIR/gc_content.sh" "$org3FASTA" >"$gcContent_org3"
+echo "time bash $METRICS_DIR/gc_content.sh $org3FASTA >$gcContent_org3"
+time bash "$METRICS_DIR/gc_content.sh" "$org3FASTA" >"$gcContent_org3"
 else
 	echo "$gcContent_org3 already exists"
 fi
 
 # Run last-train to check substitution percent identity between org1 and org2
 echo "$(get_config '.options.checkIdt.enabled_message')"
-time bash "$LAST_DIR/last_train.sh" "$DATE" "$org1FASTA" "$org2FASTA" "$org1ShortName" "$org2ShortName" "$imf"
+time bash "$ALIGN_DIR/last_train.sh" "$DATE" "$org1FASTA" "$org2FASTA" "$org1ShortName" "$org2ShortName" "$imf"
 # Run last-train to check substitution percent identity between org1 and org3
 echo "$(get_config '.options.checkIdt.enabled_message')"
-time bash "$LAST_DIR/last_train.sh" "$DATE" "$org1FASTA" "$org3FASTA" "$org1ShortName" "$org3ShortName" "$imf"
+time bash "$ALIGN_DIR/last_train.sh" "$DATE" "$org1FASTA" "$org3FASTA" "$org1ShortName" "$org3ShortName" "$imf"
 # Run last-train to check substitution percent identity between org2 and org3 (inner group)
 echo "$(get_config '.options.checkIdt.enabled_message')"
-time bash "$LAST_DIR/last_train.sh" "$DATE" "$org2FASTA" "$org3FASTA" "$org2ShortName" "$org3ShortName" "$imf"
+time bash "$ALIGN_DIR/last_train.sh" "$DATE" "$org2FASTA" "$org3FASTA" "$org2ShortName" "$org3ShortName" "$imf"
 
 if [ "$IDT_ONLY" -eq 1 ]; then
     echo "---idt-only is enabled; exiting after last-train identity checks."
@@ -400,29 +402,29 @@ fi
 
 # one2one for org1-org2
 echo "$(get_config '.messages.one2one' | sed "s/{org1_short}/$org1ShortName/g" | sed "s/{org2_short}/$org2ShortName/g")"
-echo "bash $LAST_DIR/one2one.sh $DATE $org1FASTA $org2FASTA ${imf}/${dbName} $train12 $m2o12 $o2o12 $o2o12_maflinked"
-bash "$LAST_DIR/one2one.sh" "$DATE" "$org1FASTA" "$org2FASTA" "${imf}/${dbName}" "$train12" "$m2o12" "$o2o12" "$o2o12_maflinked"
+echo "bash $ALIGN_DIR/one2one.sh $DATE $org1FASTA $org2FASTA ${imf}/${dbName} $train12 $m2o12 $o2o12 $o2o12_maflinked"
+bash "$ALIGN_DIR/one2one.sh" "$DATE" "$org1FASTA" "$org2FASTA" "${imf}/${dbName}" "$train12" "$m2o12" "$o2o12" "$o2o12_maflinked"
 
 # one2one for org1-org3
 echo "$(get_config '.messages.one2one' | sed "s/{org1_short}/$org1ShortName/g" | sed "s/{org2_short}/$org3ShortName/g")"
-echo "bash $LAST_DIR/one2one.sh $DATE $org1FASTA $org3FASTA ${imf}/${dbName} $train13 $m2o13 $o2o13 $o2o13_maflinked"
-bash "$LAST_DIR/one2one.sh" "$DATE" "$org1FASTA" "$org3FASTA" "${imf}/${dbName}" "$train13" "$m2o13" "$o2o13" "$o2o13_maflinked"
+echo "bash $ALIGN_DIR/one2one.sh $DATE $org1FASTA $org3FASTA ${imf}/${dbName} $train13 $m2o13 $o2o13 $o2o13_maflinked"
+bash "$ALIGN_DIR/one2one.sh" "$DATE" "$org1FASTA" "$org3FASTA" "${imf}/${dbName}" "$train13" "$m2o13" "$o2o13" "$o2o13_maflinked"
 
 # maf-join the two .maf files (without maf-linked)
 echo "$(get_config '.messages.maf_join')"
-echo "bash $LAST_DIR/mafjoin.sh $o2o12 $o2o13 $joinedFile"
-bash "$LAST_DIR/mafjoin.sh" "$o2o12" "$o2o13" "$joinedFile"
+echo "bash $ALIGN_DIR/mafjoin.sh $o2o12 $o2o13 $joinedFile"
+bash "$ALIGN_DIR/mafjoin.sh" "$o2o12" "$o2o13" "$joinedFile"
 
 # maf-join the two .maf files (with maf-linked)
 echo "$(get_config '.messages.maf_join') with maf-linked"
-echo "bash $LAST_DIR/mafjoin.sh $o2o12_maflinked $o2o13_maflinked $joinedFile_maflinked"
-bash "$LAST_DIR/mafjoin.sh" "$o2o12_maflinked" "$o2o13_maflinked" "$joinedFile_maflinked"
+echo "bash $ALIGN_DIR/mafjoin.sh $o2o12_maflinked $o2o13_maflinked $joinedFile_maflinked"
+bash "$ALIGN_DIR/mafjoin.sh" "$o2o12_maflinked" "$o2o13_maflinked" "$joinedFile_maflinked"
 
 # Calculate the substitution ratio without considering neighboring bases
 echo "$(get_config '.messages.sbst_ratio')"
 if [ ! -e "$sbstRatio" ]; then
-echo "time python $ANALYSIS_DIR/subRatio.py $joinedFile >$sbstRatio"
-time python "$ANALYSIS_DIR/subRatio.py" "$joinedFile" >"$sbstRatio"
+echo "time python $METRICS_DIR/subRatio.py $joinedFile >$sbstRatio"
+time python "$METRICS_DIR/subRatio.py" "$joinedFile" >"$sbstRatio"
 else
     echo "$sbstRatio already exists"
 fi
@@ -430,8 +432,8 @@ fi
 # Calculate the substitution ratio without considering neighboring bases for maf-linked
 echo "$(get_config '.messages.sbst_ratio') with maf-linked"
 if [ ! -e "$sbstRatio_maflinked" ]; then
-echo "time python $ANALYSIS_DIR/subRatio.py $joinedFile_maflinked >$sbstRatio_maflinked"
-time python "$ANALYSIS_DIR/subRatio.py" "$joinedFile_maflinked" >"$sbstRatio_maflinked"
+echo "time python $METRICS_DIR/subRatio.py $joinedFile_maflinked >$sbstRatio_maflinked"
+time python "$METRICS_DIR/subRatio.py" "$joinedFile_maflinked" >"$sbstRatio_maflinked"
 else
     echo "$sbstRatio_maflinked already exists"
 fi
@@ -439,8 +441,8 @@ fi
 # Generate dinuc .tsv files
 if [ ! -e "$org2_dinuc_tsv" ] || [ ! -e "$org3_dinuc_tsv" ]; then
 	echo "$(get_config '.messages.dinuc_tsv')"
-echo "time python $ANALYSIS_DIR/disbst_2TSVs.py $joinedFile -o2 $org2_dinuc_tsv -o3 $org3_dinuc_tsv"
-time python "$ANALYSIS_DIR/disbst_2TSVs.py" "$joinedFile" -o2 "$org2_dinuc_tsv" -o3 "$org3_dinuc_tsv"
+echo "time python $COUNT_DIR/disbst_2TSVs.py $joinedFile -o2 $org2_dinuc_tsv -o3 $org3_dinuc_tsv"
+time python "$COUNT_DIR/disbst_2TSVs.py" "$joinedFile" -o2 "$org2_dinuc_tsv" -o3 "$org3_dinuc_tsv"
 else
 	echo "$org2_dinuc_tsv and $org3_dinuc_tsv already exists"
 fi
@@ -448,8 +450,8 @@ fi
 # Generate dinuc .tsv files (with maf-linked)
 if [ ! -e "$org2_dinuc_tsv_maflinked" ] || [ ! -e "$org3_dinuc_tsv_maflinked" ]; then
 	echo "$(get_config '.messages.dinuc_tsv') with maf-linked"
-echo "time python $ANALYSIS_DIR/disbst_2TSVs.py $joinedFile_maflinked -o2 $org2_dinuc_tsv_maflinked -o3 $org3_dinuc_tsv_maflinked"
-time python "$ANALYSIS_DIR/disbst_2TSVs.py" "$joinedFile_maflinked" -o2 "$org2_dinuc_tsv_maflinked" -o3 "$org3_dinuc_tsv_maflinked"
+echo "time python $COUNT_DIR/disbst_2TSVs.py $joinedFile_maflinked -o2 $org2_dinuc_tsv_maflinked -o3 $org3_dinuc_tsv_maflinked"
+time python "$COUNT_DIR/disbst_2TSVs.py" "$joinedFile_maflinked" -o2 "$org2_dinuc_tsv_maflinked" -o3 "$org3_dinuc_tsv_maflinked"
 else
 	echo "$org2_dinuc_tsv_maflinked and $org3_dinuc_tsv_maflinked already exists"
 fi
@@ -460,7 +462,7 @@ if [ "$org1GFF" != "NO_GFF_FILE" ]; then
 	echo "There is a gff file of org1"
 	echo "maf-cut (cut off the CDS regions)"
 	if [ ! -e "$joinedFile_ncds" ]; then
-		"$ANALYSIS_DIR/maf-cut-cds-uglier.py" \
+		"$ALIGN_DIR/maf-cut-cds-uglier.py" \
 			"$org1GFF" \
 			"$joinedFile" >"$joinedFile_ncds"
 	else
@@ -468,7 +470,7 @@ if [ "$org1GFF" != "NO_GFF_FILE" ]; then
 	fi
 
 	if [ ! -e "$joinedFile_maflinked_ncds" ]; then
-		"$ANALYSIS_DIR/maf-cut-cds-uglier.py" \
+		"$ALIGN_DIR/maf-cut-cds-uglier.py" \
 			"$org1GFF" \
 			"$joinedFile_maflinked" >"$joinedFile_maflinked_ncds"
 	else
@@ -476,7 +478,7 @@ if [ "$org1GFF" != "NO_GFF_FILE" ]; then
 	fi
 
 	# Generate all TSV files including ncds files
-	bash "$LAST_DIR/generate_tsv_files.sh" \
+	bash "$SCRIPT_DIR/generate_tsv_files.sh" \
 		"$joinedFile" \
 		"$joinedFile_maflinked" \
 		"$org2tsv" \
@@ -487,7 +489,7 @@ if [ "$org1GFF" != "NO_GFF_FILE" ]; then
 		"$org3tsv_errprb" \
 		"$org2tsv_maflinked_errprb" \
 		"$org3tsv_maflinked_errprb" \
-		"$ANALYSIS_DIR" \
+		"$COUNT_DIR" \
 		"$org2_dinuc_tsv" \
 		"$org3_dinuc_tsv" \
 		"$org2_dinuc_tsv_maflinked" \
@@ -505,7 +507,7 @@ if [ "$org1GFF" != "NO_GFF_FILE" ]; then
 else
 	echo "There is no gff file of org1"
 	# Generate all TSV files (no ncds files)
-	bash "$LAST_DIR/generate_tsv_files.sh" \
+	bash "$SCRIPT_DIR/generate_tsv_files.sh" \
 		"$joinedFile" \
 		"$joinedFile_maflinked" \
 		"$org2tsv" \
@@ -516,7 +518,7 @@ else
 		"$org3tsv_errprb" \
 		"$org2tsv_maflinked_errprb" \
 		"$org3tsv_maflinked_errprb" \
-		"$ANALYSIS_DIR" \
+		"$COUNT_DIR" \
 		"$org2_dinuc_tsv" \
 		"$org3_dinuc_tsv" \
 		"$org2_dinuc_tsv_maflinked" \
@@ -524,7 +526,7 @@ else
 fi
 
 # Generate all graphs
-bash "$LAST_DIR/generate_graphs.sh" \
+bash "$SCRIPT_DIR/generate_graphs.sh" \
     "$org2tsv" \
     "$org3tsv" \
     "$org2tsv_maflinked" \
@@ -549,7 +551,7 @@ bash "$LAST_DIR/generate_graphs.sh" \
     "figs" \
     "$stat_misc"
 
-# collect_pca_script="$LAST_DIR/collect_for_pca.sh"
+# collect_pca_script="$SCRIPT_DIR/collect_for_pca.sh"
 # if [ -x "$collect_pca_script" ]; then
 #     bash "$collect_pca_script" \
 #         "$DATE" \

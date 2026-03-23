@@ -1,6 +1,11 @@
+import os
+import sys
 import unittest
-import trisbst_2TSVs as script
 import subprocess
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "count"))
+
+import trisbst_2TSVs as script
 
 
 class TestTriUvMuts2TSVs(unittest.TestCase):
@@ -8,33 +13,33 @@ class TestTriUvMuts2TSVs(unittest.TestCase):
         print("test_main")
 
         # inputs
-        self.in1_maf = open("./test/test_triUvMuts2TSVs_in1.maf")
-        self.org2outPath1 = "./test/result_out1_2.tsv"
-        self.org3outPath1 = "./test/result_out1_3.tsv"
-        self.in2_maf = open("./test/test_triUvMuts2TSVs_in2.maf")
-        self.org2outPath2 = "./test/result_out2_2.tsv"
-        self.org3outPath2 = "./test/result_out2_3.tsv"
-        self.in3_maf = open("./test/test_triUvMuts2TSVs_in3.maf")
-        self.org2outPath3 = "./test/result_out3_2.tsv"
-        self.org3outPath3 = "./test/result_out3_3.tsv"
-        self.in4_maf = open("./test/test_triUvMuts2TSVs_in4.maf")
-        self.org2outPath4 = "./test/result_out4_2.tsv"
-        self.org3outPath4 = "./test/result_out4_3.tsv"
-        self.in5_maf = open("./test/test_triUvMuts2TSVs_in5.maf")
-        self.org2outPath5 = "./test/result_out5_2.tsv"
-        self.org3outPath5 = "./test/result_out5_3.tsv"
-        self.in6_maf = open("./test/test_triUvMuts2TSVs_in6.maf")
-        self.org2outPath6 = "./test/result_out6_2.tsv"
-        self.org3outPath6 = "./test/result_out6_3.tsv"
+        self.in1_maf = open("./fixtures/test_triUvMuts2TSVs_in1.maf")
+        self.org2outPath1 = "./fixtures/result_out1_2.tsv"
+        self.org3outPath1 = "./fixtures/result_out1_3.tsv"
+        self.in2_maf = open("./fixtures/test_triUvMuts2TSVs_in2.maf")
+        self.org2outPath2 = "./fixtures/result_out2_2.tsv"
+        self.org3outPath2 = "./fixtures/result_out2_3.tsv"
+        self.in3_maf = open("./fixtures/test_triUvMuts2TSVs_in3.maf")
+        self.org2outPath3 = "./fixtures/result_out3_2.tsv"
+        self.org3outPath3 = "./fixtures/result_out3_3.tsv"
+        self.in4_maf = open("./fixtures/test_triUvMuts2TSVs_in4.maf")
+        self.org2outPath4 = "./fixtures/result_out4_2.tsv"
+        self.org3outPath4 = "./fixtures/result_out4_3.tsv"
+        self.in5_maf = open("./fixtures/test_triUvMuts2TSVs_in5.maf")
+        self.org2outPath5 = "./fixtures/result_out5_2.tsv"
+        self.org3outPath5 = "./fixtures/result_out5_3.tsv"
+        self.in6_maf = open("./fixtures/test_triUvMuts2TSVs_in6.maf")
+        self.org2outPath6 = "./fixtures/result_out6_2.tsv"
+        self.org3outPath6 = "./fixtures/result_out6_3.tsv"
 
         # expected outputs
-        self.out_all0 = "./test/test_triUvMuts2TSVs_out_all0.tsv"
-        self.out3_2 = "./test/test_triUvMuts2TSVs_out3_2.tsv"
-        self.out3_3 = "./test/test_triUvMuts2TSVs_out3_3.tsv"
-        self.out4_2 = "./test/test_triUvMuts2TSVs_out4_2.tsv"
-        self.out4_3 = "./test/test_triUvMuts2TSVs_out4_3.tsv"
-        self.out6_2 = "./test/test_triUvMuts2TSVs_out6_2.tsv"
-        self.out6_3 = "./test/test_triUvMuts2TSVs_out6_3.tsv"
+        self.out_all0 = "./fixtures/test_triUvMuts2TSVs_out_all0.tsv"
+        self.out3_2 = "./fixtures/test_triUvMuts2TSVs_out3_2.tsv"
+        self.out3_3 = "./fixtures/test_triUvMuts2TSVs_out3_3.tsv"
+        self.out4_2 = "./fixtures/test_triUvMuts2TSVs_out4_2.tsv"
+        self.out4_3 = "./fixtures/test_triUvMuts2TSVs_out4_3.tsv"
+        self.out6_2 = "./fixtures/test_triUvMuts2TSVs_out6_2.tsv"
+        self.out6_3 = "./fixtures/test_triUvMuts2TSVs_out6_3.tsv"
 
         ### test1 ###
         ### not a signature ###

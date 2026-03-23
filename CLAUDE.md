@@ -4,46 +4,115 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-EvoSubster is a computational pipeline analyzing evolutionary substitution trends across three closely related organisms (one outgroup, two ingroups). It uses LAST for pairwise alignments, merges them into three-way MAF files, and applies Python/R utilities to examine single-base and dinucleotide substitution patterns.
+EvoSubster (PhD thesis: "Evolutionary Patterns of DNA Base Substitutions: Comparative Insights Across Species") is a pipeline for comparative analysis of context-dependent substitution spectra across diverse eukaryotic lineages. It performs whole-genome pairwise alignment with LAST, merges two pairwise MAFs into a three-way MAF, then counts substitutions in trinucleotide context (single-base) and tetranucleotide context (double-base) using parsimony-based Python scripts.
 
 The core biological model: given three genomes where org1 is the outgroup, substitutions are attributed by parsimony — if the outgroup and one ingroup agree, the other ingroup is assumed to have mutated. Both ingroups produce separate TSV outputs. Edge bases of each trinucleotide/dinucleotide window must be identical across all three genomes, and reverse-complement folding is applied so only C and T midpoints are tracked.
+
+Applied to 60 trios across 7 lineages (fungi, cnidarians, Apicomplexa, Phaeophyceae, Oomycota, Porifera, Arthropoda) and reported in the PhD thesis.
+
+**Parsimony case classification:**
+- Species A = outgroup, B/C = ingroups
+- Case 0: all three identical → no substitution, increment count
+- Case 1: only A differs → ambiguous, excluded
+- Case 2: only B differs → substitution inferred in B
+- Case 3: only C differs → substitution inferred in C
+- Case 4: all three differ → multiple scenarios, excluded
+
+## Repository Layout (Noble 2009)
+
+```
+/big/mrk/proj/sbst/                    # Project root = Git root
+├── src/                               # Source code (workflow-stage organized)
+│   ├── align/                         # LAST alignment + MAF processing
+│   │   ├── one2one.sh                 # Pairwise alignment pipeline
+│   │   ├── last_train.sh              # LAST model training + identity check
+│   │   ├── mafjoin.sh                 # Sort and join two MAFs into three-way
+│   │   └── maf-cut-cds-uglier.py      # CDS region filtering
+│   ├── count/                         # Substitution counting (core)
+│   │   ├── Alignment.py               # Alignment/JoinedAlignment data structures
+│   │   ├── Util.py                    # MAF parsing, coordinate conversion
+│   │   ├── trisbst_2TSVs.py           # Trinucleotide SBS counting
+│   │   ├── trisbst_2TSVs_errprb.py    # Error probability filtered variant
+│   │   └── disbst_2TSVs.py            # Dinucleotide DBS counting
+│   ├── statistics/                    # Statistical tests
+│   │   ├── chi2_context.py            # Chi-squared context test
+│   │   └── chi2_spectrum_cmp.py       # Chi-squared spectrum comparison
+│   ├── metrics/                       # Descriptive metrics
+│   │   ├── gc_content.sh              # GC content calculation
+│   │   ├── subRatio.py                # Substitution ratio
+│   │   └── isParsimonious.py          # Parsimony ratio
+│   ├── visualize/                     # R visualization scripts
+│   │   ├── sbmut.R                    # Substitution bar charts
+│   │   ├── logRatioPlot.R             # Log-ratio enrichment plots
+│   │   ├── dinucleotide-plot.R        # Dinucleotide plots
+│   │   ├── pca.R                      # PCA analysis
+│   │   └── pca_2d.R                   # 2D PCA plots
+│   ├── report/                        # Report generation
+│   │   ├── collect_run_summary.py     # Gather run metadata into JSON
+│   │   ├── render_report.sh           # R Markdown report rendering
+│   │   ├── run_report.sh              # Collect + render wrapper
+│   │   ├── link_tsvs.py              # TSV linking utility
+│   │   └── report_template.Rmd       # Report template
+│   ├── trisbst_3spc.sh               # Main pipeline driver
+│   ├── trisbst_3spc_fromDwl.sh       # Pipeline with genome download
+│   ├── dwl_organism.sh               # Genome download utility
+│   ├── generate_tsv_files.sh         # TSV regeneration
+│   └── generate_graphs.sh            # Graph regeneration
+├── test/                              # Tests
+│   ├── test_*.py                      # Test modules
+│   └── fixtures/                      # Test fixtures (.maf, .tsv)
+├── bin/                               # Compiled binaries
+├── config/                            # Configuration
+│   ├── dwl_config.yaml               # Genome download paths
+│   └── sbst_config.yaml              # Output patterns, settings
+├── drivers/                           # Bulk execution scripts
+│   └── bulkRun_*.sh                   # Per-lineage batch scripts
+├── data/                              # Input data (genomes)
+│   └── genomes/                       # Reference genome FASTA/GFF files
+├── results/                           # Analysis results (per-lineage)
+│   ├── fungi/, cnidaria/, etc.        # Per-lineage output directories
+│   └── summary/                       # Cross-lineage aggregation
+├── doc/                               # Documentation
+├── log/                               # Execution logs
+└── archive/                           # Deprecated scripts (read-only)
+```
 
 ## Build and Run Commands
 
 ### Full Pipeline (with genome download)
 ```bash
-./scripts/last/trisbst_3spc_fromDwl.sh <DATE> <ACC1> <ACC2> <ACC3> [--out-dir /path/to/output] [--thread N] [--idt-only]
+./src/trisbst_3spc_fromDwl.sh <DATE> <ACC1> <ACC2> <ACC3> [--out-dir PATH] [--thread N] [--idt-only]
 ```
 - ACC1 = outgroup accession, ACC2/ACC3 = ingroup accessions
 
 ### Pipeline from Existing FASTA
 ```bash
-./scripts/last/trisbst_3spc.sh <DATE> <ORG1.fa> <ORG2.fa> <ORG3.fa> <ORG1.gff|NO_GFF_FILE> [--out-dir /path/to/output] [--thread N] [--idt-only]
+./src/trisbst_3spc.sh <DATE> <ORG1.fa> <ORG2.fa> <ORG3.fa> <ORG1.gff|NO_GFF_FILE> [--out-dir PATH] [--thread N] [--idt-only]
 ```
-- `--thread N`: Set number of parallel threads (default: 8)
-- `--idt-only`: Run only the percent identity check step
 
 ### Bulk Runs
-Taxon-specific batch scripts live in `scripts/last/bulkRun_*.sh` (e.g., `bulkRun_fungi.sh`, `bulkRun_actinopteri.sh`). Each invokes `trisbst_3spc_fromDwl.sh` for multiple species triplets.
+```bash
+bash drivers/bulkRun_fungi.sh <DATE>
+```
 
 ### Regenerate TSV/Plots Only
 ```bash
-./scripts/last/generate_tsv_files.sh <joined.maf> <out_dir>
-./scripts/last/generate_graphs.sh <tsv_dir>
+./src/generate_tsv_files.sh <joined.maf> <out_dir>
+./src/generate_graphs.sh <tsv_dir>
 ```
 
 ### Reporting
 ```bash
-python scripts/last/collect_run_summary.py <data_root> [--output summary.json] [--idt-threshold 80]
-bash scripts/last/render_report.sh -j summary.json [-o output.docx] [-f word_document]
+python src/report/collect_run_summary.py <results_root> [--output summary.json] [--idt-threshold 80]
+bash src/report/render_report.sh -j summary.json [-o output.docx] [-f word_document]
 ```
 
 ## Testing
 
-Tests must be run from `scripts/analysis/` (fixtures use relative paths to `./test/`).
+Tests must be run from `test/` (fixtures use relative paths to `./fixtures/`).
 
 ```bash
-cd scripts/analysis
+cd test
 
 # Run active test modules
 python -m unittest test_subRatio test_trisbst_2TSVs test_trisbst_2TSVs_errprb
@@ -55,7 +124,20 @@ python -m unittest test_trisbst_2TSVs.TestTriUvMuts2TSVs
 python -m unittest test_subRatio.TestSubRatio.test_count
 ```
 
-Test fixtures (`.maf` input and `.tsv` expected output) are in `scripts/analysis/test/`. Tests compare generated output against expected TSVs using `diff`. Older test modules (`test_triSbstTSV`, `test_split2twoFiles`) are in `archive/`.
+Test fixtures (`.maf` input and `.tsv` expected output) are in `test/fixtures/`. Tests compare generated output against expected TSVs using `diff`.
+
+### Pipeline Verification After Script Changes
+
+After modifying any script under `src/` or `config/`, run the full pipeline (download + analysis) with this test trio to verify nothing is broken:
+
+```bash
+./src/trisbst_3spc_fromDwl.sh <DATE> GCA_907165135.1 GCA_004367875.1 GCA_004367855.1
+```
+
+- `GCA_907165135.1` = outgroup
+- `GCA_004367875.1`, `GCA_004367855.1` = ingroups
+
+If the pipeline produces any errors, fix them and re-run until it completes without errors.
 
 ## Architecture
 
@@ -63,49 +145,21 @@ Test fixtures (`.maf` input and `.tsv` expected output) are in `scripts/analysis
 
 MAF file → `Util.getJoinedAlignmentObj()` → `JoinedAlignment` objects (with `gSeq1`/`gSeq2`/`gSeq3`) → sliding-window counting → TSV output → R visualization
 
-The `Alignment` class handles pairwise MAF entries (used by alignment utilities); `JoinedAlignment` handles 3-way joined MAF entries (used by all substitution-counting scripts). Both are constructed via `fromMAFEntry()` class methods.
-
-### Key Scripts
-
-**Pipeline orchestration (Bash)** — `scripts/last/`:
-- `trisbst_3spc.sh` / `trisbst_3spc_fromDwl.sh` — main entry points
-- `last_train.sh` — LAST model training and percent identity check
-- `one2one.sh` — pairwise alignment: lastdb → last-train → lastal → last-split → maf-linked
-- `mafjoin.sh` — sort and join two pairwise MAFs into a three-way MAF
-- `generate_tsv_files.sh` / `generate_graphs.sh` — TSV and plot generation
-- `collect_run_summary.py` — gather run metadata into JSON for reporting
-- `render_report.sh` / `run_report.sh` — R Markdown report rendering
-
-**Substitution analysis (Python)** — `scripts/analysis/`:
-- `trisbst_2TSVs.py` — trinucleotide context substitution counting (main, by M.C. Frith)
-- `trisbst_2TSVs_errprb.py` — variant that filters by MAF `p`-line error probability
-- `disbst_2TSVs.py` — dinucleotide context substitution counting (by M.C. Frith)
-- `subRatio.py` — simple substitution percentage without context
-- `isParsimonious.py` — computes parsimony/non-parsimony ratio from percent identities
-- `Alignment.py` — `Alignment` (pairwise) and `JoinedAlignment` (3-way) MAF data structures
-- `Util.py` — MAF parsing, coordinate conversion, overlap detection, reverse-complement helpers
-
-**Visualization (R)** — `scripts/analysis/R/`:
-- `sbmut.R` — substitution bar charts
-- `logRatioPlot.R` — log-ratio enrichment plots
-- `dinucleotide-plot.R` — dinucleotide substitution plots
-- `pca.R` — PCA analysis
-
 ### Pipeline Flow
-1. GC content calculation
-2. LAST training (percent identity between all three pairs)
-3. Pairwise one-to-one alignments (org1→org2, org1→org3)
-4. `maf-linked` filtering (removes isolated alignments, e.g. non-homologous transposon insertions)
-5. Three-way MAF joining via `maf-join`
-6. Optional CDS removal via `maf-cut-cds-uglier.py` (produces `_ncds` non-coding variants)
-7. Python TSV generation (trinuc, dinuc, with/without maf-linked, with/without ncds)
-8. R visualization (bar charts, log-ratio plots, dinucleotide plots)
+1. GC content calculation (`src/metrics/gc_content.sh`)
+2. LAST training — percent identity between all three pairs (`src/align/last_train.sh`)
+3. Pairwise one-to-one alignments (`src/align/one2one.sh`)
+4. `maf-linked` filtering (removes isolated alignments)
+5. Three-way MAF joining via `maf-join` (`src/align/mafjoin.sh`)
+6. Optional CDS removal (`src/align/maf-cut-cds-uglier.py`)
+7. Python TSV generation (`src/count/`)
+8. R visualization (`src/visualize/`)
 
 ## Configuration
 
-- `scripts/last/dwl_config.yaml` — genome download paths, default output directory (`paths.out_dir`)
-- `scripts/last/sbst_config.yaml` — output filename patterns, messages, settings
-- Environment overrides: `YQ_BINARY`, `LAST_DIR_OVERRIDE`, `THREAD_NUM_OVERRIDE`, `THREAD_NUM`
+- `config/dwl_config.yaml` — genome download paths, default output directory (`paths.out_dir`)
+- `config/sbst_config.yaml` — output filename patterns, messages, settings
+- Environment overrides: `YQ_BINARY`, `THREAD_NUM_OVERRIDE`, `THREAD_NUM`
 
 ## Dependencies
 
@@ -120,14 +174,22 @@ The `Alignment` class handles pairwise MAF entries (used by alignment utilities)
 - Python: 4-space indent, snake_case, CPython 3.8+, stdlib only (no third-party deps)
 - Shell: `#!/bin/bash`, quote variables, `$(...)` over backticks, idempotent (skip if output exists)
 - R: Parameters grouped at top, document external deps inline
-- Commits: Imperative mood, optionally scoped (e.g., `last: adjust TSV generation`)
+- Commits: Imperative mood, optionally scoped (e.g., `count: fix trinuc edge case`)
 
 ## Git
 
-- Repository root is this directory (`scripts/`). Always run git via `git -C /big/mrk/proj/sbst/scripts`
+- Repository root is this directory (project root). Git operations can be run directly here.
 - **Branching**: Work on feature branches, merge to main when complete
 - **Commit granularity**: One commit per feature/change
-- **Commit messages**: English, imperative mood, optionally scoped (e.g., `last: add thread option`)
+- **Commit messages**: English, imperative mood, optionally scoped
 - **Push**: Push directly to GitHub (`marikie/EvoSubster`)
-- **`.gitignore`**: Large intermediate files (`*.maf`, `*.train`, etc.) are not tracked. When encountering a new type of large intermediate file, ask the user before adding it to `.gitignore`
+- **`.gitignore`**: Large intermediate files (`*.maf`, `*.train`, etc.) are not tracked
 - Do not modify files in `archive/` (kept for reference only)
+
+## Data File Conventions
+
+- `results/<lineage>/<triplet>/<DATE>/` — analysis output per trio run
+- Species are abbreviated (e.g., `oikDio` = *Oikopleura dioica*)
+- `.maf` files: pairwise (`one2one`, `many2one`) and joined three-way
+- `.train` files: LAST training parameters
+- `.tsv` files: substitution count tables

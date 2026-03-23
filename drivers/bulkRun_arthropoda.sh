@@ -9,9 +9,11 @@ fi
 
 Date=$1
 
-script=${HOME}/sbst/scripts/last/trisbst_3spc_fromDwl.sh
-outDir=${HOME}/sbst/data/arthropoda
-logDir=${HOME}/sbst/log
+DRIVER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+script="$DRIVER_DIR/../src/trisbst_3spc_fromDwl.sh"
+ROOT_DIR="$(cd "$DRIVER_DIR/.." && pwd)"
+outDir=$ROOT_DIR/results/arthropoda
+logDir=$ROOT_DIR/log
 
 bash ${script} --out-dir ${outDir} ${Date} GCF_000001215.4 GCF_016746395.2 GCF_004382195.2 &> ${logDir}/${Date}_droMel_droSim_droSec.log
 

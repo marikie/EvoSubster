@@ -2,13 +2,10 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-LAST_DIR="$SCRIPT_DIR"
 
-LAST_DIR="${LAST_DIR_OVERRIDE:-$LAST_DIR}"
+PATH="$SCRIPT_DIR:$PATH"
 
-PATH="$LAST_DIR:$PATH"
-
-config_file="$SCRIPT_DIR/dwl_config.yaml"
+config_file="$ROOT_DIR/config/dwl_config.yaml"
 # Load YAML configuration using yq
 if [ ! -f "$config_file" ]; then
     echo "Configuration file not found!" 1>&2
@@ -174,9 +171,9 @@ if [ ! -d "$out_dir_base" ]; then
 fi
 
 # Download genome + taxonomy for each accession via dwl_organism.sh
-org1Result=$(bash "$LAST_DIR/dwl_organism.sh" "$org1ID" --out-dir "$base_genomes") || exit 1
-org2Result=$(bash "$LAST_DIR/dwl_organism.sh" "$org2ID" --out-dir "$base_genomes") || exit 1
-org3Result=$(bash "$LAST_DIR/dwl_organism.sh" "$org3ID" --out-dir "$base_genomes") || exit 1
+org1Result=$(bash "$SCRIPT_DIR/dwl_organism.sh" "$org1ID" --out-dir "$base_genomes") || exit 1
+org2Result=$(bash "$SCRIPT_DIR/dwl_organism.sh" "$org2ID" --out-dir "$base_genomes") || exit 1
+org3Result=$(bash "$SCRIPT_DIR/dwl_organism.sh" "$org3ID" --out-dir "$base_genomes") || exit 1
 
 IFS='|' read -r org1FullName org1FASTA org1SummaryJson org1RawName org1NcbiFullName org1TaxJson <<< "$org1Result"
 IFS='|' read -r org2FullName org2FASTA org2SummaryJson org2RawName org2NcbiFullName org2TaxJson <<< "$org2Result"
@@ -343,4 +340,4 @@ if [ "$IDT_ONLY" -eq 1 ]; then
     trisbst_args+=("--idt-only")
 fi
 trisbst_args+=("$DATE" "$org1FASTA" "$org2FASTA" "$org3FASTA" "$org1GFF")
-bash "$LAST_DIR/trisbst_3spc.sh" "${trisbst_args[@]}"
+bash "$SCRIPT_DIR/trisbst_3spc.sh" "${trisbst_args[@]}"

@@ -248,7 +248,8 @@ if [ -z "$ACCESSION" ]; then
 fi
 
 # Load fasta pattern from config (fall back to default)
-config_file="$SCRIPT_DIR/dwl_config.yaml"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+config_file="$ROOT_DIR/config/dwl_config.yaml"
 if command -v yq >/dev/null 2>&1 && [ -f "$config_file" ]; then
     FASTA_PATTERN_TMPL=$(yq eval '.patterns.fasta' "$config_file" 2>/dev/null)
 fi

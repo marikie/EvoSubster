@@ -23,7 +23,7 @@ errors:
     - org1 should be the outgroup.
     - All FASTA file paths must be absolute paths.
     - If org1 annotation (GFF file) is unavailable, enter "NO_GFF_FILE"; otherwise, provide the GFF file path.
-    - The `--out-dir` flag is optional. If not provided, the outputs will be stored in the directory specified in `scripts/last/sbst_config.yaml`.
+    - The `--out-dir` flag is optional. If not provided, the outputs will be stored in the directory specified in `config/dwl_config.yaml`.
 # Options
 options:
   checkIdt:

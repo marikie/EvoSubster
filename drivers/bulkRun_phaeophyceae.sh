@@ -12,9 +12,11 @@ fi
 
 Date=$1
 
-script=${HOME}/sbst/scripts/last/trisbst_3spc_fromDwl.sh
-outDir=${HOME}/sbst/data/phaeophyceae
-logDir=${HOME}/sbst/log
+DRIVER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+script="$DRIVER_DIR/../src/trisbst_3spc_fromDwl.sh"
+ROOT_DIR="$(cd "$DRIVER_DIR/.." && pwd)"
+outDir=$ROOT_DIR/results/phaeophyceae
+logDir=$ROOT_DIR/log
 
 bash "${script}" --out-dir "${outDir}" "${Date}" GCA_964200635.2 GCA_037834435.1 GCA_036873665.1 &> "${logDir}/${Date}_lamDig_lamSet_lamSin.log"
 

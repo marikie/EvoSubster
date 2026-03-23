@@ -1,7 +1,11 @@
-import unittest
-import trisbst_2TSVs_errprb as script
-import subprocess
 import os
+import sys
+import unittest
+import subprocess
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "count"))
+
+import trisbst_2TSVs_errprb as script
 
 
 class TestTriUvMuts2TSVs(unittest.TestCase):
@@ -9,13 +13,13 @@ class TestTriUvMuts2TSVs(unittest.TestCase):
         print("test_main")
 
         # inputs
-        self.in1_maf = open("./test/test_triUvMuts2TSVs_errprb_in1.maf")
-        self.org2outPath1 = "./test/result_triUvMuts2TSVs_errprb_out1_2.tsv"
-        self.org3outPath1 = "./test/result_triUvMuts2TSVs_errprb_out1_3.tsv"
+        self.in1_maf = open("./fixtures/test_triUvMuts2TSVs_errprb_in1.maf")
+        self.org2outPath1 = "./fixtures/result_triUvMuts2TSVs_errprb_out1_2.tsv"
+        self.org3outPath1 = "./fixtures/result_triUvMuts2TSVs_errprb_out1_3.tsv"
 
         # expected outputs
-        self.out1_2 = "./test/test_triUvMuts2TSVs_errprb_out1_2.tsv"
-        self.out1_3 = "./test/test_triUvMuts2TSVs_errprb_out1_3.tsv"
+        self.out1_2 = "./fixtures/test_triUvMuts2TSVs_errprb_out1_2.tsv"
+        self.out1_3 = "./fixtures/test_triUvMuts2TSVs_errprb_out1_3.tsv"
 
         ### test1 ###
         print("test1")
@@ -84,12 +88,6 @@ class TestTriUvMuts2TSVs(unittest.TestCase):
 
         # Set maxDiff to None to see the full diff
         self.maxDiff = None
-
-        # # Print the dictionaries for debugging
-        # print("mutDict2:", mutDict2)
-        # print("exp_mutDict2:", exp_mutDict2)
-        # print("mutDict3:", mutDict3)
-        # print("exp_mutDict3:", exp_mutDict3)
 
         self.assertEqual(mutDict2, exp_mutDict2)
         self.assertEqual(mutDict3, exp_mutDict3)

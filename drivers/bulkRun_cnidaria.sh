@@ -9,9 +9,11 @@ fi
 
 Date=$1
 
-script=${HOME}/sbst/scripts/last/trisbst_3spc_fromDwl.sh
-outDir=${HOME}/sbst/data/cnidaria
-logDir=${HOME}/sbst/log
+DRIVER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+script="$DRIVER_DIR/../src/trisbst_3spc_fromDwl.sh"
+ROOT_DIR="$(cd "$DRIVER_DIR/.." && pwd)"
+outDir=$ROOT_DIR/results/cnidaria
+logDir=$ROOT_DIR/log
 
 run_triple() {
     local log_suffix=$1

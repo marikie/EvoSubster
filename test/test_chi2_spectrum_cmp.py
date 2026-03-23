@@ -1,10 +1,14 @@
 import math
+import os
+import sys
 import unittest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "statistics"))
 
 import chi2_spectrum_cmp as script
 
-TSV_A = "./test/chi2_cmp_A.tsv"
-TSV_B = "./test/chi2_cmp_B.tsv"
+TSV_A = "./fixtures/chi2_cmp_A.tsv"
+TSV_B = "./fixtures/chi2_cmp_B.tsv"
 
 # Expected values (computed by hand):
 #   For A[C>A]A: r_hat = 300/20000 = 0.015, E_A = E_B = 150

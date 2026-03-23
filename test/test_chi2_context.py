@@ -1,9 +1,13 @@
 import math
+import os
+import sys
 import unittest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "statistics"))
 
 import chi2_context as script
 
-TSV_CTX = "./test/chi2_ctx.tsv"
+TSV_CTX = "./fixtures/chi2_ctx.tsv"
 
 # Expected values for the C>A group (computed by hand):
 #   r_hat = (100+50+100+50) / (4*10000) = 300/40000 = 0.0075
