@@ -112,10 +112,14 @@ def main():
 
     rows = []
     for fname in time_files:
-        # Strip date prefix: <DATE>_<LABEL>.time  →  <LABEL>
-        base = fname[:-5]  # remove .time
-        parts = base.split("_", 1)
-        label = parts[1] if len(parts) == 2 else base
+        # Extract trio label: filename is <DATE>_<LABEL>.time where DATE may
+        # itself contain underscores (e.g. bench_20260412).  Extract the
+        # three-part camelCase trio label directly via regex.
+        m = re.search(
+            r"([a-zA-Z][a-zA-Z0-9]+_[a-zA-Z][a-zA-Z0-9]+_[a-zA-Z][a-zA-Z0-9]+)\.time$",
+            fname,
+        )
+        label = m.group(1) if m else fname[:-5]
 
         fields = parse_time_file(os.path.join(time_dir, fname))
         lineage = guess_lineage(label)
