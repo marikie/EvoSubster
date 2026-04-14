@@ -66,15 +66,17 @@ for (ct in central_types) {
     df <- result$parameter
     pval <- result$p.value
     stdres <- result$stdres[1, ]  # standardized residuals for mut row
+    expected <- result$expected[1, ]  # expected counts for mut row
   } else {
     result <- fisher.test(mat, simulate.p.value = TRUE, B = 10000)
     method <- "fisher"
     stat <- NA
     df <- NA
     pval <- result$p.value
-    # Compute stdres manually for fisher fallback
+    # Compute stdres and expected manually for fisher fallback
     chi_result <- suppressWarnings(chisq.test(mat))
     stdres <- chi_result$stdres[1, ]
+    expected <- chi_result$expected[1, ]
   }
 
   sig <- if (pval < 0.01) "**" else if (pval < 0.05) "*" else ""
@@ -85,11 +87,11 @@ for (ct in central_types) {
   cat(sprintf("%-8s  %-8s  %s  %s  %12.4e  %s\n",
               ct, method, stat_str, df_str, pval, sig))
 
-  # Print per-context standardized residuals
+  # Print per-context expected counts and standardized residuals
   context_names <- sub$mutType[keep]
-  cat(sprintf("  %-12s  %8s\n", "context", "stdres"))
+  cat(sprintf("  %-12s  %8s  %8s\n", "context", "expected", "stdres"))
   for (j in seq_along(stdres)) {
-    cat(sprintf("  %-12s  %8.2f\n", context_names[j], stdres[j]))
+    cat(sprintf("  %-12s  %8.2f  %8.2f\n", context_names[j], expected[j], stdres[j]))
   }
   cat("\n")
 }
