@@ -24,6 +24,11 @@ FUNGI_PREFIXES = {
     "agaBis", "armBor", "bolBar", "bolNan", "bolRex", "bolSem", "bolVar",
     "inoSue", "lacAka", "lacAme", "lacSan", "lecGlu", "lecObs", "lenEdo",
     "pleOst", "podMar", "podMin", "rusAbi", "strPac",
+    # Glomeromycetes (added bench_20260416)
+    "denHet", "gigRos", "gigMar",
+    "funGeo", "funCal", "funMos",
+    "parBra", "parOcc",
+    "rhiCla", "rhiIrr", "rhiPro",
 }
 
 CNIDARIA_PREFIXES = {

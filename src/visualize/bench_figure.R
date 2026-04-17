@@ -82,12 +82,12 @@ main <- function() {
       min_idt   = round(min_identity, 2),
       ram_gb    = round(peak_ram_gb, 2)
     ) %>%
+    arrange(desc(runtime_min)) %>%
     select(
       trio_label, lineage,
       org1_mbp, org2_mbp, org3_mbp, total_mbp,
       min_idt, wall_clock, cpu_percent, ram_gb
-    ) %>%
-    arrange(lineage, trio_label)
+    )
 
   colnames(table_out) <- c(
     "trio", "lineage",
