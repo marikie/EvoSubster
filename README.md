@@ -6,6 +6,8 @@ EvoSubster analyzes single-base and dinucleotide substitution trends across dive
 
 Pairwise alignments are generated between _Species A_ vs _Species B_ and _Species A_ vs _Species C_ with LAST, merged into a three-way MAF, and examined under a parsimony model. The downstream Python and R utilities summarize substitution patterns and render publication-ready plots.
 
+Single-base substitution rates are computed in trinucleotide context, requiring that the two flanking bases are conserved across all three genomes while only the central base changes. Double-base substitutions are analyzed in tetranucleotide context, requiring that the two outer bases are conserved while both inner bases change.
+
 ## Prerequisites
 
 Install the following command-line tools before running any scripts:
@@ -51,25 +53,24 @@ During execution the wrapper:
 - Detects `genomic.gff` for the outgroup; if missing, downstream steps receive `NO_GFF_FILE`.
 - Resolves FASTA paths and invokes `sbst.sh` with the appropriate arguments.
 
-### Reuse existing FASTA assets
+### Use FASTA files of your choice
 
 ```bash
 ./src/sbst.sh <DATE> <ORG1_FASTA> <ORG2_FASTA> <ORG3_FASTA> <ORG1_GFF|NO_GFF_FILE> [--out-dir PATH] [--thread N] [--idt-only]
 ```
 
-- Provide absolute paths to the FASTA files.
+- Provide paths to the FASTA files.
 - Supply the outgroup GFF path or use `NO_GFF_FILE`.
 - `--out-dir`, `--thread`, and `--idt-only` behave the same as in the download wrapper.
 
 This script:
 
-- Generates short organism identifiers for consistent filenames.
 - Computes GC content for all three genomes.
 - Runs `last_train.sh` on every pair of the three species to calculate their substitution percent identity.
 - Produces paired `one2one` alignments for `org1` vs `org2` and `org1` vs `org3`.
 - Joins the MAFs into a three-way alignment.
-- Calls Python utilities to create TSV summaries.
-- Uses the outgroup GFF, when available, to cut CDS regions and generate non-coding TSVs.
+- Calls Python utilities to count DNA-base substitutions and create TSV summaries.
+- Uses the outgroup GFF, when available, to cut CDS regions, count DNA-base substitutions and generate non-coding TSV summaries.
 - Invokes `generate_graphs.sh` to render R visualizations.
 
 ## Outputs
@@ -77,30 +78,42 @@ This script:
 Results reside under:
 
 ```
-<out_dir>/<ORG1short>_<ORG2short>_<ORG3short>/<DATE>/
+<out_dir>/<ORG1>_<ORG2>_<ORG3>/<DATE>/
 ├── intermediateFiles/       # MAF and LAST training files
 ├── figs/
-│   ├── <org2short>/singlenuc/{ratio,log-ratio,count}/
-│   ├── <org2short>/dinuc/
-│   ├── <org3short>/singlenuc/{ratio,log-ratio,count}/
-│   └── <org3short>/dinuc/
+│   ├── <ORG2>/singlenuc/{ratio,log-ratio,count}/
+│   ├── <ORG2>/dinuc/
+│   ├── <ORG3>/singlenuc/{ratio,log-ratio,count}/
+│   └── <ORG3>/dinuc/
 └── statistics/
-    ├── <org2short>/{singlenuc,dinuc}/
-    ├── <org3short>/{singlenuc,dinuc}/
+    ├── <ORG2>/{singlenuc,dinuc}/
+    ├── <ORG3>/{singlenuc,dinuc}/
     └── misc/
 ```
 
 Representative outputs include:
 
+**`intermediateFiles/`**
 - `*.train`: substitution percent identity estimates from `LAST` (see [last-train](https://gitlab.com/mcfrith/last/-/blob/main/doc/last-train.rst?ref_type=heads))
+
+**`statistics/misc/`**
 - `*_gcContent_*.out`: whole-genome GC content for each FASTA
 - `*_sbstRatio*.out`: single-base substitution percentages without considering neighboring bases (see `src/metrics/subRatio.py`)
-- `*.tsv`: single-base substitution counts with maf-link filtering applied during alignment, removing alignments between non-homologous insertions of homologous transposons (see [maf-linked](https://gitlab.com/mcfrith/last/-/blob/main/doc/maf-linked.rst?ref_type=heads))
+
+**`statistics/<ORG>/singlenuc/`**
+- `*.tsv`: single-base substitution counts
+- `*_ncds.tsv`: non-coding-region variant of the above (only when a GFF is provided)
+
+**`statistics/<ORG>/dinuc/`**
 - `*_dinuc.tsv`: dinucleotide substitution counts
-- `*_ncds.tsv`, `*_dinuc_ncds.tsv`: non-coding-region variants of the above (only when a GFF is provided)
+- `*_dinuc_ncds.tsv`: non-coding-region variant of the above (only when a GFF is provided)
+
+**`figs/<ORG>/singlenuc/ratio/`** and **`figs/<ORG>/singlenuc/log-ratio/`**
 - `*_norm.pdf`: single-base substitutions normalized by original trinucleotide counts
-- `*_logRatio.pdf`: log₂ enrichment of substitution rates relative to the overall mean across substitution types
-- `*_dinuc*.pdf`: normalized dinucleotide substitution counts
+- `*_logRatio.pdf`: log₂ enrichment of substitution rates relative to the overall mean of the substitution rates across all substitution types
+
+**`figs/<ORG>/dinuc/`**
+- `*_dinuc*.pdf`: normalized dinucleotide substitution counts by original tetranucleotide counts
 
 Re-running the pipeline skips steps whose outputs already exist.
 

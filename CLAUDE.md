@@ -138,6 +138,7 @@ After modifying any script under `src/` or `config/`, run the full pipeline (dow
 
 ```bash
 rm -rf ./test_genomes
+rm -rf ./test_results
 ./src/sbst_fromDwl.sh <DATE> GCA_907165135.1 GCA_004367875.1 GCA_004367855.1 --genomes-dir ./test_genomes --out-dir ./test_results
 ```
 
