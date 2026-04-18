@@ -1,6 +1,6 @@
 # Large data (Noble: don't track generated/large files)
 results/
-data/
+genomes/
 log/
 
 # Large intermediate files

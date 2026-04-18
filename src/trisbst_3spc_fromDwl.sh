@@ -16,6 +16,17 @@ get_config() {
     yq eval "$1" "$config_file"
 }
 
+# Resolve a config path relative to the evo-subster repo root (ROOT_DIR)
+# Leaves absolute paths untouched.
+resolve_path() {
+    local p="$1"
+    if [[ "$p" != /* ]]; then
+        p="${p#./}"
+        p="$ROOT_DIR/$p"
+    fi
+    echo "$p"
+}
+
 make_short_name() {
     local full_name="$1"
     local suffix="$2"
@@ -148,6 +159,7 @@ if [ -z "$BASE_GENOMES_OVERRIDE" ] && ([ -z "$default_base_genomes" ] || [ "$def
     exit 1
 fi
 base_genomes="${BASE_GENOMES_OVERRIDE:-$default_base_genomes}"
+base_genomes=$(resolve_path "$base_genomes")
 
 if [ ! -d "$base_genomes" ]; then
     mkdir -p "$base_genomes" || {
@@ -163,6 +175,7 @@ if [ -z "$default_out_dir" ] || [ "$default_out_dir" = "null" ]; then
 fi
 
 out_dir_base="${OUT_DIR_OVERRIDE:-$default_out_dir}"
+out_dir_base=$(resolve_path "$out_dir_base")
 if [ ! -d "$out_dir_base" ]; then
     if ! mkdir -p "$out_dir_base"; then
         echo "Error: Unable to create output base directory at $out_dir_base" >&2

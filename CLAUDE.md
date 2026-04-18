@@ -67,8 +67,7 @@ Applied to 60 trios across 7 lineages (fungi, cnidarians, Apicomplexa, Phaeophyc
 │   └── sbst_config.yaml              # Output patterns, settings
 ├── drivers/                           # Bulk execution scripts
 │   └── bulkRun_*.sh                   # Per-lineage batch scripts
-├── data/                              # Input data (genomes)
-│   └── genomes/                       # Reference genome FASTA/GFF files
+├── genomes/                           # Reference genome FASTA/GFF files (download target)
 ├── results/                           # Analysis results (per-lineage)
 │   ├── fungi/, cnidaria/, etc.        # Per-lineage output directories
 │   └── summary/                       # Cross-lineage aggregation

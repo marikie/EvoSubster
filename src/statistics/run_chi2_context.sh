@@ -1,8 +1,8 @@
 #!/bin/bash
 # run_chi2_context.sh - Run chi2_context.R on all trios in a lineage directory.
 #
-# For each trio, finds org2 and org3 TSVs (*maflinked_ncds.tsv preferred,
-# fallback to *maflinked.tsv), runs chi2_context.R, and aggregates results.
+# For each trio, finds org2 and org3 TSVs (*_ncds.tsv preferred,
+# fallback to *.tsv), runs chi2_context.R, and aggregates results.
 #
 # Usage: bash run_chi2_context.sh <lineage_dir> [output_file]
 #   lineage_dir  : e.g. results/fungi/
@@ -44,15 +44,17 @@ find_tsv() {
     local org_label="$2"
     local files
 
-    # Prefer maflinked_ncds; use array glob so nullglob yields empty array on no match
-    files=("${date_dir}"/*_"${org_label}"_*_maflinked_ncds.tsv)
+    local singlenuc_dir="${date_dir}/statistics/${org_label}/singlenuc"
+
+    # Prefer _ncds; use array glob so nullglob yields empty array on no match
+    files=("${singlenuc_dir}"/*_ncds.tsv)
     if [ "${#files[@]}" -gt 0 ] && [ -f "${files[0]}" ]; then
         echo "${files[0]}"
         return
     fi
 
-    # Fallback to maflinked
-    files=("${date_dir}"/*_"${org_label}"_*_maflinked.tsv)
+    # Fallback to non-ncds
+    files=("${singlenuc_dir}"/*.tsv)
     if [ "${#files[@]}" -gt 0 ] && [ -f "${files[0]}" ]; then
         echo "${files[0]}"
         return

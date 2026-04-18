@@ -23,7 +23,7 @@ suppressPackageStartupMessages({
 EPS <- 1e-12
 HULL_EXPANSION <- 1.10
 IDENTITY_PREFIX <- "# substitution percent identity:"
-DEFAULT_TSV_PATTERN <- "*_maflinked_ncds.tsv"
+DEFAULT_TSV_PATTERN <- "*_ncds.tsv"
 CLASSIFICATION_ORDER <- c("domain", "kingdom", "phylum", "class", "order", "family", "genus", "species")
 
 invisible(utils::globalVariables(c("mutNum", "totalRootNum", "mutType")))

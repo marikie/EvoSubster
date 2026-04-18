@@ -4,8 +4,8 @@
 # Usage: bash run_chi2_dinuc_glom.sh [--out-dir DIR]
 #   --out-dir DIR  Directory for output files (default: results/fungi/chi2_dinuc_glom)
 #
-# For Non-coding:Yes trios, uses _maflinked_dinuc_ncds.tsv.
-# For Non-coding:No  trios, uses _maflinked_dinuc.tsv.
+# For Non-coding:Yes trios, uses _dinuc_ncds.tsv.
+# For Non-coding:No  trios, uses _dinuc.tsv.
 
 set -euo pipefail
 
@@ -49,14 +49,14 @@ for trio in "${TRIOS[@]}"; do
   ncds="${NON_CODING[$trio]}"
 
   if [[ "$ncds" -eq 1 ]]; then
-    pattern="*_maflinked_dinuc_ncds.tsv"
+    pattern="*_dinuc_ncds.tsv"
     suffix="ncds"
   else
-    pattern="*_maflinked_dinuc.tsv"
+    pattern="*_dinuc.tsv"
     suffix="full"
   fi
 
-  mapfile -t tsvs < <(find "$run_dir" -maxdepth 1 -name "$pattern" | sort)
+  mapfile -t tsvs < <(find "$run_dir/statistics" -mindepth 3 -maxdepth 3 -path "*/dinuc/*" -name "$pattern" | sort)
 
   if [[ ${#tsvs[@]} -eq 0 ]]; then
     echo "WARNING: No TSV files matching '$pattern' in $run_dir" >&2

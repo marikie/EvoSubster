@@ -41,6 +41,17 @@ get_dwl_config() {
     yq eval "$1" "$dwl_config_file"
 }
 
+# Resolve a config path relative to the evo-subster repo root (ROOT_DIR)
+# Leaves absolute paths untouched.
+resolve_path() {
+    local p="$1"
+    if [[ "$p" != /* ]]; then
+        p="${p#./}"
+        p="$ROOT_DIR/$p"
+    fi
+    echo "$p"
+}
+
 OUT_DIR_OVERRIDE=""
 IDT_ONLY=0
 THREAD_NUM_OVERRIDE=8
@@ -209,6 +220,7 @@ if [ -z "$default_out_dir" ] || [ "$default_out_dir" = "null" ]; then
     exit 1
 fi
 outDirBase="${OUT_DIR_OVERRIDE:-$default_out_dir}"
+outDirBase=$(resolve_path "$outDirBase")
 if [ ! -d "$outDirBase" ]; then
     echo "---making $outDirBase"
     if ! mkdir -p "$outDirBase"; then
@@ -223,78 +235,24 @@ gcContent_org2=$(get_config '.patterns.gc_content' | sed "s/{org_short}/$org2Sho
 gcContent_org3=$(get_config '.patterns.gc_content' | sed "s/{org_short}/$org3ShortName/g" | sed "s/{date}/$DATE/g")
 
 sbstRatio=$(get_config '.patterns.sbst_ratio' | sed "s/{date}/$DATE/g")
-sbstRatio_maflinked=$(get_config '.patterns.sbst_ratio_maflinked' | sed "s/{date}/$DATE/g")
 
 dbName="$org1ShortName""db_$DATE"
-m2o12=$(get_config '.patterns.many2one' | sed "s/{org1_short}/$org1ShortName/g" | sed "s/{org2_short}/$org2ShortName/g" | sed "s/{date}/$DATE/g")
-m2o13=$(get_config '.patterns.many2one' | sed "s/{org1_short}/$org1ShortName/g" | sed "s/{org2_short}/$org3ShortName/g" | sed "s/{date}/$DATE/g")
 o2o12=$(get_config '.patterns.one2one' | sed "s/{org1_short}/$org1ShortName/g" | sed "s/{org2_short}/$org2ShortName/g" | sed "s/{date}/$DATE/g")
 o2o13=$(get_config '.patterns.one2one' | sed "s/{org1_short}/$org1ShortName/g" | sed "s/{org2_short}/$org3ShortName/g" | sed "s/{date}/$DATE/g")
 train12=$(get_config '.patterns.train' | sed "s/{org1_short}/$org1ShortName/g" | sed "s/{org2_short}/$org2ShortName/g" | sed "s/{date}/$DATE/g")
 train13=$(get_config '.patterns.train' | sed "s/{org1_short}/$org1ShortName/g" | sed "s/{org2_short}/$org3ShortName/g" | sed "s/{date}/$DATE/g")
 
 joinedFile=$(get_config '.patterns.joined' | sed "s/{org1_short}/$org1ShortName/g" | sed "s/{org2_short}/$org2ShortName/g" | sed "s/{org3_short}/$org3ShortName/g" | sed "s/{date}/$DATE/g")
-
-o2o12_maflinked=$(get_config '.patterns.maflinked' | sed "s/{org1_short}/$org1ShortName/g" | sed "s/{org2_short}/$org2ShortName/g" | sed "s/{date}/$DATE/g")
-o2o13_maflinked=$(get_config '.patterns.maflinked' | sed "s/{org1_short}/$org1ShortName/g" | sed "s/{org2_short}/$org3ShortName/g" | sed "s/{date}/$DATE/g")
-joinedFile_maflinked=$(get_config '.patterns.joined_maflinked' | sed "s/{org1_short}/$org1ShortName/g" | sed "s/{org2_short}/$org2ShortName/g" | sed "s/{org3_short}/$org3ShortName/g" | sed "s/{date}/$DATE/g")
-
 joinedFile_ncds=$(get_config '.patterns.joined_ncds' | sed "s/{org1_short}/$org1ShortName/g" | sed "s/{org2_short}/$org2ShortName/g" | sed "s/{org3_short}/$org3ShortName/g" | sed "s/{date}/$DATE/g")
-joinedFile_maflinked_ncds=$(get_config '.patterns.joined_maflinked_ncds' | sed "s/{org1_short}/$org1ShortName/g" | sed "s/{org2_short}/$org2ShortName/g" | sed "s/{org3_short}/$org3ShortName/g" | sed "s/{date}/$DATE/g")
 
 org2tsv="${org2ID}_${org2ShortName}_${DATE}.tsv"
 org3tsv="${org3ID}_${org3ShortName}_${DATE}.tsv"
-org2tsv_maflinked="${org2ID}_${org2ShortName}_${DATE}_maflinked.tsv"
-org3tsv_maflinked="${org3ID}_${org3ShortName}_${DATE}_maflinked.tsv"
-org2tsv_errprb="${org2ID}_${org2ShortName}_${DATE}_errprb.tsv"
-org3tsv_errprb="${org3ID}_${org3ShortName}_${DATE}_errprb.tsv"
-org2tsv_maflinked_errprb="${org2ID}_${org2ShortName}_${DATE}_maflinked_errprb.tsv"
-org3tsv_maflinked_errprb="${org3ID}_${org3ShortName}_${DATE}_maflinked_errprb.tsv"
-
 org2_dinuc_tsv="${org2ID}_${org2ShortName}_${DATE}_dinuc.tsv"
 org3_dinuc_tsv="${org3ID}_${org3ShortName}_${DATE}_dinuc.tsv"
-org2_dinuc_tsv_maflinked="${org2ID}_${org2ShortName}_${DATE}_maflinked_dinuc.tsv"
-org3_dinuc_tsv_maflinked="${org3ID}_${org3ShortName}_${DATE}_maflinked_dinuc.tsv"
-
 org2tsv_ncds="${org2ID}_${org2ShortName}_${DATE}_ncds.tsv"
 org3tsv_ncds="${org3ID}_${org3ShortName}_${DATE}_ncds.tsv"
-org2tsv_maflinked_ncds="${org2ID}_${org2ShortName}_${DATE}_maflinked_ncds.tsv"
-org3tsv_maflinked_ncds="${org3ID}_${org3ShortName}_${DATE}_maflinked_ncds.tsv"
 org2_dinuc_tsv_ncds="${org2ID}_${org2ShortName}_${DATE}_dinuc_ncds.tsv"
 org3_dinuc_tsv_ncds="${org3ID}_${org3ShortName}_${DATE}_dinuc_ncds.tsv"
-org2_dinuc_tsv_maflinked_ncds="${org2ID}_${org2ShortName}_${DATE}_maflinked_dinuc_ncds.tsv"
-org3_dinuc_tsv_maflinked_ncds="${org3ID}_${org3ShortName}_${DATE}_maflinked_dinuc_ncds.tsv"
-
-org2bed=$(get_config '.patterns.bed' | sed "s/{org_short}/$org2ShortName/g" | sed "s/{date}/$DATE/g")
-org3bed=$(get_config '.patterns.bed' | sed "s/{org_short}/$org3ShortName/g" | sed "s/{date}/$DATE/g")
-org2bed_maflinked=$(get_config '.patterns.bed_maflinked' | sed "s/{org_short}/$org2ShortName/g" | sed "s/{date}/$DATE/g")
-org3bed_maflinked=$(get_config '.patterns.bed_maflinked' | sed "s/{org_short}/$org3ShortName/g" | sed "s/{date}/$DATE/g")
-
-org2_out=$(get_config '.patterns.graph.out' | sed "s/{org_short}/$org2ShortName/g" | sed "s/{date}/$DATE/g")
-org3_out=$(get_config '.patterns.graph.out' | sed "s/{org_short}/$org3ShortName/g" | sed "s/{date}/$DATE/g")
-org2_out_sbstCount=$(get_config '.patterns.graph.sbst' | sed "s/{org_short}/$org2ShortName/g" | sed "s/{date}/$DATE/g")
-org3_out_sbstCount=$(get_config '.patterns.graph.sbst' | sed "s/{org_short}/$org3ShortName/g" | sed "s/{date}/$DATE/g")
-org2_out_oriCount=$(get_config '.patterns.graph.ori' | sed "s/{org_short}/$org2ShortName/g" | sed "s/{date}/$DATE/g")
-org3_out_oriCount=$(get_config '.patterns.graph.ori' | sed "s/{org_short}/$org3ShortName/g" | sed "s/{date}/$DATE/g")
-org2_maflinked_out=$(get_config '.patterns.graph_maflinked.out' | sed "s/{org_short}/$org2ShortName/g" | sed "s/{date}/$DATE/g")
-org3_maflinked_out=$(get_config '.patterns.graph_maflinked.out' | sed "s/{org_short}/$org3ShortName/g" | sed "s/{date}/$DATE/g")
-org2_maflinked_out_sbstCount=$(get_config '.patterns.graph_maflinked.sbst' | sed "s/{org_short}/$org2ShortName/g" | sed "s/{date}/$DATE/g")
-org3_maflinked_out_sbstCount=$(get_config '.patterns.graph_maflinked.sbst' | sed "s/{org_short}/$org3ShortName/g" | sed "s/{date}/$DATE/g")
-org2_maflinked_out_oriCount=$(get_config '.patterns.graph_maflinked.ori' | sed "s/{org_short}/$org2ShortName/g" | sed "s/{date}/$DATE/g")
-org3_maflinked_out_oriCount=$(get_config '.patterns.graph_maflinked.ori' | sed "s/{org_short}/$org3ShortName/g" | sed "s/{date}/$DATE/g")
-org2_errprb_out=$(get_config '.patterns.graph_errprb.out' | sed "s/{org_short}/$org2ShortName/g" | sed "s/{date}/$DATE/g")
-org3_errprb_out=$(get_config '.patterns.graph_errprb.out' | sed "s/{org_short}/$org3ShortName/g" | sed "s/{date}/$DATE/g")
-org2_errprb_out_sbstCount=$(get_config '.patterns.graph_errprb.sbst' | sed "s/{org_short}/$org2ShortName/g" | sed "s/{date}/$DATE/g")
-org3_errprb_out_sbstCount=$(get_config '.patterns.graph_errprb.sbst' | sed "s/{org_short}/$org3ShortName/g" | sed "s/{date}/$DATE/g")
-org2_errprb_out_oriCount=$(get_config '.patterns.graph_errprb.ori' | sed "s/{org_short}/$org2ShortName/g" | sed "s/{date}/$DATE/g")
-org3_errprb_out_oriCount=$(get_config '.patterns.graph_errprb.ori' | sed "s/{org_short}/$org3ShortName/g" | sed "s/{date}/$DATE/g")
-org2_maflinked_errprb_out=$(get_config '.patterns.graph_maflinked_errprb.out' | sed "s/{org_short}/$org2ShortName/g" | sed "s/{date}/$DATE/g")
-org3_maflinked_errprb_out=$(get_config '.patterns.graph_maflinked_errprb.out' | sed "s/{org_short}/$org3ShortName/g" | sed "s/{date}/$DATE/g")
-org2_maflinked_errprb_out_sbstCount=$(get_config '.patterns.graph_maflinked_errprb.sbst' | sed "s/{org_short}/$org2ShortName/g" | sed "s/{date}/$DATE/g")
-org3_maflinked_errprb_out_sbstCount=$(get_config '.patterns.graph_maflinked_errprb.sbst' | sed "s/{org_short}/$org3ShortName/g" | sed "s/{date}/$DATE/g")
-org2_maflinked_errprb_out_oriCount=$(get_config '.patterns.graph_maflinked_errprb.ori' | sed "s/{org_short}/$org2ShortName/g" | sed "s/{date}/$DATE/g")
-org3_maflinked_errprb_out_oriCount=$(get_config '.patterns.graph_maflinked_errprb.ori' | sed "s/{org_short}/$org3ShortName/g" | sed "s/{date}/$DATE/g")
-
 
 if [ ! -d "$outDirPath" ]; then
 	echo "---making $outDirPath"
@@ -311,18 +269,25 @@ echo "pwd: $(pwd)"
 
 # Create subdirectory structure
 imf="intermediateFiles"
-stat_sn_wml="statistics/singlenuc/without_maflinked"
-stat_sn_ml="statistics/singlenuc"
-stat_dn_wml="statistics/dinuc/without_maflinked"
-stat_dn_ml="statistics/dinuc"
+figs_org2="figs/${org2ShortName}"
+figs_org3="figs/${org3ShortName}"
+stat_org2="statistics/${org2ShortName}"
+stat_org3="statistics/${org3ShortName}"
 stat_misc="statistics/misc"
 mkdir -p \
     "$imf" \
-    "figs/singlenuc/ratio/without_maflinked" \
-    "figs/singlenuc/log-ratio/without_maflinked" \
-    "figs/dinuc/without_maflinked" \
-    "$stat_sn_wml" \
-    "$stat_dn_wml" \
+    "$figs_org2/singlenuc/ratio" \
+    "$figs_org2/singlenuc/log-ratio" \
+    "$figs_org2/singlenuc/count" \
+    "$figs_org2/dinuc" \
+    "$figs_org3/singlenuc/ratio" \
+    "$figs_org3/singlenuc/log-ratio" \
+    "$figs_org3/singlenuc/count" \
+    "$figs_org3/dinuc" \
+    "$stat_org2/singlenuc" \
+    "$stat_org2/dinuc" \
+    "$stat_org3/singlenuc" \
+    "$stat_org3/dinuc" \
     "$stat_misc"
 
 # Prefix path variables with subdirectory locations
@@ -330,39 +295,20 @@ gcContent_org1="${stat_misc}/${gcContent_org1}"
 gcContent_org2="${stat_misc}/${gcContent_org2}"
 gcContent_org3="${stat_misc}/${gcContent_org3}"
 sbstRatio="${stat_misc}/${sbstRatio}"
-sbstRatio_maflinked="${stat_misc}/${sbstRatio_maflinked}"
-m2o12="${imf}/${m2o12}"
-m2o13="${imf}/${m2o13}"
 o2o12="${imf}/${o2o12}"
 o2o13="${imf}/${o2o13}"
 train12="${imf}/${train12}"
 train13="${imf}/${train13}"
-o2o12_maflinked="${imf}/${o2o12_maflinked}"
-o2o13_maflinked="${imf}/${o2o13_maflinked}"
 joinedFile="${imf}/${joinedFile}"
-joinedFile_maflinked="${imf}/${joinedFile_maflinked}"
 joinedFile_ncds="${imf}/${joinedFile_ncds}"
-joinedFile_maflinked_ncds="${imf}/${joinedFile_maflinked_ncds}"
-org2tsv="${stat_sn_wml}/${org2tsv}"
-org3tsv="${stat_sn_wml}/${org3tsv}"
-org2tsv_maflinked="${stat_sn_ml}/${org2tsv_maflinked}"
-org3tsv_maflinked="${stat_sn_ml}/${org3tsv_maflinked}"
-org2tsv_errprb="${stat_sn_wml}/${org2tsv_errprb}"
-org3tsv_errprb="${stat_sn_wml}/${org3tsv_errprb}"
-org2tsv_maflinked_errprb="${stat_sn_ml}/${org2tsv_maflinked_errprb}"
-org3tsv_maflinked_errprb="${stat_sn_ml}/${org3tsv_maflinked_errprb}"
-org2_dinuc_tsv="${stat_dn_wml}/${org2_dinuc_tsv}"
-org3_dinuc_tsv="${stat_dn_wml}/${org3_dinuc_tsv}"
-org2_dinuc_tsv_maflinked="${stat_dn_ml}/${org2_dinuc_tsv_maflinked}"
-org3_dinuc_tsv_maflinked="${stat_dn_ml}/${org3_dinuc_tsv_maflinked}"
-org2tsv_ncds="${stat_sn_wml}/${org2tsv_ncds}"
-org3tsv_ncds="${stat_sn_wml}/${org3tsv_ncds}"
-org2tsv_maflinked_ncds="${stat_sn_ml}/${org2tsv_maflinked_ncds}"
-org3tsv_maflinked_ncds="${stat_sn_ml}/${org3tsv_maflinked_ncds}"
-org2_dinuc_tsv_ncds="${stat_dn_wml}/${org2_dinuc_tsv_ncds}"
-org3_dinuc_tsv_ncds="${stat_dn_wml}/${org3_dinuc_tsv_ncds}"
-org2_dinuc_tsv_maflinked_ncds="${stat_dn_ml}/${org2_dinuc_tsv_maflinked_ncds}"
-org3_dinuc_tsv_maflinked_ncds="${stat_dn_ml}/${org3_dinuc_tsv_maflinked_ncds}"
+org2tsv="${stat_org2}/singlenuc/${org2tsv}"
+org3tsv="${stat_org3}/singlenuc/${org3tsv}"
+org2_dinuc_tsv="${stat_org2}/dinuc/${org2_dinuc_tsv}"
+org3_dinuc_tsv="${stat_org3}/dinuc/${org3_dinuc_tsv}"
+org2tsv_ncds="${stat_org2}/singlenuc/${org2tsv_ncds}"
+org3tsv_ncds="${stat_org3}/singlenuc/${org3tsv_ncds}"
+org2_dinuc_tsv_ncds="${stat_org2}/dinuc/${org2_dinuc_tsv_ncds}"
+org3_dinuc_tsv_ncds="${stat_org3}/dinuc/${org3_dinuc_tsv_ncds}"
 
 # GC content
 echo "$(get_config '.messages.gc_content')"
@@ -402,23 +348,18 @@ fi
 
 # one2one for org1-org2
 echo "$(get_config '.messages.one2one' | sed "s/{org1_short}/$org1ShortName/g" | sed "s/{org2_short}/$org2ShortName/g")"
-echo "bash $ALIGN_DIR/one2one.sh $DATE $org1FASTA $org2FASTA ${imf}/${dbName} $train12 $m2o12 $o2o12 $o2o12_maflinked"
-bash "$ALIGN_DIR/one2one.sh" "$DATE" "$org1FASTA" "$org2FASTA" "${imf}/${dbName}" "$train12" "$m2o12" "$o2o12" "$o2o12_maflinked"
+echo "bash $ALIGN_DIR/one2one.sh $DATE $org1FASTA $org2FASTA ${imf}/${dbName} $train12 $o2o12"
+bash "$ALIGN_DIR/one2one.sh" "$DATE" "$org1FASTA" "$org2FASTA" "${imf}/${dbName}" "$train12" "$o2o12"
 
 # one2one for org1-org3
 echo "$(get_config '.messages.one2one' | sed "s/{org1_short}/$org1ShortName/g" | sed "s/{org2_short}/$org3ShortName/g")"
-echo "bash $ALIGN_DIR/one2one.sh $DATE $org1FASTA $org3FASTA ${imf}/${dbName} $train13 $m2o13 $o2o13 $o2o13_maflinked"
-bash "$ALIGN_DIR/one2one.sh" "$DATE" "$org1FASTA" "$org3FASTA" "${imf}/${dbName}" "$train13" "$m2o13" "$o2o13" "$o2o13_maflinked"
+echo "bash $ALIGN_DIR/one2one.sh $DATE $org1FASTA $org3FASTA ${imf}/${dbName} $train13 $o2o13"
+bash "$ALIGN_DIR/one2one.sh" "$DATE" "$org1FASTA" "$org3FASTA" "${imf}/${dbName}" "$train13" "$o2o13"
 
-# maf-join the two .maf files (without maf-linked)
+# maf-join the two .maf files
 echo "$(get_config '.messages.maf_join')"
 echo "bash $ALIGN_DIR/mafjoin.sh $o2o12 $o2o13 $joinedFile"
 bash "$ALIGN_DIR/mafjoin.sh" "$o2o12" "$o2o13" "$joinedFile"
-
-# maf-join the two .maf files (with maf-linked)
-echo "$(get_config '.messages.maf_join') with maf-linked"
-echo "bash $ALIGN_DIR/mafjoin.sh $o2o12_maflinked $o2o13_maflinked $joinedFile_maflinked"
-bash "$ALIGN_DIR/mafjoin.sh" "$o2o12_maflinked" "$o2o13_maflinked" "$joinedFile_maflinked"
 
 # Calculate the substitution ratio without considering neighboring bases
 echo "$(get_config '.messages.sbst_ratio')"
@@ -429,15 +370,6 @@ else
     echo "$sbstRatio already exists"
 fi
 
-# Calculate the substitution ratio without considering neighboring bases for maf-linked
-echo "$(get_config '.messages.sbst_ratio') with maf-linked"
-if [ ! -e "$sbstRatio_maflinked" ]; then
-echo "time python $METRICS_DIR/subRatio.py $joinedFile_maflinked >$sbstRatio_maflinked"
-time python "$METRICS_DIR/subRatio.py" "$joinedFile_maflinked" >"$sbstRatio_maflinked"
-else
-    echo "$sbstRatio_maflinked already exists"
-fi
-
 # Generate dinuc .tsv files
 if [ ! -e "$org2_dinuc_tsv" ] || [ ! -e "$org3_dinuc_tsv" ]; then
 	echo "$(get_config '.messages.dinuc_tsv')"
@@ -445,15 +377,6 @@ echo "time python $COUNT_DIR/disbst_2TSVs.py $joinedFile -o2 $org2_dinuc_tsv -o3
 time python "$COUNT_DIR/disbst_2TSVs.py" "$joinedFile" -o2 "$org2_dinuc_tsv" -o3 "$org3_dinuc_tsv"
 else
 	echo "$org2_dinuc_tsv and $org3_dinuc_tsv already exists"
-fi
-
-# Generate dinuc .tsv files (with maf-linked)
-if [ ! -e "$org2_dinuc_tsv_maflinked" ] || [ ! -e "$org3_dinuc_tsv_maflinked" ]; then
-	echo "$(get_config '.messages.dinuc_tsv') with maf-linked"
-echo "time python $COUNT_DIR/disbst_2TSVs.py $joinedFile_maflinked -o2 $org2_dinuc_tsv_maflinked -o3 $org3_dinuc_tsv_maflinked"
-time python "$COUNT_DIR/disbst_2TSVs.py" "$joinedFile_maflinked" -o2 "$org2_dinuc_tsv_maflinked" -o3 "$org3_dinuc_tsv_maflinked"
-else
-	echo "$org2_dinuc_tsv_maflinked and $org3_dinuc_tsv_maflinked already exists"
 fi
 
 # If there is a gff file of org1, cut off the CDS regions
@@ -469,87 +392,44 @@ if [ "$org1GFF" != "NO_GFF_FILE" ]; then
 		echo "$joinedFile_ncds already exists"
 	fi
 
-	if [ ! -e "$joinedFile_maflinked_ncds" ]; then
-		"$ALIGN_DIR/maf-cut-cds-uglier.py" \
-			"$org1GFF" \
-			"$joinedFile_maflinked" >"$joinedFile_maflinked_ncds"
-	else
-		echo "$joinedFile_maflinked_ncds already exists"
-	fi
-
 	# Generate all TSV files including ncds files
 	bash "$SCRIPT_DIR/generate_tsv_files.sh" \
 		"$joinedFile" \
-		"$joinedFile_maflinked" \
 		"$org2tsv" \
 		"$org3tsv" \
-		"$org2tsv_maflinked" \
-		"$org3tsv_maflinked" \
-		"$org2tsv_errprb" \
-		"$org3tsv_errprb" \
-		"$org2tsv_maflinked_errprb" \
-		"$org3tsv_maflinked_errprb" \
 		"$COUNT_DIR" \
 		"$org2_dinuc_tsv" \
 		"$org3_dinuc_tsv" \
-		"$org2_dinuc_tsv_maflinked" \
-		"$org3_dinuc_tsv_maflinked" \
 		"$joinedFile_ncds" \
-		"$joinedFile_maflinked_ncds" \
 		"$org2tsv_ncds" \
 		"$org3tsv_ncds" \
-		"$org2tsv_maflinked_ncds" \
-		"$org3tsv_maflinked_ncds" \
 		"$org2_dinuc_tsv_ncds" \
-		"$org3_dinuc_tsv_ncds" \
-		"$org2_dinuc_tsv_maflinked_ncds" \
-		"$org3_dinuc_tsv_maflinked_ncds"
+		"$org3_dinuc_tsv_ncds"
 else
 	echo "There is no gff file of org1"
 	# Generate all TSV files (no ncds files)
 	bash "$SCRIPT_DIR/generate_tsv_files.sh" \
 		"$joinedFile" \
-		"$joinedFile_maflinked" \
 		"$org2tsv" \
 		"$org3tsv" \
-		"$org2tsv_maflinked" \
-		"$org3tsv_maflinked" \
-		"$org2tsv_errprb" \
-		"$org3tsv_errprb" \
-		"$org2tsv_maflinked_errprb" \
-		"$org3tsv_maflinked_errprb" \
 		"$COUNT_DIR" \
 		"$org2_dinuc_tsv" \
-		"$org3_dinuc_tsv" \
-		"$org2_dinuc_tsv_maflinked" \
-		"$org3_dinuc_tsv_maflinked"
+		"$org3_dinuc_tsv"
 fi
 
 # Generate all graphs
 bash "$SCRIPT_DIR/generate_graphs.sh" \
     "$org2tsv" \
     "$org3tsv" \
-    "$org2tsv_maflinked" \
-    "$org3tsv_maflinked" \
-    "$org2tsv_errprb" \
-    "$org3tsv_errprb" \
-    "$org2tsv_maflinked_errprb" \
-    "$org3tsv_maflinked_errprb" \
     "$org2tsv_ncds" \
     "$org3tsv_ncds" \
-    "$org2tsv_maflinked_ncds" \
-    "$org3tsv_maflinked_ncds" \
     "$org2_dinuc_tsv" \
     "$org3_dinuc_tsv" \
-    "$org2_dinuc_tsv_maflinked" \
-    "$org3_dinuc_tsv_maflinked" \
     "$org2_dinuc_tsv_ncds" \
     "$org3_dinuc_tsv_ncds" \
-    "$org2_dinuc_tsv_maflinked_ncds" \
-    "$org3_dinuc_tsv_maflinked_ncds" \
     "$R_DIR" \
-    "figs" \
-    "$stat_misc"
+    "$figs_org2" \
+    "$figs_org3"
 
 # collect_pca_script="$SCRIPT_DIR/collect_for_pca.sh"
 # if [ -x "$collect_pca_script" ]; then

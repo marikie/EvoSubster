@@ -10,12 +10,15 @@ generate_plots <- function(tsv_path, out_dir = dirname(tsv_path)) {
   data <- read_and_transform_data(tsv_path)
   trinuc.lab <- data %>% pull(oriType)
 
-  # Build output path using out_dir + basename without extension
-  path_without_extension <- file.path(out_dir, tools::file_path_sans_ext(basename(tsv_path)))
-  # Create file paths for the plots (PNG)
-  normgraph_path <- paste(path_without_extension, "_norm.pdf", sep = "")
-  sbstgraph_path <- paste(path_without_extension, "_sbst.pdf", sep = "")
-  origraph_path <- paste(path_without_extension, "_ori.pdf", sep = "")
+  # out_dir is the singlenuc parent; split outputs into ratio/ and count/
+  ratio_dir <- file.path(out_dir, "ratio")
+  count_dir <- file.path(out_dir, "count")
+  dir.create(ratio_dir, recursive = TRUE, showWarnings = FALSE)
+  dir.create(count_dir, recursive = TRUE, showWarnings = FALSE)
+  base <- tools::file_path_sans_ext(basename(tsv_path))
+  normgraph_path <- file.path(ratio_dir, paste0(base, "_norm.pdf"))
+  sbstgraph_path <- file.path(count_dir, paste0(base, "_sbst.pdf"))
+  origraph_path  <- file.path(count_dir, paste0(base, "_ori.pdf"))
 
   print(paste("Creating norm graph...", normgraph_path))
   create_pdf_plot(normgraph_path, data, trinuc.lab, "norm")

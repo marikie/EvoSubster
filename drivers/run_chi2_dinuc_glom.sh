@@ -1,9 +1,9 @@
 #! /bin/bash
 # Run chi2_context_dinuc.R on all Glomeromycetes trios (trio_glom.md).
 #
-# For Non-coding:Yes trios, processes both _maflinked_dinuc_ncds.tsv
-# and _maflinked_dinuc.tsv. For Non-coding:No trios, processes only
-# _maflinked_dinuc.tsv.
+# For Non-coding:Yes trios, processes both _dinuc_ncds.tsv
+# and _dinuc.tsv. For Non-coding:No trios, processes only
+# _dinuc.tsv.
 #
 # Usage: bash drivers/run_chi2_dinuc_glom.sh [--out-dir DIR]
 #   --out-dir DIR  Directory for output files
@@ -50,10 +50,10 @@ for trio in "${TRIOS[@]}"; do
 
   # Build list of (pattern, suffix) pairs to process
   if [[ "$ncds" -eq 1 ]]; then
-    patterns=("*_maflinked_dinuc_ncds.tsv" "*_maflinked_dinuc.tsv")
+    patterns=("*_dinuc_ncds.tsv" "*_dinuc.tsv")
     suffixes=("ncds" "full")
   else
-    patterns=("*_maflinked_dinuc.tsv")
+    patterns=("*_dinuc.tsv")
     suffixes=("full")
   fi
 
@@ -61,7 +61,7 @@ for trio in "${TRIOS[@]}"; do
     pattern="${patterns[$i]}"
     suffix="${suffixes[$i]}"
 
-    mapfile -t tsvs < <(find "$run_dir" -maxdepth 1 -name "$pattern" | sort)
+    mapfile -t tsvs < <(find "$run_dir/statistics" -mindepth 3 -maxdepth 3 -path "*/dinuc/*" -name "$pattern" | sort)
 
     if [[ ${#tsvs[@]} -eq 0 ]]; then
       echo "WARNING: No TSV files matching '$pattern' in $run_dir" >&2

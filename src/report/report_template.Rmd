@@ -330,12 +330,12 @@ if (length(summary_data$datasets) == 0) {
       filter(slot %in% c("species2", "species3"))
 
     pdf_label_map <- c(
-      maflinked_norm = "Bar Plot: ",
-      maflinked_logratio = "Logratio Plot: ",
-      maflinked_ncds_norm = "Bar Plot (Non-coding): ",
-      maflinked_ncds_logratio = "Logratio Plot (Non-coding): ",
-      maflinked_dinuc_tsv = "Dinuc: ",
-      maflinked_dinuc_ncds_tsv = "Dinuc (Non-coding): "
+      norm = "Bar Plot: ",
+      logratio = "Logratio Plot: ",
+      ncds_norm = "Bar Plot (Non-coding): ",
+      ncds_logratio = "Logratio Plot (Non-coding): ",
+      dinuc_tsv = "Dinuc: ",
+      dinuc_ncds_tsv = "Dinuc (Non-coding): "
     )
 
     pwalk(species_sections, function(slot, label, organism_name) {
@@ -358,10 +358,10 @@ if (length(summary_data$datasets) == 0) {
 
       # Enforce plot ordering for key plots regardless of JSON/list ordering.
       preferred_pdf_order <- c(
-        "maflinked_norm",
-        "maflinked_ncds_norm",
-        "maflinked_logratio",
-        "maflinked_ncds_logratio"
+        "norm",
+        "ncds_norm",
+        "logratio",
+        "ncds_logratio"
       )
 
       pdfs <- species$pdfs

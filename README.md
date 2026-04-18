@@ -31,22 +31,17 @@ Alignment entry points live under `EvoSubster/last/`, analytics helpers under `E
 ## Configuration
 ### `dwl_config.yaml`
 
-Update `EvoSubster/last/dwl_config.yaml` so downloads land in your genome directory:
+Update `config/dwl_config.yaml` so downloads land in your genome directory and runs write to your output directory. Paths are resolved relative to the repository root; use an absolute path to point outside the repo.
 
 ```yaml
 paths:
-  # Change the path to the directory to store downloaded genomes
-  base_genomes: "/absolute/path/to/genomes"
+  # Directory for downloaded genomes (relative to repo root by default)
+  base_genomes: "./genomes"
+  # Directory for downstream run outputs
+  out_dir: "./results"
 ```
-### `sbst_config.yaml`
 
-Adjust `EvoSubster/last/sbst_config.yaml` so results flow to your output directory (the `--out-dir` flag described below can override this per run):
-
-```yaml
-paths:
-  # Change the path to the directory to store outputs
-  out_dir: "/absolute/path/to/outputs"
-```
+Override either default per run with the `--base-genomes` / `--out-dir` flags described below.
 
 ## Running the Pipeline
 
@@ -103,13 +98,13 @@ Representative outputs include:
 - `*.train`: substitution percent identity estimates from `LAST` (see [last-train](https://gitlab.com/mcfrith/last/-/blob/main/doc/last-train.rst?ref_type=heads))
 - `*_gcContent_*.out`: whole-genome GC content for each ingroup FASTA
 - `*_sbstRatio*.out`: single-base substitution percentages without considering neighboring bases (see `EvoSubster/analysis/subRatio.py`)
-- `*_maflinked.tsv`: single-base substitution counts with maf-link filtering, removing alignments between non-homologous insertions of homologous transposons (see [maf-linked](https://gitlab.com/mcfrith/last/-/blob/main/doc/maf-linked.rst?ref_type=heads))
-- `*_maflinked_dinuc.tsv`: dinucleotide substitution counts
-- `*_maflinked_sbst.pdf`: bar chart of single-base substitution counts
-- `*_maflinked_ori.pdf`: bar chart of original trinucleotide counts
-- `*_maflinked_norm.pdf`: single-base substitutions normalized by original trinucleotide counts
-- `*_maflinked_logRatio.pdf`: log₂ enrichment of substitution rates relative to the overall mean across substitution types
-- `*_maflinked_dinuc*.pdf`: normalized dinucleotide substitution counts
+- `*.tsv`: single-base substitution counts with maf-link filtering applied during alignment, removing alignments between non-homologous insertions of homologous transposons (see [maf-linked](https://gitlab.com/mcfrith/last/-/blob/main/doc/maf-linked.rst?ref_type=heads))
+- `*_dinuc.tsv`: dinucleotide substitution counts
+- `*_sbst.pdf`: bar chart of single-base substitution counts
+- `*_ori.pdf`: bar chart of original trinucleotide counts
+- `*_norm.pdf`: single-base substitutions normalized by original trinucleotide counts
+- `*_logRatio.pdf`: log₂ enrichment of substitution rates relative to the overall mean across substitution types
+- `*_dinuc*.pdf`: normalized dinucleotide substitution counts
 - `*_ncds*`: files derived from non-coding regions when a GFF is available
 
 Re-running the pipeline skips steps whose outputs already exist.

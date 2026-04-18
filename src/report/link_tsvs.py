@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from typing import Iterable
 
-PATTERN = "*_maflinked_ncds.tsv"
+PATTERN = "*_ncds.tsv"
 
 
 def parse_args() -> argparse.Namespace:

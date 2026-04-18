@@ -28,12 +28,21 @@ if [ ! -e $org1_org2_sorted ]; then
 else
 	echo "$org1_org2_sorted already exists"
 fi
+# cleanup: remove unsorted MAF once the sorted file is available
+if [ -s "$org1_org2_sorted" ] && [ -e "$org1_org2" ]; then
+	echo "cleanup: rm -f $org1_org2"
+	rm -f "$org1_org2"
+fi
 if [ ! -e $org1_org3_sorted ]; then
 	echo "---sorting $org1_org3"
 	echo "time maf-sort $org1_org3 >$org1_org3_sorted"
 	time maf-sort $org1_org3 >$org1_org3_sorted
 else
 	echo "$org1_org3_sorted already exists"
+fi
+if [ -s "$org1_org3_sorted" ] && [ -e "$org1_org3" ]; then
+	echo "cleanup: rm -f $org1_org3"
+	rm -f "$org1_org3"
 fi
 if [ ! -e $joinedFile ]; then
 	echo "---joining $org1_org2_sorted and $org1_org3_sorted"

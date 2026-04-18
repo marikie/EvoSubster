@@ -398,11 +398,12 @@ def process_species(
             issues.append(f"{slot}: {tax_err}")
 
     if include_tsv:
-        tsv_path = select_first_for_short_name(run_dir, f"*_*{short_name}_*.tsv", short_name)
+        tsv_pattern = f"statistics/{short_name}/singlenuc/*_*{short_name}_*.tsv"
+        tsv_path = select_first_for_short_name(run_dir, tsv_pattern, short_name)
         if tsv_path:
             data["tsv_file"] = str(tsv_path)
         else:
-            issues.append(f"{slot}: No TSV matching '*_*{short_name}_*.tsv' found.")
+            issues.append(f"{slot}: No TSV matching '{tsv_pattern}' found.")
 
     if include_sbst_ratio:
         if sbst_ratio_path and ratio_line_index is not None:
@@ -415,61 +416,66 @@ def process_species(
                     f"{sbst_ratio_path.name}."
                 )
         else:
-            issues.append(f"{slot}: Missing sbstRatio*_maflinked.out file.")
+            issues.append(f"{slot}: Missing statistics/misc/sbstRatio*.out file.")
 
-    gc_path = select_first_for_short_name(run_dir, f"*{short_name}_gcContent*.out", short_name)
+    gc_pattern = f"statistics/misc/*{short_name}_gcContent*.out"
+    gc_path = select_first_for_short_name(run_dir, gc_pattern, short_name)
     if gc_path:
         data["gc_content_file"] = str(gc_path)
         data["gc_content"] = read_file_lines(gc_path)
     else:
         issues.append(
-            f"{slot}: No GC content file matching '*{short_name}_gcContent*.out' found."
+            f"{slot}: No GC content file matching '{gc_pattern}' found."
         )
 
     if include_pdfs:
+        fig_sn = f"figs/{short_name}/singlenuc"
+        fig_dn = f"figs/{short_name}/dinuc"
         data["pdfs"] = {
-            "maflinked_norm": [
+            "norm": [
                 str(path)
                 for path in select_all_for_short_name(
-                    run_dir, f"*_*{short_name}_*_maflinked_norm.pdf", short_name
+                    run_dir, f"{fig_sn}/ratio/*_*{short_name}_*_norm.pdf", short_name
+                )
+                if "_ncds_norm" not in path.name
+            ],
+            "logratio": [
+                str(path)
+                for path in select_all_for_short_name(
+                    run_dir, f"{fig_sn}/log-ratio/*_*{short_name}_*_logRatio*.pdf", short_name
+                )
+                if "_ncds_logRatio" not in path.name
+            ],
+            "ncds_norm": [
+                str(path)
+                for path in select_all_for_short_name(
+                    run_dir, f"{fig_sn}/ratio/*_*{short_name}_*_ncds_norm.pdf", short_name
                 )
             ],
-            "maflinked_logratio": [
+            "ncds_logratio": [
                 str(path)
                 for path in select_all_for_short_name(
-                    run_dir, f"*_*{short_name}_*_maflinked_logRatio*.pdf", short_name
+                    run_dir, f"{fig_sn}/log-ratio/*_*{short_name}_*_ncds_logRatio*.pdf", short_name
                 )
             ],
-            "maflinked_ncds_norm": [
+            "dinuc_tsv": [
                 str(path)
                 for path in select_all_for_short_name(
-                    run_dir, f"*_*{short_name}_*_maflinked_ncds_norm.pdf", short_name
+                    run_dir, f"{fig_dn}/*_*{short_name}_*_dinuc.tsv.pdf", short_name
                 )
             ],
-            "maflinked_ncds_logratio": [
+            "dinuc_ncds_tsv": [
                 str(path)
                 for path in select_all_for_short_name(
-                    run_dir, f"*_*{short_name}_*_maflinked_ncds_logRatio*.pdf", short_name
-                )
-            ],
-            "maflinked_dinuc_tsv": [
-                str(path)
-                for path in select_all_for_short_name(
-                    run_dir, f"*_*{short_name}_*_maflinked_dinuc.tsv.pdf", short_name
-                )
-            ],
-            "maflinked_dinuc_ncds_tsv": [
-                str(path)
-                for path in select_all_for_short_name(
-                    run_dir, f"*_*{short_name}_*_maflinked_dinuc_ncds.tsv.pdf", short_name
+                    run_dir, f"{fig_dn}/*_*{short_name}_*_dinuc_ncds.tsv.pdf", short_name
                 )
             ],
         }
 
         required_pdfs = {
-            "maflinked_norm": "maflinked_norm.pdf",
-            "maflinked_logratio": "maflinked_logRatio*.pdf",
-            "maflinked_dinuc_tsv": "maflinked_dinuc.tsv.pdf",
+            "norm": "norm.pdf",
+            "logratio": "logRatio*.pdf",
+            "dinuc_tsv": "dinuc.tsv.pdf",
         }
         for key, description in required_pdfs.items():
             if not data["pdfs"][key]:
@@ -503,7 +509,7 @@ def collect_identity_metrics(
             issues.append(f"{key}: Missing short_name for {slot_a} or {slot_b}.")
             continue
 
-        pattern = f"*{short_a}2{short_b}_*.train"
+        pattern = f"intermediateFiles/*{short_a}2{short_b}_*.train"
         train_path = select_first(run_dir, pattern)
         if not train_path:
             issues.append(f"{key}: No train file matching '{pattern}' found.")
@@ -540,7 +546,7 @@ def process_dataset(dataset_dir: Path, idt_threshold: float) -> Tuple[Optional[D
     dataset_data["metadata_manifest"] = manifest.get("manifest_path")
     slot_map = build_manifest_slot_map(manifest)
 
-    sbst_ratio_path = select_first(latest_run, "sbstRatio*_maflinked.out")
+    sbst_ratio_path = select_first(latest_run, "statistics/misc/sbstRatio*.out")
 
     species1_meta = slot_map.get("org1")
     if not species1_meta:

@@ -14,6 +14,7 @@ messages:
   make_dir: "--- making {dir_path}"
   file_exists: "{file_name} already exists"
   dinuc_tsv: "--- generating dinuc .tsv files"
+  sbst_ratio: "--- calculating substitution ratio"
 
 # Error messages
 errors:
@@ -35,41 +36,7 @@ options:
 patterns:
   gc_content: "{org_short}_gcContent_{date}.out"
   sbst_ratio: "sbstRatio_{date}.out"
-  sbst_ratio_maflinked: "sbstRatio_{date}_maflinked.out"
-  many2one: "{org1_short}2{org2_short}_many2one_{date}.maf"
   one2one: "{org1_short}2{org2_short}_one2one_{date}.maf"
   train: "{org1_short}2{org2_short}_{date}.train"
-  maflinked: "{org1_short}2{org2_short}_one2one_{date}_maflinked.maf"
   joined: "{org1_short}_{org2_short}_{org3_short}_{date}.maf"
-  joined_maflinked: "{org1_short}_{org2_short}_{org3_short}_{date}_maflinked.maf"
   joined_ncds: "{org1_short}_{org2_short}_{org3_short}_{date}_ncds.maf"
-  joined_maflinked_ncds: "{org1_short}_{org2_short}_{org3_short}_{date}_maflinked_ncds.maf"
-  tsv: "{org_short}_{date}.tsv"
-  tsv_maflinked: "{org_short}_{date}_maflinked.tsv"
-  tsv_errprb: "{org_short}_{date}_errprb.tsv"
-  tsv_maflinked_errprb: "{org_short}_{date}_maflinked_errprb.tsv"
-  tsv_ncds: "{org_short}_{date}_ncds.tsv"
-  tsv_maflinked_ncds: "{org_short}_{date}_maflinked_ncds.tsv"
-  dinuc_tsv: "{org_short}_{date}_dinuc.tsv"
-  dinuc_maflinked_tsv: "{org_short}_{date}_maflinked_dinuc.tsv"
-  dinuc_tsv_ncds: "{org_short}_{date}_dinuc_ncds.tsv"
-  dinuc_maflinked_tsv_ncds: "{org_short}_{date}_maflinked_dinuc_ncds.tsv"
-  bed: "{org_short}_{date}.bed"
-  bed_maflinked: "{org_short}_{date}_maflinked.bed"
-
-  graph:
-    out: "{org_short}_{date}.out"
-    sbst: "{org_short}_{date}_sbstCount.out"
-    ori: "{org_short}_{date}_oriCount.out"
-  graph_maflinked:
-    out: "{org_short}_{date}_maflinked.out"
-    sbst: "{org_short}_{date}_maflinked_sbstCount.out"
-    ori: "{org_short}_{date}_maflinked_oriCount.out"
-  graph_errprb:
-    out: "{org_short}_{date}_errprb.out"
-    sbst: "{org_short}_{date}_errprb_sbstCount.out"
-    ori: "{org_short}_{date}_errprb_oriCount.out"
-  graph_maflinked_errprb:
-    out: "{org_short}_{date}_maflinked_errprb.out"
-    sbst: "{org_short}_{date}_maflinked_errprb_sbstCount.out"
-    ori: "{org_short}_{date}_maflinked_errprb_oriCount.out"
