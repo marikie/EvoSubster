@@ -44,7 +44,10 @@ fi
 # maf-linked requires a file argument (doesn't accept stdin), so write to
 # a temporary MAF first, then filter and delete the temporary.
 echo "---lastal | last-split -r, then maf-linked"
-if [ ! -e "$o2omaf" ]; then
+o2omaf_base=$(basename "$o2omaf" .maf)
+o2omaf_dir=$(dirname "$o2omaf")
+o2omaf_sorted="${o2omaf_dir}/${o2omaf_base}_sorted.maf"
+if [ ! -e "$o2omaf" ] && [ ! -e "$o2omaf_sorted" ]; then
 	o2omaf_tmp="${o2omaf}.raw"
 	echo "time lastal -P${threadNum} -H1 -C2 --split-f=MAF+ -p $trainFile $dbDir/$dbBasename $org2FASTA | last-split -r >$o2omaf_tmp"
 	time lastal -P"${threadNum}" -H1 -C2 --split-f=MAF+ -p "$trainFile" "$dbDir/$dbBasename" "$org2FASTA" \
@@ -54,6 +57,8 @@ if [ ! -e "$o2omaf" ]; then
 	if [ -s "$o2omaf" ]; then
 		rm -f "$o2omaf_tmp"
 	fi
+elif [ -e "$o2omaf_sorted" ]; then
+	echo "$o2omaf_sorted already exists"
 else
 	echo "$o2omaf already exists"
 fi
