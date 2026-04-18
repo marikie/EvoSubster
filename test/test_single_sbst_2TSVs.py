@@ -5,7 +5,7 @@ import subprocess
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "count"))
 
-import trisbst_2TSVs as script
+import single_sbst_2TSVs as script
 
 
 class TestTriUvMuts2TSVs(unittest.TestCase):

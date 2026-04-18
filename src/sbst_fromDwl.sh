@@ -361,4 +361,4 @@ if [ "$IDT_ONLY" -eq 1 ]; then
     trisbst_args+=("--idt-only")
 fi
 trisbst_args+=("$DATE" "$org1FASTA" "$org2FASTA" "$org3FASTA" "$org1GFF")
-bash "$SCRIPT_DIR/trisbst_3spc.sh" "${trisbst_args[@]}"
+bash "$SCRIPT_DIR/sbst.sh" "${trisbst_args[@]}"

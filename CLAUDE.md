@@ -32,8 +32,8 @@ Applied to 60 trios across 7 lineages (fungi, cnidarians, Apicomplexa, Phaeophyc
 │   ├── count/                         # Substitution counting (core)
 │   │   ├── Alignment.py               # Alignment/JoinedAlignment data structures
 │   │   ├── Util.py                    # MAF parsing, coordinate conversion
-│   │   ├── trisbst_2TSVs.py           # Trinucleotide SBS counting
-│   │   ├── trisbst_2TSVs_errprb.py    # Error probability filtered variant
+│   │   ├── single_sbst_2TSVs.py       # Trinucleotide SBS counting
+│   │   ├── single_sbst_2TSVs_errprob.py # Error probability filtered variant
 │   │   └── disbst_2TSVs.py            # Dinucleotide DBS counting
 │   ├── statistics/                    # Statistical tests
 │   │   ├── chi2_context.py            # Chi-squared context test
@@ -54,8 +54,8 @@ Applied to 60 trios across 7 lineages (fungi, cnidarians, Apicomplexa, Phaeophyc
 │   │   ├── run_report.sh              # Collect + render wrapper
 │   │   ├── link_tsvs.py              # TSV linking utility
 │   │   └── report_template.Rmd       # Report template
-│   ├── trisbst_3spc.sh               # Main pipeline driver
-│   ├── trisbst_3spc_fromDwl.sh       # Pipeline with genome download
+│   ├── sbst.sh                        # Main pipeline driver
+│   ├── sbst_fromDwl.sh               # Pipeline with genome download
 │   ├── dwl_organism.sh               # Genome download utility
 │   ├── generate_tsv_files.sh         # TSV regeneration
 │   └── generate_graphs.sh            # Graph regeneration
@@ -82,7 +82,7 @@ Applied to 60 trios across 7 lineages (fungi, cnidarians, Apicomplexa, Phaeophyc
 ### Full Pipeline (with genome download)
 
 ```bash
-./src/trisbst_3spc_fromDwl.sh <DATE> <ACC1> <ACC2> <ACC3> [--out-dir PATH] [--thread N] [--idt-only]
+./src/sbst_fromDwl.sh <DATE> <ACC1> <ACC2> <ACC3> [--out-dir PATH] [--thread N] [--idt-only]
 ```
 
 - ACC1 = outgroup accession, ACC2/ACC3 = ingroup accessions
@@ -90,7 +90,7 @@ Applied to 60 trios across 7 lineages (fungi, cnidarians, Apicomplexa, Phaeophyc
 ### Pipeline from Existing FASTA
 
 ```bash
-./src/trisbst_3spc.sh <DATE> <ORG1.fa> <ORG2.fa> <ORG3.fa> <ORG1.gff|NO_GFF_FILE> [--out-dir PATH] [--thread N] [--idt-only]
+./src/sbst.sh <DATE> <ORG1.fa> <ORG2.fa> <ORG3.fa> <ORG1.gff|NO_GFF_FILE> [--out-dir PATH] [--thread N] [--idt-only]
 ```
 
 ### Bulk Runs
@@ -121,10 +121,10 @@ Tests must be run from `test/` (fixtures use relative paths to `./fixtures/`).
 cd test
 
 # Run active test modules
-python -m unittest test_subRatio test_trisbst_2TSVs test_trisbst_2TSVs_errprb
+python -m unittest test_subRatio test_single_sbst_2TSVs test_single_sbst_2TSVs_errprob
 
 # Run a single test class
-python -m unittest test_trisbst_2TSVs.TestTriUvMuts2TSVs
+python -m unittest test_single_sbst_2TSVs.TestTriUvMuts2TSVs
 
 # Run a single test method
 python -m unittest test_subRatio.TestSubRatio.test_count
@@ -138,7 +138,7 @@ After modifying any script under `src/` or `config/`, run the full pipeline (dow
 
 ```bash
 rm -rf ./test_genomes
-./src/trisbst_3spc_fromDwl.sh <DATE> GCA_907165135.1 GCA_004367875.1 GCA_004367855.1 --base-genomes ./test_genomes --out-dir ./test_results
+./src/sbst_fromDwl.sh <DATE> GCA_907165135.1 GCA_004367875.1 GCA_004367855.1 --genomes-dir ./test_genomes --out-dir ./test_results
 ```
 
 - `GCA_907165135.1` = outgroup

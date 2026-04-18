@@ -33,7 +33,7 @@ All commands below are run from the repository root. Pipeline entry points live 
 ### Start from genome downloads
 
 ```bash
-./src/trisbst_3spc_fromDwl.sh <DATE> <ORG1_ACCESSION> <ORG2_ACCESSION> <ORG3_ACCESSION> [--genomes-dir PATH] [--out-dir PATH] [--thread N] [--idt-only]
+./src/sbst_fromDwl.sh <DATE> <ORG1_ACCESSION> <ORG2_ACCESSION> <ORG3_ACCESSION> [--genomes-dir PATH] [--out-dir PATH] [--thread N] [--idt-only]
 ```
 
 - `DATE` is any run label (for example `20250131`).
@@ -49,12 +49,12 @@ During execution the wrapper:
 - Downloads each accession via `datasets` (includes: `genome`, `gff3`, `rna`, `cds`, `protein`, `seq-report`). If a genomic FASTA is already present and passes a basic validity check (non-empty, starts with `>`), the download is skipped. If the file fails validation (e.g. truncated from a previous interrupted download), it is re-downloaded automatically. Pass `--force` to bypass the check and re-download unconditionally.
 - Unpacks the archives, prunes helper directories, and moves FASTA/GFF assets into the genome directory.
 - Detects `genomic.gff` for the outgroup; if missing, downstream steps receive `NO_GFF_FILE`.
-- Resolves FASTA paths and invokes `trisbst_3spc.sh` with the appropriate arguments.
+- Resolves FASTA paths and invokes `sbst.sh` with the appropriate arguments.
 
 ### Reuse existing FASTA assets
 
 ```bash
-./src/trisbst_3spc.sh <DATE> <ORG1_FASTA> <ORG2_FASTA> <ORG3_FASTA> <ORG1_GFF|NO_GFF_FILE> [--out-dir PATH] [--thread N] [--idt-only]
+./src/sbst.sh <DATE> <ORG1_FASTA> <ORG2_FASTA> <ORG3_FASTA> <ORG1_GFF|NO_GFF_FILE> [--out-dir PATH] [--thread N] [--idt-only]
 ```
 
 - Provide absolute paths to the FASTA files.

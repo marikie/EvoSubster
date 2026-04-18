@@ -20,7 +20,7 @@ messages:
 errors:
   arg_count: "You need {arg_num} arguments"
   usage: |
-    Usage: ./trisbst_3spc.sh <date> <org1.fa> <org2.fa> <org3.fa> <org1.gff|NO_GFF_FILE> [--out-dir /absolute/path/to/outputs]
+    Usage: ./sbst.sh <date> <org1.fa> <org2.fa> <org3.fa> <org1.gff|NO_GFF_FILE> [--out-dir /absolute/path/to/outputs]
     - org1 should be the outgroup.
     - All FASTA file paths must be absolute paths.
     - If org1 annotation (GFF file) is unavailable, enter "NO_GFF_FILE"; otherwise, provide the GFF file path.

@@ -13,7 +13,7 @@ fi
 Date=$1
 
 DRIVER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-script="$DRIVER_DIR/../src/trisbst_3spc_fromDwl.sh"
+script="$DRIVER_DIR/../src/sbst_fromDwl.sh"
 ROOT_DIR="$(cd "$DRIVER_DIR/.." && pwd)"
 outDir=$ROOT_DIR/results/phaeophyceae
 logDir=$ROOT_DIR/log
