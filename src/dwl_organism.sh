@@ -253,7 +253,7 @@ config_file="$ROOT_DIR/config/dwl_config.yaml"
 if command -v yq >/dev/null 2>&1 && [ -f "$config_file" ]; then
     FASTA_PATTERN_TMPL=$(yq eval '.patterns.fasta' "$config_file" 2>/dev/null)
 fi
-FASTA_PATTERN_TMPL="${FASTA_PATTERN_TMPL:-{org_id}*.fna}"
+[ -z "$FASTA_PATTERN_TMPL" ] && FASTA_PATTERN_TMPL='{org_id}*.fna'
 
 # Load download includes from config (fall back to default)
 if command -v yq >/dev/null 2>&1 && [ -f "$config_file" ]; then
