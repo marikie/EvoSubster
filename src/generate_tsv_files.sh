@@ -31,7 +31,7 @@ org3tsv_ncds=$9
 org2_dinuc_tsv_ncds=${10}
 org3_dinuc_tsv_ncds=${11}
 
-# Trinuc TSV files
+# Single-nuc TSV files
 echo "---making .tsv trinucleotide substitution files"
 generate_tsv "$joinedFile" "$org2tsv" "$org3tsv" "$scripts_analysis_path/single_sbst_2TSVs.py"
 
@@ -41,9 +41,11 @@ generate_tsv "$joinedFile" "$org2_dinuc_tsv" "$org3_dinuc_tsv" "$scripts_analysi
 
 # Generate ncds TSV files if ncds arguments are provided
 if [ -n "$joinedFile_ncds" ]; then
+    # Single-nuc ncds TSV files
     echo "---making .tsv trinucleotide substitution files (ncds)"
     generate_tsv "$joinedFile_ncds" "$org2tsv_ncds" "$org3tsv_ncds" "$scripts_analysis_path/single_sbst_2TSVs.py"
 
+    # Dinuc ncds TSV files
     echo "---making .tsv dinucleotide substitution files (ncds)"
     generate_tsv "$joinedFile_ncds" "$org2_dinuc_tsv_ncds" "$org3_dinuc_tsv_ncds" "$scripts_analysis_path/disbst_2TSVs.py"
 fi

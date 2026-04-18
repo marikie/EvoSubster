@@ -35,12 +35,12 @@ All commands below are run from the repository root. Pipeline entry points live 
 ### Start from genome downloads
 
 ```bash
-./src/sbst_fromDwl.sh <DATE> <ORG1_ACCESSION> <ORG2_ACCESSION> <ORG3_ACCESSION> [--genomes-dir PATH] [--out-dir PATH] [--thread N] [--idt-only]
+./src/sbst_fromDwl.sh <DATE> <ORG1_ACCESSION> <ORG2_ACCESSION> <ORG3_ACCESSION> [--genome-dir PATH] [--out-dir PATH] [--thread N] [--idt-only]
 ```
 
 - `DATE` is any run label (for example `20250131`).
 - `ORG1_ACCESSION`, `ORG2_ACCESSION`, `ORG3_ACCESSION` are NCBI genome accession IDs; `ORG1_ACCESSION` should be the outgroup.
-- `--genomes-dir` overrides the genome download directory (default: `./genomes`).
+- `--genome-dir` overrides the genome download directory (default: `./genomes`).
 - `--out-dir` overrides the output directory (default: `./results`).
 - `--thread N` sets the number of alignment threads (default: 8).
 - `--idt-only` runs only the `last-train` identity checks and exits.

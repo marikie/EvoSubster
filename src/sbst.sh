@@ -1,5 +1,29 @@
 #!/bin/bash
 
+for _arg in "$@"; do
+    if [[ "$_arg" == "-h" || "$_arg" == "--help" ]]; then
+        cat <<'EOF'
+Usage: sbst.sh <DATE> <ORG1.fa> <ORG2.fa> <ORG3.fa> <ORG1.gff|NO_GFF_FILE> [OPTIONS]
+
+Run the substitution spectrum pipeline from existing FASTA files.
+
+Positional arguments:
+  DATE                    Run date (e.g. 20240101)
+  ORG1.fa                 Outgroup FASTA file path
+  ORG2.fa                 Ingroup FASTA file path
+  ORG3.fa                 Ingroup FASTA file path
+  ORG1.gff|NO_GFF_FILE    GFF annotation for outgroup, or literal NO_GFF_FILE
+
+Options:
+  --out-dir PATH   Output directory (default: ./results)
+  --thread N       Number of threads for LAST alignment (default: 8)
+  --idt-only       Stop after checking sequence percent identity among three genomes; skip downstream analysis
+  -h, --help       Show this help message and exit
+EOF
+        exit 0
+    fi
+done
+
 lastal --version
 
 # Resolve script locations and configuration relative to this script
@@ -370,15 +394,6 @@ else
     echo "$sbstRatio already exists"
 fi
 
-# Generate dinuc .tsv files
-if [ ! -e "$org2_dinuc_tsv" ] || [ ! -e "$org3_dinuc_tsv" ]; then
-	echo "$(get_config '.messages.dinuc_tsv')"
-echo "time python $COUNT_DIR/disbst_2TSVs.py $joinedFile -o2 $org2_dinuc_tsv -o3 $org3_dinuc_tsv"
-time python "$COUNT_DIR/disbst_2TSVs.py" "$joinedFile" -o2 "$org2_dinuc_tsv" -o3 "$org3_dinuc_tsv"
-else
-	echo "$org2_dinuc_tsv and $org3_dinuc_tsv already exists"
-fi
-
 # If there is a gff file of org1, cut off the CDS regions
 # and count the number of substitutions in non-coding regions
 if [ "$org1GFF" != "NO_GFF_FILE" ]; then
@@ -441,17 +456,5 @@ bash "$SCRIPT_DIR/generate_graphs.sh" \
     "$R_DIR" \
     "$figs_org2" \
     "$figs_org3"
-
-# collect_pca_script="$SCRIPT_DIR/collect_for_pca.sh"
-# if [ -x "$collect_pca_script" ]; then
-#     bash "$collect_pca_script" \
-#         "$DATE" \
-#         "$org1ID" "$org2ID" "$org3ID" \
-#         "$org1ShortName" "$org2ShortName" "$org3ShortName" \
-#         "$org1DirName" "$org2DirName" "$org3DirName" \
-#         "$outDirPath"
-# else
-#     echo "Warning: collect_for_pca.sh not found or not executable at $collect_pca_script" >&2
-# fi
 
 echo "[[ This is the end of the pipeline ]]"

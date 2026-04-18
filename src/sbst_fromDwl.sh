@@ -56,6 +56,28 @@ FORCE_DOWNLOAD=0
 POSITIONAL_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        -h|--help)
+            cat <<'EOF'
+Usage: sbst_fromDwl.sh <DATE> <ACC1> <ACC2> <ACC3> [OPTIONS]
+
+Download genomes from NCBI and run the substitution spectrum pipeline.
+
+Positional arguments:
+  DATE     Run date (e.g. 20240101)
+  ACC1     Outgroup accession ID (e.g. GCA_023078555.1)
+  ACC2     Ingroup accession ID (e.g. GCA_900538255.1)
+  ACC3     Ingroup accession ID (e.g. GCA_024500015.1)
+
+Options:
+  --genome-dir PATH    Genome storage directory (default: ./genomes)
+  --out-dir PATH       Output directory (default: ./results)
+  --thread N           Number of threads for LAST alignment (default: 8)
+  --idt-only           Stop after checking sequence percent identity among three genomes; skip downstream analysis
+  --force              Re-download genomes even if local files exist
+  -h, --help           Show this help message and exit
+EOF
+            exit 0
+            ;;
         --idt-only)
             IDT_ONLY=1
             shift
@@ -110,19 +132,19 @@ while [[ $# -gt 0 ]]; do
             shift
             continue
             ;;
-        --genomes-dir)
+        --genome-dir)
             if [[ -z "${2:-}" ]]; then
-                echo "Error: --genomes-dir requires a non-empty path argument." >&2
+                echo "Error: --genome-dir requires a non-empty path argument." >&2
                 exit 1
             fi
             BASE_GENOMES_OVERRIDE="$2"
             shift 2
             continue
             ;;
-        --genomes-dir=*)
+        --genome-dir=*)
             BASE_GENOMES_OVERRIDE="${1#*=}"
             if [[ -z "$BASE_GENOMES_OVERRIDE" ]]; then
-                echo "Error: --genomes-dir requires a non-empty path argument." >&2
+                echo "Error: --genome-dir requires a non-empty path argument." >&2
                 exit 1
             fi
             shift
