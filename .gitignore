@@ -2,6 +2,8 @@
 results/
 genomes/
 log/
+eg_results/intermediateFiles/
+eg_results/metadata/
 
 # Large intermediate files
 *.maf
@@ -11,9 +13,6 @@ log/
 *.fa
 *.gff
 *.gff3
-
-# Compiled binary
-bin/
 
 # Python
 __pycache__/
