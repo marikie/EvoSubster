@@ -26,36 +26,36 @@ sanitize_for_path() {
     echo "$name"
 }
 
-# Check whether FASTA files already exist in org_dir for given accession
+# Check whether a usable genomic FASTA already exists in org_dir for given accession
 has_fasta_files() {
     local org_dir="$1"
     local accession="$2"
-    # Pattern uses {org_id} placeholder from config; fall back to *.fna
-    local pattern="${FASTA_PATTERN_TMPL//\{org_id\}/$accession}"
-
-    if compgen -G "$org_dir/$pattern" >/dev/null 2>&1; then
-        return 0
-    fi
-    if compgen -G "$org_dir"/*.fna >/dev/null 2>&1; then
-        return 0
-    fi
-    return 1
+    [ -n "$(find_first_fasta "$org_dir" "$accession")" ]
 }
 
-# Find the first FASTA file in org_dir for given accession
+# Find the first genomic FASTA file in org_dir for given accession.
+# Only accepts files matching the accession-prefixed pattern from config and
+# excludes non-genomic companions (cds_from_genomic.fna, rna.fna, protein.faa).
+# Accepting a non-genomic FASTA as the reference would silently break the
+# downstream CDS filter because its seq names wouldn't match the GFF.
 find_first_fasta() {
     local org_dir="$1"
     local accession="$2"
     local pattern="${FASTA_PATTERN_TMPL//\{org_id\}/$accession}"
-    local candidate
-
-    candidate=$(compgen -G "$org_dir/$pattern" | head -n1)
-    if [ -n "$candidate" ]; then
-        echo "$candidate"
+    local f
+    while IFS= read -r f; do
+        [ -z "$f" ] && continue
+        case "$(basename "$f")" in
+            cds_from_genomic.fna|rna.fna|protein.faa)
+                continue
+                ;;
+            *_cds_from_genomic.fna|*_rna.fna|*_protein.faa)
+                continue
+                ;;
+        esac
+        echo "$f"
         return
-    fi
-    candidate=$(compgen -G "$org_dir"/*.fna | head -n1)
-    echo "$candidate"
+    done < <(compgen -G "$org_dir/$pattern" 2>/dev/null || true)
 }
 
 # Fetch NCBI Datasets genome summary JSON, parse organism names, save to dest_dir.

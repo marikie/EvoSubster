@@ -98,8 +98,35 @@ def main(args):
         v = mergedRanges(v)
         v = itertools.starmap(shrunkRange, v)
         rangesPerSequence[k] = list(v)
+
+    gffSeqNames = frozenset(rangesPerSequence)
+    totalAlns = 0
+    matchedAlns = 0
+    sampleMafSeqName = None
     for a in readMafAlignments(openFile(args.maf)):
+        totalAlns += 1
+        topSeqName = a[0][0]
+        if sampleMafSeqName is None:
+            sampleMafSeqName = topSeqName
+        if topSeqName in gffSeqNames:
+            matchedAlns += 1
         cutAlignment(a, rangesPerSequence)
+
+    # If GFF had annotations but no MAF alignment referenced a matching
+    # sequence, the reference FASTA and GFF almost certainly describe different
+    # assemblies (e.g. cds_from_genomic.fna was used instead of the genomic
+    # FASTA). Fail loudly -- otherwise the "ncds" MAF is identical to the input.
+    if gffSeqNames and totalAlns > 0 and matchedAlns == 0:
+        sampleGffSeqName = next(iter(gffSeqNames))
+        sys.stderr.write(
+            "Error: No MAF top-sequence matched any GFF sequence;"
+            " CDS filtering is a no-op.\n"
+            "  Sample MAF top-seq name: {!r}\n"
+            "  Sample GFF seq name:     {!r}\n"
+            "  Common cause: the reference alignment used a non-genomic FASTA\n"
+            "  (e.g. cds_from_genomic.fna) or a GFF from a different assembly.\n"
+            .format(sampleMafSeqName, sampleGffSeqName))
+        sys.exit(1)
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=

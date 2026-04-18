@@ -385,9 +385,20 @@ if [ "$org1GFF" != "NO_GFF_FILE" ]; then
 	echo "There is a gff file of org1"
 	echo "maf-cut (cut off the CDS regions)"
 	if [ ! -e "$joinedFile_ncds" ]; then
-		"$ALIGN_DIR/maf-cut-cds-uglier.py" \
-			"$org1GFF" \
-			"$joinedFile" >"$joinedFile_ncds"
+		# Write to a tmp file first; rename on success so a failed run
+		# (e.g. GFF/FASTA seq-name mismatch) leaves no partial ncds MAF
+		# behind that the next run would blindly skip regenerating.
+		tmp_ncds="${joinedFile_ncds}.tmp"
+		if "$ALIGN_DIR/maf-cut-cds-uglier.py" \
+				"$org1GFF" \
+				"$joinedFile" >"$tmp_ncds"; then
+			mv "$tmp_ncds" "$joinedFile_ncds"
+		else
+			rc=$?
+			rm -f "$tmp_ncds"
+			echo "Error: maf-cut-cds-uglier.py failed (exit $rc); aborting." >&2
+			exit "$rc"
+		fi
 	else
 		echo "$joinedFile_ncds already exists"
 	fi
