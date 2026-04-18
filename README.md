@@ -17,7 +17,7 @@ Install the following command-line tools before running any scripts:
 - [python3](https://www.python.org/) (3.8 or later) with the standard library
 - [R](https://www.r-project.org/) (≥4.0) with packages: `stringr`, `RColorBrewer`, `showtext`, `jsonlite`, `curl`, `dplyr`, `ggplot2`, `rlang`, `sysfonts`
 
-Make sure the executables are discoverable in your `PATH`. 
+Make sure the executables are discoverable in your `PATH`.
 
 ## Repository Setup
 
@@ -26,36 +26,22 @@ git clone https://github.com/marikie/EvoSubster.git
 cd EvoSubster
 ```
 
-Alignment entry points live under `EvoSubster/last/`, analytics helpers under `EvoSubster/analysis/`, and plotting code under `EvoSubster/analysis/R/`.
-
-## Configuration
-### `dwl_config.yaml`
-
-Update `config/dwl_config.yaml` so downloads land in your genome directory and runs write to your output directory. Paths are resolved relative to the repository root; use an absolute path to point outside the repo.
-
-```yaml
-paths:
-  # Directory for downloaded genomes (relative to repo root by default)
-  base_genomes: "./genomes"
-  # Directory for downstream run outputs
-  out_dir: "./results"
-```
-
-Override either default per run with the `--base-genomes` / `--out-dir` flags described below.
+All commands below are run from the repository root. Pipeline entry points live under `src/`, alignment helpers under `src/align/`, counting scripts under `src/count/`, and R visualizations under `src/visualize/`.
 
 ## Running the Pipeline
-
-All commands below should be executed from `EvoSubster/last/`.
 
 ### Start from genome downloads
 
 ```bash
-./trisbst_3spc_fromDwl.sh [DATE] [ORG1_ACCESSION] [ORG2_ACCESSION] [ORG3_ACCESSION] [--out-dir /absolute/path/to/outputs]
+./src/trisbst_3spc_fromDwl.sh <DATE> <ORG1_ACCESSION> <ORG2_ACCESSION> <ORG3_ACCESSION> [--genomes-dir PATH] [--out-dir PATH] [--thread N] [--idt-only]
 ```
 
 - `DATE` is any run label (for example `20250131`).
 - `ORG1_ACCESSION`, `ORG2_ACCESSION`, `ORG3_ACCESSION` are NCBI genome accession IDs; `ORG1_ACCESSION` should be the outgroup.
-- `--out-dir` is optional. When omitted, outputs go under `paths.out_dir` defined in `sbst_config.yaml`.
+- `--genomes-dir` overrides the genome download directory (default: `./genomes`).
+- `--out-dir` overrides the output directory (default: `./results`).
+- `--thread N` sets the number of alignment threads (default: 8).
+- `--idt-only` runs only the `last-train` identity checks and exits.
 
 During execution the wrapper:
 
@@ -67,22 +53,22 @@ During execution the wrapper:
 ### Reuse existing FASTA assets
 
 ```bash
-./trisbst_3spc.sh [DATE] [ORG1_FASTA] [ORG2_FASTA] [ORG3_FASTA] [ORG1_GFF|NO_GFF_FILE] [--out-dir /absolute/path/to/outputs]
+./src/trisbst_3spc.sh <DATE> <ORG1_FASTA> <ORG2_FASTA> <ORG3_FASTA> <ORG1_GFF|NO_GFF_FILE> [--out-dir PATH] [--thread N] [--idt-only]
 ```
 
 - Provide absolute paths to the FASTA files.
 - Supply the outgroup GFF path or use `NO_GFF_FILE`.
-- `--out-dir` behaves the same as in the download wrapper.
+- `--out-dir`, `--thread`, and `--idt-only` behave the same as in the download wrapper.
 
 This script:
 
 - Generates short organism identifiers for consistent filenames.
-- Computes GC content for ingroup genomes.
+- Computes GC content for all three genomes.
 - Runs `last_train.sh` on every pair of the three species to calculate their substitution percent identity.
 - Produces paired `one2one` alignments for `org1` vs `org2` and `org1` vs `org3`.
-- Joins the MAFs into three-way alignments.
+- Joins the MAFs into a three-way alignment.
 - Calls Python utilities to create TSV summaries.
-- Uses the outgroup GFF, when available, to cut off the CDS regions.
+- Uses the outgroup GFF, when available, to cut CDS regions and generate non-coding TSVs.
 - Invokes `generate_graphs.sh` to render R visualizations.
 
 ## Outputs
@@ -91,54 +77,64 @@ Results reside under:
 
 ```
 <out_dir>/<ORG1short>_<ORG2short>_<ORG3short>/<DATE>/
+├── intermediateFiles/       # MAF and LAST training files
+├── figs/
+│   ├── <org2short>/singlenuc/{ratio,log-ratio,count}/
+│   ├── <org2short>/dinuc/
+│   ├── <org3short>/singlenuc/{ratio,log-ratio,count}/
+│   └── <org3short>/dinuc/
+└── statistics/
+    ├── <org2short>/{singlenuc,dinuc}/
+    ├── <org3short>/{singlenuc,dinuc}/
+    └── misc/
 ```
 
 Representative outputs include:
 
 - `*.train`: substitution percent identity estimates from `LAST` (see [last-train](https://gitlab.com/mcfrith/last/-/blob/main/doc/last-train.rst?ref_type=heads))
-- `*_gcContent_*.out`: whole-genome GC content for each ingroup FASTA
-- `*_sbstRatio*.out`: single-base substitution percentages without considering neighboring bases (see `EvoSubster/analysis/subRatio.py`)
+- `*_gcContent_*.out`: whole-genome GC content for each FASTA
+- `*_sbstRatio*.out`: single-base substitution percentages without considering neighboring bases (see `src/metrics/subRatio.py`)
 - `*.tsv`: single-base substitution counts with maf-link filtering applied during alignment, removing alignments between non-homologous insertions of homologous transposons (see [maf-linked](https://gitlab.com/mcfrith/last/-/blob/main/doc/maf-linked.rst?ref_type=heads))
 - `*_dinuc.tsv`: dinucleotide substitution counts
-- `*_sbst.pdf`: bar chart of single-base substitution counts
-- `*_ori.pdf`: bar chart of original trinucleotide counts
+- `*_ncds.tsv`, `*_dinuc_ncds.tsv`: non-coding-region variants of the above (only when a GFF is provided)
 - `*_norm.pdf`: single-base substitutions normalized by original trinucleotide counts
 - `*_logRatio.pdf`: log₂ enrichment of substitution rates relative to the overall mean across substitution types
 - `*_dinuc*.pdf`: normalized dinucleotide substitution counts
-- `*_ncds*`: files derived from non-coding regions when a GFF is available
 
 Re-running the pipeline skips steps whose outputs already exist.
 
 ## Example
+
 The figures below are the outputs of a fish trio run. The organisms are:
-- *Archocentrus centrarchus* (GCF_007364275.1) — outgroup
-- *Amphilophus citrinellus* (GCA_013435755.1) — ingroup
-- *Amphilophus zaliosus* (GCA_015108585.1) — ingroup
+
+- _Archocentrus centrarchus_ (GCF_007364275.1) — outgroup
+- _Amphilophus citrinellus_ (GCA_013435755.1) — ingroup
+- _Amphilophus zaliosus_ (GCA_015108585.1) — ingroup
 
 These three fish are types of Central American cichlids, a group of freshwater fish known for being intelligent, territorial, and very protective of their young.
 
-*Archocentrus centrarchus* is the smallest and most adaptable of the trio. It lives in shallow, plant-filled waters and had a modest, striped appearance. It is generally calmer and suited to sheltered environments.
+_Archocentrus centrarchus_ is the smallest and most adaptable of the trio. It lives in shallow, plant-filled waters and had a modest, striped appearance. It is generally calmer and suited to sheltered environments.
 
-*Amphilophus citrinellus* is much larger and bolder. It lives mainly in large lakes and connected rivers. It is famous for its bright orange or white coloring and strong personality. This fish is very aggressive and likes to dominate its territory.
+_Amphilophus citrinellus_ is much larger and bolder. It lives mainly in large lakes and connected rivers. It is famous for its bright orange or white coloring and strong personality. This fish is very aggressive and likes to dominate its territory.
 
-*Amphilophus zaliosus* is slimmer and faster. It lives only in Lake Apoyo in Nicaragua and prefers open water rather than the shoreline. It hunts other small fish and has a sleek, arrow-shaped body that helps it swim quickly.
+_Amphilophus zaliosus_ is slimmer and faster. It lives only in Lake Apoyo in Nicaragua and prefers open water rather than the shoreline. It hunts other small fish and has a sleek, arrow-shaped body that helps it swim quickly.
 
 Together, these species show how fish from the same family can evolve to look and behave very differently depending on where and how they live — from quiet shallow waters to powerful lake predators.
 
-Single-base substitution spectrum for *Amphilophus citrinellus*:
+Single-base substitution spectrum for _Amphilophus citrinellus_:
 ![ampCit_norm](./egfigs/ampCit_20250407_maflinked_ncds_norm.png)
 
-Single-base substitution spectrum for *Amphilophus zaliosus*:
+Single-base substitution spectrum for _Amphilophus zaliosus_:
 ![ampZal_norm](./egfigs/ampZal_20250407_maflinked_ncds_norm.png)
 
-Log-scaled single-base substitution spectrum for *Amphilophus citrinellus*:
+Log-scaled single-base substitution spectrum for _Amphilophus citrinellus_:
 ![ampCit_norm_log](./egfigs/ampCit_20250407_maflinked_ncds_logRatio.png)
 
-Log-scaled single-base substitution spectrum for *Amphilophus zaliosus*:
+Log-scaled single-base substitution spectrum for _Amphilophus zaliosus_:
 ![ampZal_norm_log](./egfigs/ampZal_20250407_maflinked_ncds_logRatio.png)
 
-Dinucleotide substitution spectrum for *Amphilophus citrinellus*:
+Dinucleotide substitution spectrum for _Amphilophus citrinellus_:
 ![ampCit_dinuc](./egfigs/ampCit_20250407_maflinked_ncds_dinuc.tsv.png)
 
-Dinucleotide substitution spectrum for *Amphilophus zaliosus* :
+Dinucleotide substitution spectrum for _Amphilophus zaliosus_ :
 ![ampZal_dinuc](./egfigs/ampZal_20250407_maflinked_ncds_dinuc.tsv.png)

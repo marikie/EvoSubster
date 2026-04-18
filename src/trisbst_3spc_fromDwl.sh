@@ -104,19 +104,19 @@ while [[ $# -gt 0 ]]; do
             shift
             continue
             ;;
-        --base-genomes)
+        --genomes-dir)
             if [[ -z "${2:-}" ]]; then
-                echo "Error: --base-genomes requires a non-empty path argument." >&2
+                echo "Error: --genomes-dir requires a non-empty path argument." >&2
                 exit 1
             fi
             BASE_GENOMES_OVERRIDE="$2"
             shift 2
             continue
             ;;
-        --base-genomes=*)
+        --genomes-dir=*)
             BASE_GENOMES_OVERRIDE="${1#*=}"
             if [[ -z "$BASE_GENOMES_OVERRIDE" ]]; then
-                echo "Error: --base-genomes requires a non-empty path argument." >&2
+                echo "Error: --genomes-dir requires a non-empty path argument." >&2
                 exit 1
             fi
             shift
