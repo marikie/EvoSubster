@@ -34,8 +34,10 @@ Thumbs.db
 archive/
 
 # Temporary
-tmp/
-scripts/
+test_genomes/
+test_results/
+bench_genomes/
+bench_results/
 
 # Large documents
 *.pdf

@@ -11,6 +11,7 @@ The core biological model: given three genomes where org1 is the outgroup, subst
 Applied to 60 trios across 7 lineages (fungi, cnidarians, Apicomplexa, Phaeophyceae, Oomycota, Porifera, Arthropoda) and reported in the PhD thesis.
 
 **Parsimony case classification:**
+
 - Species A = outgroup, B/C = ingroups
 - Case 0: all three identical → no substitution, increment count
 - Case 1: only A differs → ambiguous, excluded
@@ -79,28 +80,34 @@ Applied to 60 trios across 7 lineages (fungi, cnidarians, Apicomplexa, Phaeophyc
 ## Build and Run Commands
 
 ### Full Pipeline (with genome download)
+
 ```bash
 ./src/trisbst_3spc_fromDwl.sh <DATE> <ACC1> <ACC2> <ACC3> [--out-dir PATH] [--thread N] [--idt-only]
 ```
+
 - ACC1 = outgroup accession, ACC2/ACC3 = ingroup accessions
 
 ### Pipeline from Existing FASTA
+
 ```bash
 ./src/trisbst_3spc.sh <DATE> <ORG1.fa> <ORG2.fa> <ORG3.fa> <ORG1.gff|NO_GFF_FILE> [--out-dir PATH] [--thread N] [--idt-only]
 ```
 
 ### Bulk Runs
+
 ```bash
 bash drivers/bulkRun_fungi.sh <DATE>
 ```
 
 ### Regenerate TSV/Plots Only
+
 ```bash
 ./src/generate_tsv_files.sh <joined.maf> <out_dir>
 ./src/generate_graphs.sh <tsv_dir>
 ```
 
 ### Reporting
+
 ```bash
 python src/report/collect_run_summary.py <results_root> [--output summary.json] [--idt-threshold 80]
 bash src/report/render_report.sh -j summary.json [-o output.docx] [-f word_document]
@@ -130,7 +137,8 @@ Test fixtures (`.maf` input and `.tsv` expected output) are in `test/fixtures/`.
 After modifying any script under `src/` or `config/`, run the full pipeline (download + analysis) with this test trio to verify nothing is broken:
 
 ```bash
-./src/trisbst_3spc_fromDwl.sh <DATE> GCA_907165135.1 GCA_004367875.1 GCA_004367855.1
+rm -rf ./test_genomes
+./src/trisbst_3spc_fromDwl.sh <DATE> GCA_907165135.1 GCA_004367875.1 GCA_004367855.1 --base-genomes ./test_genomes --out-dir ./test_results
 ```
 
 - `GCA_907165135.1` = outgroup
@@ -145,6 +153,7 @@ If the pipeline produces any errors, fix them and re-run until it completes with
 MAF file → `Util.getJoinedAlignmentObj()` → `JoinedAlignment` objects (with `gSeq1`/`gSeq2`/`gSeq3`) → sliding-window counting → TSV output → R visualization
 
 ### Pipeline Flow
+
 1. GC content calculation (`src/metrics/gc_content.sh`)
 2. LAST training — percent identity between all three pairs (`src/align/last_train.sh`)
 3. Pairwise one-to-one alignments (`src/align/one2one.sh`)
@@ -188,7 +197,7 @@ MAF file → `Util.getJoinedAlignmentObj()` → `JoinedAlignment` objects (with 
 ## Data File Conventions
 
 - `results/<lineage>/<triplet>/<DATE>/` — analysis output per trio run
-- Species are abbreviated (e.g., `oikDio` = *Oikopleura dioica*)
+- Species are abbreviated (e.g., `oikDio` = _Oikopleura dioica_)
 - `.maf` files: pairwise (`one2one`, `many2one`) and joined three-way
 - `.train` files: LAST training parameters
 - `.tsv` files: substitution count tables
