@@ -42,10 +42,11 @@ All commands below are run from the repository root. Pipeline entry points live 
 - `--out-dir` overrides the output directory (default: `./results`).
 - `--thread N` sets the number of alignment threads (default: 8).
 - `--idt-only` runs only the `last-train` identity checks and exits.
+- `--force` re-downloads all three genomes even if local files already exist.
 
 During execution the wrapper:
 
-- Downloads each accession with the file types listed in `dwl_config.yaml`.
+- Downloads each accession via `datasets` (includes: `genome`, `gff3`, `rna`, `cds`, `protein`, `seq-report`). If a genomic FASTA is already present and passes a basic validity check (non-empty, starts with `>`), the download is skipped. If the file fails validation (e.g. truncated from a previous interrupted download), it is re-downloaded automatically. Pass `--force` to bypass the check and re-download unconditionally.
 - Unpacks the archives, prunes helper directories, and moves FASTA/GFF assets into the genome directory.
 - Detects `genomic.gff` for the outgroup; if missing, downstream steps receive `NO_GFF_FILE`.
 - Resolves FASTA paths and invokes `trisbst_3spc.sh` with the appropriate arguments.

@@ -52,11 +52,17 @@ OUT_DIR_OVERRIDE=""
 BASE_GENOMES_OVERRIDE=""
 IDT_ONLY=0
 THREAD_NUM_OVERRIDE=8
+FORCE_DOWNLOAD=0
 POSITIONAL_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --idt-only)
             IDT_ONLY=1
+            shift
+            continue
+            ;;
+        --force)
+            FORCE_DOWNLOAD=1
             shift
             continue
             ;;
@@ -184,9 +190,11 @@ if [ ! -d "$out_dir_base" ]; then
 fi
 
 # Download genome + taxonomy for each accession via dwl_organism.sh
-org1Result=$(bash "$SCRIPT_DIR/dwl_organism.sh" "$org1ID" --out-dir "$base_genomes") || exit 1
-org2Result=$(bash "$SCRIPT_DIR/dwl_organism.sh" "$org2ID" --out-dir "$base_genomes") || exit 1
-org3Result=$(bash "$SCRIPT_DIR/dwl_organism.sh" "$org3ID" --out-dir "$base_genomes") || exit 1
+_dwl_flags=()
+[ "$FORCE_DOWNLOAD" -eq 1 ] && _dwl_flags+=("--force")
+org1Result=$(bash "$SCRIPT_DIR/dwl_organism.sh" "$org1ID" --out-dir "$base_genomes" "${_dwl_flags[@]}") || exit 1
+org2Result=$(bash "$SCRIPT_DIR/dwl_organism.sh" "$org2ID" --out-dir "$base_genomes" "${_dwl_flags[@]}") || exit 1
+org3Result=$(bash "$SCRIPT_DIR/dwl_organism.sh" "$org3ID" --out-dir "$base_genomes" "${_dwl_flags[@]}") || exit 1
 
 IFS='|' read -r org1FullName org1FASTA org1SummaryJson org1RawName org1NcbiFullName org1TaxJson <<< "$org1Result"
 IFS='|' read -r org2FullName org2FASTA org2SummaryJson org2RawName org2NcbiFullName org2TaxJson <<< "$org2Result"

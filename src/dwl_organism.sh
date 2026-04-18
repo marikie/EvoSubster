@@ -33,6 +33,12 @@ has_fasta_files() {
     [ -n "$(find_first_fasta "$org_dir" "$accession")" ]
 }
 
+# Return 0 if f is a non-empty file whose first byte is '>'.
+is_valid_fasta() {
+    local f="$1"
+    [ -s "$f" ] && [[ "$(head -c 1 "$f")" == ">" ]]
+}
+
 # Find the first genomic FASTA file in org_dir for given accession.
 # Only accepts files matching the accession-prefixed pattern from config and
 # excludes non-genomic companions (cds_from_genomic.fna, rna.fna, protein.faa).
@@ -190,6 +196,7 @@ OVERRIDE_NAME=""
 NO_GENOME=0
 NO_TAXONOMY=0
 TAX_OUT_OVERRIDE=""
+FORCE=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -218,6 +225,10 @@ while [[ $# -gt 0 ]]; do
             NO_TAXONOMY=1
             shift
             ;;
+        --force)
+            FORCE=1
+            shift
+            ;;
         --tax-out)
             TAX_OUT_OVERRIDE="${2:?--tax-out requires a path}"
             shift 2
@@ -243,7 +254,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [ -z "$ACCESSION" ]; then
-    echo "Usage: $(basename "$0") <ACCESSION> [--out-dir DIR] [--name NAME] [--no-genome] [--no-taxonomy] [--tax-out FILE]" >&2
+    echo "Usage: $(basename "$0") <ACCESSION> [--out-dir DIR] [--name NAME] [--no-genome] [--no-taxonomy] [--tax-out FILE] [--force]" >&2
     exit 1
 fi
 
@@ -288,9 +299,17 @@ echo "Organism: $ncbi_full_name (dir: $dir_name)" >&2
 
 fasta_path=""
 if [ "$NO_GENOME" -eq 0 ]; then
-    if has_fasta_files "$org_dir" "$ACCESSION"; then
-        echo "Genome files already exist for $dir_name; skipping download." >&2
-    else
+    _need_download=1
+    if [ "$FORCE" -eq 0 ] && has_fasta_files "$org_dir" "$ACCESSION"; then
+        _existing=$(find_first_fasta "$org_dir" "$ACCESSION")
+        if is_valid_fasta "$_existing"; then
+            echo "Genome files already exist for $dir_name; skipping download." >&2
+            _need_download=0
+        else
+            echo "Existing FASTA failed validation; re-downloading $dir_name ($ACCESSION)..." >&2
+        fi
+    fi
+    if [ "$_need_download" -eq 1 ]; then
         echo "Downloading genome for $dir_name ($ACCESSION)..." >&2
         (
             cd "$org_dir"

@@ -53,3 +53,4 @@ errors:
     - --genomes-dir /path/to/genomes (override genome storage directory)
     - --idt-only (stop after last-train identity checks; skip downstream alignment/analysis)
     - --thread N (set number of threads for last-train/lastal/lastdb; default: 8)
+    - --force (re-download all genomes even if local files exist)
