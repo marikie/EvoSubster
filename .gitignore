@@ -43,3 +43,6 @@ bench_results/
 
 # Backup
 *.bak
+
+# .md files (documentation, not code)
+AGENTS.md
