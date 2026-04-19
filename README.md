@@ -94,25 +94,31 @@ Results reside under:
 Representative outputs include:
 
 **`intermediateFiles/`**
+
 - `*.train`: substitution percent identity estimates from `LAST` (see [last-train](https://gitlab.com/mcfrith/last/-/blob/main/doc/last-train.rst?ref_type=heads))
 
 **`statistics/misc/`**
+
 - `*_gcContent_*.out`: whole-genome GC content for each FASTA
 - `*_sbstRatio*.out`: single-base substitution percentages without considering neighboring bases (see `src/metrics/subRatio.py`)
 
 **`statistics/<ORG>/singlenuc/`**
+
 - `*.tsv`: single-base substitution counts
 - `*_ncds.tsv`: non-coding-region variant of the above (only when a GFF is provided)
 
 **`statistics/<ORG>/dinuc/`**
+
 - `*_dinuc.tsv`: dinucleotide substitution counts
 - `*_dinuc_ncds.tsv`: non-coding-region variant of the above (only when a GFF is provided)
 
 **`figs/<ORG>/singlenuc/ratio/`** and **`figs/<ORG>/singlenuc/log-ratio/`**
+
 - `*_norm.pdf`: single-base substitutions normalized by original trinucleotide counts
 - `*_logRatio.pdf`: log₂ enrichment of substitution rates relative to the overall mean of the substitution rates across all substitution types
 
 **`figs/<ORG>/dinuc/`**
+
 - `*_dinuc*.pdf`: normalized dinucleotide substitution counts by original tetranucleotide counts
 
 Re-running the pipeline skips steps whose outputs already exist.
@@ -135,20 +141,38 @@ _Amphilophus zaliosus_ is slimmer and faster. It lives only in Lake Apoyo in Nic
 
 Together, these species show how fish from the same family can evolve to look and behave very differently depending on where and how they live — from quiet shallow waters to powerful lake predators.
 
-Single-base substitution spectrum for _Amphilophus citrinellus_:
-![ampCit_norm](./egfigs/ampCit_20250407_maflinked_ncds_norm.png)
+Single-base substitution spectrum for _Amphilophus citrinellus_ (whole genome):
+![ampCit_norm](./eg_results/Arccen1_Ampcit2_Ampzal3/20260418/figs/Ampcit2/singlenuc/ratio/GCA_013435755.1_Ampcit2_20260418_norm-1.png)
 
-Single-base substitution spectrum for _Amphilophus zaliosus_:
-![ampZal_norm](./egfigs/ampZal_20250407_maflinked_ncds_norm.png)
+Single-base substitution spectrum for _Amphilophus citrinellus_ (non-coding region):
+![ampCit_norm](./eg_results/Arccen1_Ampcit2_Ampzal3/20260418/figs/Ampcit2/singlenuc/ratio/GCA_013435755.1_Ampcit2_20260418_ncds_norm-1.png)
 
-Log-scaled single-base substitution spectrum for _Amphilophus citrinellus_:
-![ampCit_norm_log](./egfigs/ampCit_20250407_maflinked_ncds_logRatio.png)
+Single-base substitution spectrum for _Amphilophus zaliosus_ (whole genome):
+![ampZal_norm](./eg_results/Arccen1_Ampcit2_Ampzal3/20260418/figs/Ampzal3/singlenuc/ratio/GCA_015108585.1_Ampzal3_20260418_norm-1.png)
 
-Log-scaled single-base substitution spectrum for _Amphilophus zaliosus_:
-![ampZal_norm_log](./egfigs/ampZal_20250407_maflinked_ncds_logRatio.png)
+Single-base substitution spectrum for _Amphilophus zaliosus_ (non-coding region):
+![ampZal_norm](./eg_results/Arccen1_Ampcit2_Ampzal3/20260418/figs/Ampzal3/singlenuc/ratio/GCA_015108585.1_Ampzal3_20260418_ncds_norm-1.png)
 
-Dinucleotide substitution spectrum for _Amphilophus citrinellus_:
-![ampCit_dinuc](./egfigs/ampCit_20250407_maflinked_ncds_dinuc.tsv.png)
+Log-scaled single-base substitution spectrum for _Amphilophus citrinellus_ (whole genome):
+![ampCit_norm_log](./eg_results/Arccen1_Ampcit2_Ampzal3/20260418/figs/Ampcit2/singlenuc/log-ratio/GCA_013435755.1_Ampcit2_20260418_logRatio-1.png)
 
-Dinucleotide substitution spectrum for _Amphilophus zaliosus_ :
-![ampZal_dinuc](./egfigs/ampZal_20250407_maflinked_ncds_dinuc.tsv.png)
+Log-scaled single-base substitution spectrum for _Amphilophus citrinellus_ (non-coding region):
+![ampCit_norm_log](./eg_results/Arccen1_Ampcit2_Ampzal3/20260418/figs/Ampcit2/singlenuc/log-ratio/GCA_013435755.1_Ampcit2_20260418_ncds_logRatio-1.png)
+
+Log-scaled single-base substitution spectrum for _Amphilophus zaliosus_ (whole genome):
+![ampZal_norm_log](./eg_results/Arccen1_Ampcit2_Ampzal3/20260418/figs/Ampzal3/singlenuc/log-ratio/GCA_015108585.1_Ampzal3_20260418_logRatio-1.png)
+
+Log-scaled single-base substitution spectrum for _Amphilophus zaliosus_ (non-coding region):
+![ampZal_norm_log](./eg_results/Arccen1_Ampcit2_Ampzal3/20260418/figs/Ampzal3/singlenuc/log-ratio/GCA_015108585.1_Ampzal3_20260418_ncds_logRatio-1.png)
+
+Dinucleotide substitution spectrum for _Amphilophus citrinellus_ (whole genome):
+![ampCit_dinuc](./eg_results/Arccen1_Ampcit2_Ampzal3/20260418/figs/Ampcit2/dinuc/GCA_013435755.1_Ampcit2_20260418_dinuc.tsv-1.png)
+
+Dinucleotide substitution spectrum for _Amphilophus citrinellus_ (non-coding):
+![ampCit_dinuc](./eg_results/Arccen1_Ampcit2_Ampzal3/20260418/figs/Ampcit2/dinuc/GCA_013435755.1_Ampcit2_20260418_dinuc_ncds.tsv-1.png)
+
+Dinucleotide substitution spectrum for _Amphilophus zaliosus_ (whole genome):
+![ampZal_dinuc](./eg_results/Arccen1_Ampcit2_Ampzal3/20260418/figs/Ampzal3/dinuc/GCA_015108585.1_Ampzal3_20260418_dinuc.tsv-1.png)
+
+Dinucleotide substitution spectrum for _Amphilophus zaliosus_ (non-coding region):
+![ampZal_dinuc](./eg_results/Arccen1_Ampcit2_Ampzal3/20260418/figs/Ampzal3/dinuc/GCA_015108585.1_Ampzal3_20260418_dinuc_ncds.tsv-1.png)
