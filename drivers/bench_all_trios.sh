@@ -22,14 +22,12 @@ DRIVER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 script="$DRIVER_DIR/../src/sbst_fromDwl.sh"
 ROOT_DIR="$(cd "$DRIVER_DIR/.." && pwd)"
 logDir=$ROOT_DIR/log
-timeDir=$ROOT_DIR/results/benchmark
 benchGenomeDir=$ROOT_DIR/bench_genomes
 benchOutDir=$ROOT_DIR/bench_results
-
-mkdir -p "$timeDir"
+timeDir=$ROOT_DIR/bench_results/benchmark
 
 rm -rf "$benchGenomeDir" "$benchOutDir"
-mkdir -p "$benchGenomeDir" "$benchOutDir"
+mkdir -p "$benchGenomeDir" "$benchOutDir" "$timeDir"
 
 TRIO_NUM=0
 TOTAL=40
