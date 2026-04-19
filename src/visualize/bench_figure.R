@@ -62,7 +62,7 @@ main <- function() {
   df <- inner_join(bench, meta, by = "trio_label") %>%
     mutate(
       runtime_min  = parse_wall_clock_min(wall_clock),
-      total_mbp    = (size_org1_bp + size_org2_bp + size_org3_bp) / 1e6,
+      total_mbp    = (as.numeric(size_org1_bp) + as.numeric(size_org2_bp) + as.numeric(size_org3_bp)) / 1e6,
       min_identity = pmin(idt_12, idt_13, idt_23),
       peak_ram_gb  = max_rss_kb / 1e6,
       # Short label for labeling extreme points
