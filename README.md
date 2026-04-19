@@ -1,4 +1,4 @@
-![logo](./egfigs/EvoSubsterLOGO_1_rect.png)
+![logo](./doc/figures/EvoSubsterLOGO_1_rect.png)
 
 # Let's investigate evolutionary substitution trends across diverse taxonomic groups ─=≡Σ((( つ•̀ω•́)つ !
 
