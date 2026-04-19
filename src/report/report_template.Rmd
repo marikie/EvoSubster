@@ -1,0 +1,438 @@
+---
+title: "Substitution Summary Report"
+output:
+  word_document:
+    highlight: null
+    pandoc_args:
+      - "--dpi=72"
+params:
+  input_json: NULL
+  preview_dir: NULL
+  images_dir: NULL
+  pdftools_available: FALSE
+  page_break_between_datasets: TRUE
+---
+
+```{r init_chunk, include=FALSE}
+suppressPackageStartupMessages({
+  library(jsonlite)
+  library(dplyr)
+  library(purrr)
+  library(tidyr)
+  library(stringr)
+  library(glue)
+  library(knitr)
+})
+
+`%||%` <- function(x, y) {
+  if (is.null(x) || length(x) == 0) y else x
+}
+
+if (is.null(params$input_json)) {
+  stop("params$input_json must point to the Python summary JSON file.")
+}
+
+summary_data <- fromJSON(params$input_json, simplifyVector = FALSE)
+preview_dir <- params$preview_dir %||% file.path(tempdir(), "pdf_previews")
+dir.create(preview_dir, recursive = TRUE, showWarnings = FALSE)
+
+input_root <- summary_data$input_root %||% ""
+missing_placeholder <- "\u2014"
+
+# Use per-run images directory (passed from render_report.sh) and fall back to local images/
+rmd_dir <- dirname(knitr::current_input(dir = TRUE))
+if (is.null(rmd_dir) || !nzchar(rmd_dir)) {
+  rmd_dir <- getwd()
+}
+images_dir <- params$images_dir %||% file.path(rmd_dir, "images")
+dir.create(images_dir, recursive = TRUE, showWarnings = FALSE)
+images_rel_base <- file.path("images", basename(images_dir))
+
+has_pdftools <- isTRUE(params$pdftools_available)
+if (has_pdftools) {
+  suppressPackageStartupMessages(library(pdftools))
+}
+
+render_pdf_preview <- function(pdf_path, preview_dir, images_dir, dpi = 200) {
+  if (!has_pdftools) {
+    return(NULL)
+  }
+
+  if (!file.exists(pdf_path)) {
+    return(NULL)
+  }
+
+  hash <- unname(tools::md5sum(pdf_path))
+  preview_template <- file.path(preview_dir, paste0(hash, "-%d.%s"))
+  first_page_path <- sprintf(preview_template, 1, "png")
+
+  if (!file.exists(first_page_path)) {
+    tryCatch(
+      {
+        suppressWarnings({
+          capture.output(
+            {
+              capture.output(
+                pdftools::pdf_convert(
+                  pdf = pdf_path,
+                  format = "png",
+                  pages = 1,
+                  dpi = dpi,
+                  filenames = preview_template
+                ),
+                file = NULL,
+                type = "message"
+              )
+            },
+            file = NULL
+          )
+        })
+      },
+      error = function(e) {
+        message(sprintf("Warning: failed to render preview for %s (%s)", pdf_path, e$message))
+      }
+    )
+  }
+
+  if (!file.exists(first_page_path)) {
+    message(sprintf("Preview file not found: %s (template: %s)", first_page_path, preview_template))
+    NULL
+  } else {
+    preview_abs <- normalizePath(first_page_path, mustWork = TRUE)
+    preview_basename <- basename(preview_abs)
+    dest_path <- file.path(images_dir, preview_basename)
+    if (!file.exists(dest_path)) {
+      file.copy(preview_abs, dest_path, overwrite = FALSE)
+    }
+    dest_path
+  }
+}
+
+value_or_na <- function(x) {
+  if (is.null(x) || length(x) == 0) {
+    NA_character_
+  } else {
+    as.character(x)
+  }
+}
+
+organism_label <- function(metadata) {
+  if (is.null(metadata)) {
+    return(NA_character_)
+  }
+  candidates <- c(
+    metadata$raw_organism_name,
+    metadata$ncbi_full_name,
+    metadata$directory_name
+  )
+  for (candidate in candidates) {
+    if (!is.null(candidate) && nzchar(candidate)) {
+      return(candidate)
+    }
+  }
+  NA_character_
+}
+
+shorten_path <- function(path) {
+  if (is.null(path) || length(path) == 0) {
+    return(NULL)
+  }
+  if (length(path) > 1) {
+    return(vapply(path, shorten_path, character(1), USE.NAMES = FALSE))
+  }
+  if (!nzchar(path)) {
+    return(NULL)
+  }
+  root <- sub("/+$", "", input_root)
+  normalized_path <- path
+  prefix <- if (nzchar(root)) paste0(root, "/") else ""
+  if (nzchar(prefix) && stringr::str_starts(normalized_path, prefix)) {
+    remainder <- sub(prefix, "", normalized_path, fixed = TRUE)
+    remainder <- sub("^/+", "", remainder)
+    return(file.path("$out_dir", remainder))
+  }
+  normalized_path
+}
+
+format_path <- function(path) {
+  shortened <- shorten_path(path)
+  if (is.null(shortened) || !nzchar(shortened)) {
+    missing_placeholder
+  } else {
+    shortened
+  }
+}
+
+format_heading <- function(label, organism_text) {
+  if (is.null(organism_text) || is.na(organism_text) || !nzchar(organism_text)) {
+    label
+  } else {
+    glue("{label} (*{organism_text}*)")
+  }
+}
+```
+
+```{r issues_chunk, echo=FALSE, results='asis'}
+if (length(summary_data$issues) > 0) {
+  cat("## Warnings\n\n")
+  cat(paste0("- ", summary_data$issues, collapse = "\n"), "\n\n")
+}
+```
+
+```{r report_chunk, echo=FALSE, results='asis'}
+if (length(summary_data$datasets) == 0) {
+  cat("Dataset not found.\n")
+} else {
+  # Sort datasets by species2 (org2) taxonomy: domain > kingdom > phylum > class > order > family > genus > species
+  tax_ranks_sort <- c("domain", "kingdom", "phylum", "class", "order", "family", "genus", "species")
+  sort_keys <- vapply(summary_data$datasets, function(ds) {
+    tax <- (ds$species2$taxonomy %||% list())
+    paste(vapply(tax_ranks_sort, function(r) tax[[r]] %||% "", character(1)), collapse = "~")
+  }, character(1))
+  datasets_sorted <- summary_data$datasets[order(sort_keys)]
+
+  iwalk(datasets_sorted, function(ds, idx) {
+    is_docx_output <- identical(knitr::opts_knit$get("rmarkdown.pandoc.to"), "docx")
+    if (idx > 1 && isTRUE(params$page_break_between_datasets) && is_docx_output) {
+      cat("\n")
+      cat("```{=openxml}\n")
+      cat("<w:p><w:r><w:br w:type=\"page\"/></w:r></w:p>\n")
+      cat("```\n\n")
+    }
+    cat(glue("## Dataset: {ds$dataset}\n\n"))
+    cat(glue("Latest run: `{ds$latest_run %||% missing_placeholder}`\n\n"))
+
+    get_species_entry <- function(slot) {
+      entry <- ds[[slot]]
+      if (is.null(entry)) {
+        list()
+      } else {
+        entry
+      }
+    }
+
+    slots <- c("species1", "species2", "species3")
+    labels <- c("Species A", "Species B", "Species C")
+
+    species_rows <- tibble(
+      species = labels,
+      slot = slots
+    ) %>%
+      mutate(
+        role = map_chr(slot, ~ value_or_na((get_species_entry(.x)$metadata %||% list())$role)),
+        short_name = map_chr(slot, ~ value_or_na((get_species_entry(.x)$metadata %||% list())$short_name)),
+        accession = map_chr(slot, ~ value_or_na(get_species_entry(.x)$accession)),
+        organism = map_chr(slot, ~ organism_label(get_species_entry(.x)$metadata %||% list())),
+        substitution_ratio = map_chr(slot, ~ value_or_na(get_species_entry(.x)$sbst_ratio_entry)),
+        gc_content = map_chr(slot, ~ {
+          gc_vals <- get_species_entry(.x)$gc_content %||% character()
+          if (length(gc_vals) == 0) {
+            NA_character_
+          } else {
+            paste(gc_vals, collapse = "\n")
+          }
+        })
+      )
+
+    species_tbl <- species_rows %>%
+      select(-slot, -short_name) %>%
+      replace_na(
+        list(
+          role = missing_placeholder,
+          short_name = missing_placeholder,
+          accession = missing_placeholder,
+          organism = missing_placeholder,
+          substitution_ratio = missing_placeholder,
+          gc_content = missing_placeholder
+        )
+      ) %>%
+      mutate(
+        organism = if_else(
+          organism == missing_placeholder,
+          missing_placeholder,
+          glue("*{organism}*")
+        )
+      )
+
+    print(
+      kable(
+        species_tbl,
+        col.names = c(
+          "Species",
+            "Role",
+          "Accession",
+          "Organism",
+          "Substitution Ratio",
+          "GC Content"
+        )
+      )
+    )
+    cat("\n")
+
+    short_labels <- ifelse(
+      is.na(species_rows$short_name) | species_rows$short_name == "",
+      species_rows$species,
+      species_rows$short_name
+    )
+    organism_labels <- species_rows$organism
+
+    idt_tbl <- tibble(
+      comparison = c(
+        glue("{short_labels[1]} vs {short_labels[2]}"),
+        glue("{short_labels[1]} vs {short_labels[3]}"),
+        glue("{short_labels[2]} vs {short_labels[3]}")
+      ),
+      percent_identity = c(
+        ds$idt_12 %||% NA_character_,
+        ds$idt_13 %||% NA_character_,
+        ds$idt_23 %||% NA_character_
+      )
+    ) %>%
+      replace_na(list(percent_identity = "(missing)"))
+
+    print(
+      kable(
+        idt_tbl,
+        col.names = c("Comparison", "Substitution Percent Identity")
+      )
+    )
+    cat("\n")
+
+    # Build taxonomy comparison table across the three species
+    tax_ranks <- c("domain", "kingdom", "phylum", "class", "order", "family", "genus", "species")
+    tax_data <- lapply(slots, function(slot) {
+      entry <- get_species_entry(slot)
+      tax <- entry$taxonomy %||% list()
+      vapply(tax_ranks, function(r) {
+        v <- tax[[r]]
+        if (is.null(v) || !nzchar(v)) missing_placeholder else as.character(v)
+      }, character(1))
+    })
+    tax_mat <- do.call(cbind, tax_data)
+    rownames(tax_mat) <- tax_ranks
+    # Keep only rows where at least one species has data
+    has_data <- apply(tax_mat, 1, function(row) any(row != missing_placeholder))
+    if (any(has_data)) {
+      tax_df <- as.data.frame(tax_mat[has_data, , drop = FALSE], stringsAsFactors = FALSE)
+      colnames(tax_df) <- labels
+      tax_df <- cbind(Rank = tools::toTitleCase(rownames(tax_df)), tax_df)
+      rownames(tax_df) <- NULL
+      cat("### Taxonomy\n\n")
+      print(kable(tax_df, col.names = c("Rank", labels)))
+      cat("\n")
+    }
+
+    species_sections <- tibble(
+      slot = slots,
+      label = labels,
+      organism_name = organism_labels
+    ) %>%
+      filter(slot %in% c("species2", "species3"))
+
+    pdf_label_map <- c(
+      norm = "Bar Plot: ",
+      logratio = "Logratio Plot: ",
+      ncds_norm = "Bar Plot (Non-coding): ",
+      ncds_logratio = "Logratio Plot (Non-coding): ",
+      dinuc_tsv = "Dinuc: ",
+      dinuc_ncds_tsv = "Dinuc (Non-coding): "
+    )
+
+    pwalk(species_sections, function(slot, label, organism_name) {
+      species <- ds[[slot]]
+      heading <- format_heading(label, organism_name)
+
+      cat(glue("### {heading}\n\n"))
+
+      if (is.null(species)) {
+        cat("(No data for this species.)\n\n")
+        return(NULL)
+      }
+
+      cat("\n")
+
+      if (is.null(species$pdfs)) {
+        cat("Artifacts not collected for this species.\n\n")
+        return(NULL)
+      }
+
+      # Enforce plot ordering for key plots regardless of JSON/list ordering.
+      preferred_pdf_order <- c(
+        "norm",
+        "ncds_norm",
+        "logratio",
+        "ncds_logratio"
+      )
+
+      pdfs <- species$pdfs
+      pdf_keys <- names(pdfs)
+      if (is.null(pdf_keys) || !length(pdf_keys)) {
+        # Fallback: if pdfs is not a named list, keep the existing order.
+        iwalk(pdfs, function(paths, pdf_key) {
+          nice_label <- pdf_label_map[[pdf_key]]
+          if (is.null(nice_label)) {
+            nice_label <- pdf_key %>%
+              str_replace_all("_", " ") %>%
+              str_to_title()
+          }
+
+          if (length(paths) == 0) {
+            cat(glue("\n\n**{nice_label}** (not found)\n\n"))
+          } else {
+            cat(glue("\n\n**{nice_label}**\n\n"))
+            walk(paths, function(pdf_path) {
+              display_label <- basename(pdf_path)
+              cat(glue("<span style=\"font-size:10.5pt\">{display_label}</span>\n\n"))
+              preview <- render_pdf_preview(pdf_path, preview_dir, images_dir)
+              if (!is.null(preview)) {
+                preview_rel <- file.path(images_rel_base, basename(preview))
+                cat(glue("\n![]({preview_rel}){{width=16.5cm}}\n\n"))
+              } else {
+                cat("(Failed to generate preview)\n\n")
+              }
+            })
+          }
+        })
+        cat("\n")
+        return(NULL)
+      }
+
+      ordered_keys <- c(
+        intersect(preferred_pdf_order, pdf_keys),
+        setdiff(pdf_keys, preferred_pdf_order)
+      )
+
+      walk(ordered_keys, function(pdf_key) {
+        paths <- pdfs[[pdf_key]]
+        nice_label <- pdf_label_map[[pdf_key]]
+        if (is.null(nice_label)) {
+          nice_label <- pdf_key %>%
+            str_replace_all("_", " ") %>%
+            str_to_title()
+        }
+
+        if (length(paths) == 0) {
+          cat(glue("\n\n**{nice_label}** (not found)\n\n"))
+        } else {
+          cat(glue("\n\n**{nice_label}**\n\n"))
+          walk(paths, function(pdf_path) {
+            display_label <- basename(pdf_path)
+            cat(glue("<span style=\"font-size:10.5pt\">{display_label}</span>\n\n"))
+            preview <- render_pdf_preview(pdf_path, preview_dir, images_dir)
+            if (!is.null(preview)) {
+              preview_rel <- file.path(images_rel_base, basename(preview))
+              cat(glue("\n![]({preview_rel}){{width=16.5cm}}\n\n"))
+            } else {
+              cat("(Failed to generate preview)\n\n")
+            }
+          })
+        }
+      })
+
+      cat("\n")
+    })
+  })
+}
+
+```
+

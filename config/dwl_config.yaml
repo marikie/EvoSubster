@@ -1,0 +1,56 @@
+paths:
+  # Paths are resolved relative to the evo-subster repository root.
+  # Override with --base-genomes / --out-dir to point elsewhere.
+  base_genomes: "./genomes"
+  # Directory to store downstream run outputs (sbst.sh)
+  out_dir: "./results"
+
+# Configuration for genome download and processing
+settings:
+  required_args: 4 # Number of required arguments (DATE and 3 accession IDs). Full names optional.
+
+# NCBI dataset download settings
+download:
+  includes: gff3,
+    rna,
+    cds,
+    protein,
+    genome,
+    seq-report
+
+# File patterns
+patterns:
+  # Directory pattern for each organism
+  org_dir: "{org_full}"
+
+  # Download files
+  ncbi_dataset: "ncbi_dataset.zip"
+
+  # Generated files
+  fasta: "{org_id}*.fna" # Pattern for matching FASTA files
+
+# Messages
+messages:
+  download: "--- Downloading {org_full} from NCBIdataset"
+  already_downloaded: "{org_full} already downloaded"
+  move_files: "--- Move files and delete unnecessary directories"
+  running_uvmut: "--- Running uvmut_3spc.sh"
+
+# Error messages
+errors:
+  arg_count: "You need {arg_num} arguments"
+  usage: |
+    You'll get one-to-one alignments of org1-org2 and org1-org3.
+    The top genome of each alignment .maf file will be org1. org1 should be in the outgroup.
+    Required:
+    - today's date
+    - org1 accession ID << Outgroup >> (e.g. 'GCA_023078555.1')
+    - org2 accession ID (e.g. 'GCA_900538255.1')
+    - org3 accession ID (e.g. 'GCA_024500015.1')
+
+    Optional flags:
+    - --out-dir /path/to/output (override downstream run directory)
+    - --genome-dir /path/to/genomes (override genome storage directory)
+    - --idt-only (stop after last-train identity checks; skip downstream alignment/analysis)
+    - --thread N (set number of threads for last-train/lastal/lastdb; default: 8)
+    - --force (re-download all genomes even if local files exist)

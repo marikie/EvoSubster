@@ -1,0 +1,42 @@
+paths:
+  # Output directory is now configured in dwl_config.yaml
+
+# Script settings
+settings:
+  required_args: 5
+  normalize_graphs: 0
+
+# Messages
+messages:
+  gc_content: "--- calculating GC content"
+  one2one: "--- running one2one for {org1_short}-{org2_short}"
+  maf_join: "--- maf-join the two .maf files"
+  make_dir: "--- making {dir_path}"
+  file_exists: "{file_name} already exists"
+  dinuc_tsv: "--- generating dinuc .tsv files"
+  sbst_ratio: "--- calculating substitution ratio"
+
+# Error messages
+errors:
+  arg_count: "You need {arg_num} arguments"
+  usage: |
+    Usage: ./sbst.sh <date> <org1.fa> <org2.fa> <org3.fa> <org1.gff|NO_GFF_FILE> [--out-dir /absolute/path/to/outputs]
+    - org1 should be the outgroup.
+    - All FASTA file paths must be absolute paths.
+    - If org1 annotation (GFF file) is unavailable, enter "NO_GFF_FILE"; otherwise, provide the GFF file path.
+    - The `--out-dir` flag is optional. If not provided, the outputs will be stored in the directory specified in `config/dwl_config.yaml`.
+# Options
+options:
+  checkIdt:
+    description: "Run substitution percent identity check"
+    enabled_message: "Running substitution percent identity check..."
+    completed_message: "Substitution percent identity check completed"
+
+# File patterns and suffixes
+patterns:
+  gc_content: "{org_short}_gcContent_{date}.out"
+  sbst_ratio: "sbstRatio_{date}.out"
+  one2one: "{org1_short}2{org2_short}_one2one_{date}.maf"
+  train: "{org1_short}2{org2_short}_{date}.train"
+  joined: "{org1_short}_{org2_short}_{org3_short}_{date}.maf"
+  joined_ncds: "{org1_short}_{org2_short}_{org3_short}_{date}_ncds.maf"
