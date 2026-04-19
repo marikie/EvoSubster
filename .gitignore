@@ -2,10 +2,8 @@
 results/
 genomes/
 log/
-eg_results/intermediateFiles/
-eg_results/intermediateFiles/Ampcit2db_*
-eg_results/intermediateFiles/Arccen1db_*
-eg_results/metadata/
+eg_results/Arccen1_Ampcit2_Ampzal3/20260418/intermediateFiles/
+eg_results/Arccen1_Ampcit2_Ampzal3/20260418/metadata/
 
 # Large intermediate files
 *.maf
