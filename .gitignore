@@ -32,7 +32,7 @@ Thumbs.db
 # Deprecated scripts (read-only reference)
 archive/
 doc/trio-candis/
-doc/*.log/
+doc/*.log
 
 # Temporary
 test_genomes/
