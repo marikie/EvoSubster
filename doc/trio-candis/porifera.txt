@@ -1,9 +1,0 @@
-GCA_965643675.1 Aplysina cauliformis genome assembly
-GCA_949841015.1 Aplysina aerophoba genome assembly
-# substitution percent identity: 90.4231
-
-GCA_965643675.1 Aplysina cauliformis genome assembly
-GCA_964659575.1 Aplysina cavernicola genome assembly
-# substitution percent identity: 91.4966
-
-

@@ -31,8 +31,8 @@ Thumbs.db
 
 # Deprecated scripts (read-only reference)
 archive/
-doc/trio-candis
-doc/*.log
+doc/trio-candis/
+doc/*.log/
 
 # Temporary
 test_genomes/
