@@ -172,3 +172,21 @@ run_bench "styPis_pocVer_pocDam" cnidaria \
     GCF_002571385.2 GCF_036669915.1 GCF_003704095.1
 
 echo "All ${TOTAL} trios complete. Time files in: ${timeDir}"
+
+# ---- Post-processing: generate bench_table.tsv and bench_figure.pdf ----
+
+echo "Running post-processing..."
+
+python "${ROOT_DIR}/src/report/parse_bench_times.py" "${timeDir}"
+
+python "${ROOT_DIR}/src/report/collect_run_summary.py" "${benchOutDir}" \
+    --output "${timeDir}/benchmark_summary.json"
+
+python "${ROOT_DIR}/src/report/collect_bench_metadata.py" "${benchOutDir}" "${benchGenomeDir}"
+
+Rscript "${ROOT_DIR}/src/visualize/bench_figure.R" \
+    "${timeDir}/bench_summary.tsv" \
+    "${timeDir}/bench_metadata.tsv" \
+    "${timeDir}"
+
+echo "Done. bench_table.tsv and bench_figure.pdf in: ${timeDir}"
