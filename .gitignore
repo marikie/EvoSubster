@@ -3,6 +3,8 @@ results/
 genomes/
 log/
 eg_results/intermediateFiles/
+eg_results/intermediateFiles/Ampcit2db_*
+eg_results/intermediateFiles/Arccen1db_*
 eg_results/metadata/
 
 # Large intermediate files
