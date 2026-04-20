@@ -173,7 +173,8 @@ MAF file → `Util.getJoinedAlignmentObj()` → `JoinedAlignment` objects (with 
 ## Dependencies
 
 - **LAST** (lastal, lastdb, last-train, last-split, maf-linked, maf-sort, maf-join)
-- **NCBI Datasets CLI** + jq
+- **curl** (for NCBI Datasets API access)
+- **jq** (for JSON parsing)
 - **yq** (Mike Farah v4+)
 - **Python 3.8+** (stdlib only)
 - **R 4.0+** with: stringr, RColorBrewer, showtext, jsonlite, curl, dplyr, ggplot2, rlang, sysfonts

@@ -82,8 +82,8 @@ get_org_info_from_ncbi() {
         return 1
     }
 
-    if ! datasets summary genome accession "$accession" > "$tmp_json"; then
-        echo "Error: Failed to run 'datasets summary' for $accession" >&2
+    if ! curl -sS --fail "https://api.ncbi.nlm.nih.gov/datasets/v2/genome/accession/$accession/dataset_report" > "$tmp_json"; then
+        echo "Error: Failed to fetch genome summary for $accession" >&2
         rm -f "$tmp_json"
         return 1
     fi
@@ -266,11 +266,15 @@ if command -v yq >/dev/null 2>&1 && [ -f "$config_file" ]; then
 fi
 [ -z "$FASTA_PATTERN_TMPL" ] && FASTA_PATTERN_TMPL='{org_id}*.fna'
 
-# Load download includes from config (fall back to default)
+# Build download query params from config annotation types
+DWL_QUERY_PARAMS=""
 if command -v yq >/dev/null 2>&1 && [ -f "$config_file" ]; then
-    DWL_INCLUDES=$(yq eval '.download.includes' "$config_file" 2>/dev/null | tr -d ' ' | tr '\n' ',' | sed 's/,$//')
+    while IFS= read -r annot_type; do
+        [ -n "$annot_type" ] && DWL_QUERY_PARAMS="${DWL_QUERY_PARAMS}&include_annotation_type=${annot_type}"
+    done < <(yq eval '.download.includes[]' "$config_file" 2>/dev/null)
 fi
-DWL_INCLUDES="${DWL_INCLUDES:-genome}"
+[ -z "$DWL_QUERY_PARAMS" ] && DWL_QUERY_PARAMS="include_annotation_type=GENOME_FASTA"
+DWL_QUERY_PARAMS="${DWL_QUERY_PARAMS#&}"
 
 # --- step 1: fetch summary JSON and resolve organism name ---
 
@@ -313,7 +317,8 @@ if [ "$NO_GENOME" -eq 0 ]; then
         echo "Downloading genome for $dir_name ($ACCESSION)..." >&2
         (
             cd "$org_dir"
-            if ! datasets download genome accession "$ACCESSION" --include "$DWL_INCLUDES"; then
+            if ! curl -sS --fail -o ncbi_dataset.zip \
+                "https://api.ncbi.nlm.nih.gov/datasets/v2/genome/accession/$ACCESSION/download?${DWL_QUERY_PARAMS}"; then
                 echo "Error: Failed to download genome for $ACCESSION" >&2
                 exit 1
             fi
@@ -349,7 +354,7 @@ if [ "$NO_TAXONOMY" -eq 0 ]; then
         echo "Downloading taxonomy for tax_id=$tax_id..." >&2
         tmp_tax=$(mktemp) || { echo "Warning: Cannot create tmpfile for taxonomy." >&2; tax_json_path=""; }
         if [ -n "$tmp_tax" ]; then
-            if datasets summary taxonomy taxon "$tax_id" > "$tmp_tax" && [ -s "$tmp_tax" ]; then
+            if curl -sS --fail "https://api.ncbi.nlm.nih.gov/datasets/v2/taxonomy/taxon/$tax_id/dataset_report" > "$tmp_tax" && [ -s "$tmp_tax" ]; then
                 mv "$tmp_tax" "$tax_json_path" 2>/dev/null || {
                     cp "$tmp_tax" "$tax_json_path"
                     rm -f "$tmp_tax"

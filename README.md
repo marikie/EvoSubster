@@ -14,10 +14,11 @@ Single-base substitution rates are computed in trinucleotide context, requiring 
 
 Install the following command-line tools before running any scripts:
 
-- NCBI Datasets CLI [datasets](https://www.ncbi.nlm.nih.gov/datasets/docs/v2/command-line-tools/download-and-install/) and [jq](https://jqlang.org) for accession metadata
+- [jq](https://jqlang.org) for JSON parsing
+- `curl` for downloading genomes from NCBI Datasets API
 - [LAST](https://gitlab.com/mcfrith/last) for alignment
 - [yq](https://github.com/mikefarah/yq) (Mike Farah’s v4+) for reading YAML
-- [unzip](https://linux.die.net/man/1/unzip) for extracting NCBI dataset archives
+- [unzip](https://linux.die.net/man/1/unzip) for extracting downloaded archives
 - [python3](https://www.python.org/) (3.8 or later) with the standard library
 - [R](https://www.r-project.org/) (≥4.0) with packages: `stringr`, `RColorBrewer`, `showtext`, `jsonlite`, `curl`, `dplyr`, `ggplot2`, `rlang`, `sysfonts`
 

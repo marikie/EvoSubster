@@ -11,12 +11,13 @@ settings:
 
 # NCBI dataset download settings
 download:
-  includes: gff3,
-    rna,
-    cds,
-    protein,
-    genome,
-    seq-report
+  includes:
+    - GENOME_FASTA
+    - GENOME_GFF
+    - RNA_FASTA
+    - CDS_FASTA
+    - PROT_FASTA
+    - SEQUENCE_REPORT
 
 # File patterns
 patterns:

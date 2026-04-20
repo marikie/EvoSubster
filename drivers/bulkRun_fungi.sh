@@ -7,7 +7,6 @@ if [ $argNum -ne 1 ]; then
     exit 1
 fi
 module use /big/mrk/app/.modulefiles
-module load datasets/18.9.0
 module load last/1648
 
 Date=$1
