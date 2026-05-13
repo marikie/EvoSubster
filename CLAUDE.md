@@ -74,7 +74,6 @@ Applied to 60 trios across 7 lineages (fungi, cnidarians, Apicomplexa, Phaeophyc
 │   └── summary/                       # Cross-lineage aggregation
 ├── doc/                               # Documentation
 ├── log/                               # Execution logs
-└── archive/                           # Deprecated scripts (read-only)
 ```
 
 ## Build and Run Commands
@@ -139,6 +138,7 @@ After modifying any script under `src/` or `config/`, run the full pipeline (dow
 ```bash
 rm -rf ./test_genomes
 rm -rf ./test_results
+now="$(date '+%Y-%m-%d-%H-%M')"
 ./src/sbst_fromDwl.sh <DATE> GCA_907165135.1 GCA_004367875.1 GCA_004367855.1 --genome-dir ./test_genomes --out-dir ./test_results
 ```
 
@@ -194,7 +194,6 @@ MAF file → `Util.getJoinedAlignmentObj()` → `JoinedAlignment` objects (with 
 - **Commit messages**: English, imperative mood, optionally scoped
 - **Push**: Push directly to GitHub (`marikie/EvoSubster`)
 - **`.gitignore`**: Large intermediate files (`*.maf`, `*.train`, etc.) are not tracked
-- Do not modify files in `archive/` (kept for reference only)
 
 ## Data File Conventions
 
