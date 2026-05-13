@@ -34,6 +34,9 @@ archive/
 doc/trio-candis/
 doc/*.log
 
+# Claude Code task tracking
+tasks/
+
 # Temporary
 test_genomes/
 test_results/
