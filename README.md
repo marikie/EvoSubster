@@ -76,6 +76,35 @@ This script:
 - Uses the outgroup GFF, when available, to cut CDS regions, count DNA-base substitutions and generate non-coding TSV summaries.
 - Invokes `generate_graphs.sh` to render R visualizations.
 
+## Region-stratified analysis (e.g. TE vs non-TE)
+
+To compare substitution spectra between an arbitrary genomic region class and its
+complement — for example transposable-element (TE) versus non-TE DNA — split a
+three-way joined MAF by a BED/GFF annotation on the outgroup and count each class
+separately:
+
+```bash
+src/region_stratified_tsvs.sh <joined.maf> <regions.bed|gff> <out_dir> \
+    [--label NAME] [--type GFF_TYPE] [--shrink]
+```
+
+This wires `src/align/maf-cut-region.py` — which labels every alignment column by
+the outgroup (top-sequence) coordinate as inside or outside the regions — into
+the existing, unchanged counters, writing `NAME/{singlenuc,dinuc}/` and
+`nonNAME/{singlenuc,dinuc}/` substitution-count TSVs for both ingroups. The
+splitter can also be used directly:
+
+```bash
+# TE-region columns only / non-TE columns only
+python3 src/align/maf-cut-region.py te.bed joined.maf --keep inside  > te.maf
+python3 src/align/maf-cut-region.py te.bed joined.maf --keep outside > non_te.maf
+```
+
+BED is read as 0-based half-open; GFF is filtered by feature type with `--type`.
+`--keep outside --format gff --type CDS --shrink` reproduces
+`maf-cut-cds-uglier.py` exactly (used as a regression oracle in
+`test/test_maf_cut_region.py`).
+
 ## Outputs
 
 Results reside under:
