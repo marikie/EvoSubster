@@ -19,10 +19,24 @@ Applied to 60 trios across 7 lineages (fungi, cnidarians, Apicomplexa, Phaeophyc
 - Case 3: only C differs → substitution inferred in C
 - Case 4: all three differ → multiple scenarios, excluded
 
+## Automation
+
+### Skills (slash commands)
+- `/add-trio <lineage> <out_acc> <in1_acc> <in2_acc>` — download genomes + full pipeline
+- `/run-lineage <lineage>` — bulk-run all trios in a lineage
+- `/gen-figure <lineage> <triplet>` — regenerate R plots from existing TSVs
+- `/check-results <lineage> [<triplet>]` — validate output files and identity thresholds
+- `/gen-report <lineage> [--format word_document|pdf_document|html_document]` — render summary report
+
+### Hooks (run automatically after file edits)
+- `.sh` files: `bash -n` syntax check
+- `src/count/`, `src/statistics/`, `src/metrics/` Python files: unit tests
+- `src/` or `config/` core files: full pipeline integration test (background, log: `/tmp/pipeline_test_*.log`)
+
 ## Repository Layout (Noble 2009)
 
 ```
-/big/mrk/proj/sbst/                    # Project root = Git root
+/big/mrk/proj/sbst/evo-subster/        # Project root = Git root
 ├── src/                               # Source code (workflow-stage organized)
 │   ├── align/                         # LAST alignment + MAF processing
 │   │   ├── one2one.sh                 # Pairwise alignment pipeline
@@ -62,7 +76,6 @@ Applied to 60 trios across 7 lineages (fungi, cnidarians, Apicomplexa, Phaeophyc
 ├── test/                              # Tests
 │   ├── test_*.py                      # Test modules
 │   └── fixtures/                      # Test fixtures (.maf, .tsv)
-├── bin/                               # Compiled binaries
 ├── config/                            # Configuration
 │   ├── dwl_config.yaml               # Genome download paths
 │   └── sbst_config.yaml              # Output patterns, settings
@@ -72,80 +85,15 @@ Applied to 60 trios across 7 lineages (fungi, cnidarians, Apicomplexa, Phaeophyc
 ├── results/                           # Analysis results (per-lineage)
 │   ├── fungi/, cnidaria/, etc.        # Per-lineage output directories
 │   └── summary/                       # Cross-lineage aggregation
+├── bench_genomes/                     # Benchmark genome inputs
+├── bench_results/                     # Benchmark analysis outputs
+├── eg_results/                        # Example results for reference
+├── tasks/                             # Task tracking (todo.md, lessons.md)
 ├── doc/                               # Documentation
 ├── log/                               # Execution logs
+├── test_genomes/                      # Integration test genomes (gitignored)
+└── test_results/                      # Integration test outputs (gitignored)
 ```
-
-## Build and Run Commands
-
-### Full Pipeline (with genome download)
-
-```bash
-./src/sbst_fromDwl.sh <DATE> <ACC1> <ACC2> <ACC3> [--out-dir PATH] [--thread N] [--idt-only]
-```
-
-- ACC1 = outgroup accession, ACC2/ACC3 = ingroup accessions
-
-### Pipeline from Existing FASTA
-
-```bash
-./src/sbst.sh <DATE> <ORG1.fa> <ORG2.fa> <ORG3.fa> <ORG1.gff|NO_GFF_FILE> [--out-dir PATH] [--thread N] [--idt-only]
-```
-
-### Bulk Runs
-
-```bash
-bash drivers/bulkRun_fungi.sh <DATE>
-```
-
-### Regenerate TSV/Plots Only
-
-```bash
-./src/generate_tsv_files.sh <joined.maf> <out_dir>
-./src/generate_graphs.sh <tsv_dir>
-```
-
-### Reporting
-
-```bash
-python src/report/collect_run_summary.py <results_root> [--output summary.json] [--idt-threshold 80]
-bash src/report/render_report.sh -j summary.json [-o output.docx] [-f word_document]
-```
-
-## Testing
-
-Tests must be run from `test/` (fixtures use relative paths to `./fixtures/`).
-
-```bash
-cd test
-
-# Run active test modules
-python -m unittest test_subRatio test_single_sbst_2TSVs test_single_sbst_2TSVs_errprob
-
-# Run a single test class
-python -m unittest test_single_sbst_2TSVs.TestTriUvMuts2TSVs
-
-# Run a single test method
-python -m unittest test_subRatio.TestSubRatio.test_count
-```
-
-Test fixtures (`.maf` input and `.tsv` expected output) are in `test/fixtures/`. Tests compare generated output against expected TSVs using `diff`.
-
-### Pipeline Verification After Script Changes
-
-After modifying any script under `src/` or `config/`, run the full pipeline (download + analysis) with this test trio to verify nothing is broken:
-
-```bash
-rm -rf ./test_genomes
-rm -rf ./test_results
-now="$(date '+%Y-%m-%d-%H-%M')"
-./src/sbst_fromDwl.sh <DATE> GCA_907165135.1 GCA_004367875.1 GCA_004367855.1 --genome-dir ./test_genomes --out-dir ./test_results
-```
-
-- `GCA_907165135.1` = outgroup
-- `GCA_004367875.1`, `GCA_004367855.1` = ingroups
-
-If the pipeline produces any errors, fix them and re-run until it completes without errors.
 
 ## Architecture
 
@@ -188,7 +136,7 @@ MAF file → `Util.getJoinedAlignmentObj()` → `JoinedAlignment` objects (with 
 
 ## Git
 
-- Repository root is this directory (project root). Git operations can be run directly here.
+- Repository root is this directory. Git operations can be run directly here.
 - **Branching**: Work on feature branches, merge to main when complete
 - **Commit granularity**: One commit per feature/change
 - **Commit messages**: English, imperative mood, optionally scoped

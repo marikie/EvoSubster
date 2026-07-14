@@ -1,4 +1,5 @@
 # Large data (Noble: don't track generated/large files)
+AI_outputs/
 results/
 genomes/
 log/
