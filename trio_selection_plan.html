@@ -1,0 +1,463 @@
+<title>Newick-driven trio selection — 実装計画</title>
+<style>
+  :root{
+    --paper:#f1f4f8; --panel:#e4e9f0; --line:#ccd4de;
+    --ink:#141d27; --ink-soft:#4e5b6a; --ink-faint:#77828f;
+    --accent:#27406b; --accent-soft:#dbe3ef;
+    --amber:#8f5713; --amber-soft:#f2e7d5;
+    --green:#28614a; --green-soft:#d8e8e0;
+    --code-bg:#161f2a; --code-fg:#d5dde6; --code-dim:#7f8fa1;
+  }
+  :root[data-theme="dark"]{
+    --paper:#0f151c; --panel:#18212c; --line:#2b3745;
+    --ink:#e6ebf1; --ink-soft:#a7b3c0; --ink-faint:#78848f;
+    --accent:#8fb0e0; --accent-soft:#1b2838;
+    --amber:#d99a4e; --amber-soft:#2c2317;
+    --green:#6fbf99; --green-soft:#152a22;
+    --code-bg:#0a1017; --code-fg:#d2dae3; --code-dim:#6d7c8d;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --paper:#0f151c; --panel:#18212c; --line:#2b3745;
+      --ink:#e6ebf1; --ink-soft:#a7b3c0; --ink-faint:#78848f;
+      --accent:#8fb0e0; --accent-soft:#1b2838;
+      --amber:#d99a4e; --amber-soft:#2c2317;
+      --green:#6fbf99; --green-soft:#152a22;
+      --code-bg:#0a1017; --code-fg:#d2dae3; --code-dim:#6d7c8d;
+    }
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--paper);color:var(--ink)}
+  body{
+    font-family:"Yu Gothic","Hiragino Kaku Gothic ProN",-apple-system,"Segoe UI",sans-serif;
+    font-size:15.5px; line-height:1.85; -webkit-font-smoothing:antialiased;
+  }
+  .page{max-width:800px;margin:0 auto;padding:64px 28px 110px}
+
+  .eyebrow{
+    font-family:ui-monospace,Menlo,monospace; font-size:11.5px;
+    letter-spacing:.14em; text-transform:uppercase; color:var(--accent);
+    display:flex; align-items:center; gap:10px; margin-bottom:16px;
+  }
+  .eyebrow::after{content:"";flex:1;height:1px;background:var(--line)}
+  h1{
+    font-size:31px; line-height:1.3; font-weight:700; letter-spacing:-.015em;
+    text-wrap:balance; margin:0 0 14px;
+  }
+  .lede{color:var(--ink-soft);max-width:64ch;margin:0}
+
+  h2{
+    font-size:19px;font-weight:700;letter-spacing:-.01em;margin:0;
+    text-wrap:balance;
+  }
+  h3{font-size:15.5px;font-weight:700;margin:26px 0 8px}
+  p{margin:13px 0;max-width:68ch}
+  strong{font-weight:700}
+
+  section{margin-top:52px;padding-top:26px;border-top:1px solid var(--line)}
+  .sec-head{display:flex;align-items:baseline;gap:12px;margin-bottom:4px}
+  .tag{
+    font-family:ui-monospace,Menlo,monospace;font-size:11px;font-weight:600;
+    letter-spacing:.06em;color:var(--accent);background:var(--accent-soft);
+    padding:3px 8px;border-radius:4px;flex-shrink:0;
+  }
+
+  code{
+    font-family:ui-monospace,Menlo,monospace;font-size:.87em;
+    background:var(--panel);border:1px solid var(--line);
+    padding:1px 5px;border-radius:4px;
+  }
+  pre{
+    font-family:ui-monospace,Menlo,monospace;font-size:12.5px;line-height:1.7;
+    background:var(--code-bg);color:var(--code-fg);
+    border-radius:7px;padding:16px 18px;overflow-x:auto;margin:15px 0;
+  }
+  pre code{background:none;border:none;padding:0;font-size:inherit;color:inherit}
+  pre .c{color:var(--code-dim)}
+
+  .wrap{overflow-x:auto;margin:16px 0}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{
+    font-family:ui-monospace,Menlo,monospace;font-size:11px;letter-spacing:.05em;
+    text-transform:uppercase;color:var(--ink-faint);font-weight:600;white-space:nowrap;
+  }
+  td.mono{font-family:ui-monospace,Menlo,monospace;font-size:12.5px}
+  td.num{font-variant-numeric:tabular-nums;white-space:nowrap}
+
+  .note{
+    display:flex;gap:12px;padding:14px 16px;border-radius:7px;margin:16px 0;
+    font-size:14.5px;background:var(--panel);border-left:3px solid var(--ink-faint);
+  }
+  .note.warn{background:var(--amber-soft);border-left-color:var(--amber)}
+  .note.ok{background:var(--green-soft);border-left-color:var(--green)}
+  .note .m{font-weight:700;flex-shrink:0;font-family:ui-monospace,monospace;font-size:12px;padding-top:2px}
+  .note.warn .m{color:var(--amber)}
+  .note.ok .m{color:var(--green)}
+  .note.plain .m{color:var(--ink-faint)}
+  .note p{margin:0;max-width:none}
+  .note p + p{margin-top:8px}
+
+  .flow{
+    background:var(--code-bg);color:var(--code-fg);border-radius:7px;
+    padding:18px;margin:18px 0;overflow-x:auto;
+  }
+  .flow pre{margin:0;padding:0;background:none}
+
+  ul{margin:12px 0;padding-left:22px;max-width:68ch}
+  li{margin:6px 0}
+
+  .files td:first-child{white-space:nowrap}
+  .new{color:var(--green);font-weight:700;font-size:11px;font-family:ui-monospace,monospace}
+  .mod{color:var(--amber);font-weight:700;font-size:11px;font-family:ui-monospace,monospace}
+
+  footer{
+    margin-top:64px;padding-top:22px;border-top:1px solid var(--line);
+    font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--ink-faint);
+  }
+</style>
+
+<div class="page">
+
+<header>
+  <div class="eyebrow">EvoSubster / implementation plan</div>
+  <h1>Newick 入力による trio 選別</h1>
+  <p class="lede">
+    系統樹を入口に、論文 §2.3 の選別規則（実測 sequence percent identity + genus name）を
+    <code>last-train</code> 経由で適用し、最終的に <code>sbst_fromDwl.sh</code> の
+    <code>--tree</code> モードとして組み込む。
+  </p>
+</header>
+
+<section>
+  <div class="sec-head"><span class="tag">CONTEXT</span><h2>なぜ変えるか</h2></div>
+
+  <p>
+    現行の <code>trio_selection.R</code> は樹の patristic distance を疑似 identity
+    (<code>100 - patr_dist</code>) に変換し、<strong>論文の方法ではない</strong>
+    <code>parsimony_ratio()</code> で足切りしている。パイプラインにも繋がっておらず、
+    閾値もハードコードされたプロトタイプの状態。
+  </p>
+
+  <p>
+    論文 §2.3 が実際に使っているのは<strong>実測のアラインメント identity と属名</strong>であり、
+    樹の距離ではない。そしてその規則は
+    <code>src/report/collect_run_summary.py</code> の <code>evaluate_filter_status</code>
+    (192-244行) に<strong>既に実装済み</strong>で、§2.3 と 1:1 で対応している。
+  </p>
+
+  <div class="wrap">
+  <table>
+    <tr><th>論文 §2.3</th><th>collect_run_summary.py</th></tr>
+    <tr>
+      <td>全ペアの identity &gt; 80%</td>
+      <td class="mono">threshold_condition（<code>--idt-threshold</code>, 既定 80）</td>
+    </tr>
+    <tr>
+      <td>属パターンが A≠B, A≠C, B=C → <strong>常に採用</strong></td>
+      <td class="mono">genus_condition = pattern1</td>
+    </tr>
+    <tr>
+      <td>否なら Id<sub>AB</sub> &lt; Id<sub>BC</sub> かつ Id<sub>AC</sub> &lt; Id<sub>BC</sub></td>
+      <td class="mono">idt_12 &lt; idt_23 and idt_13 &lt; idt_23</td>
+    </tr>
+    <tr>
+      <td>ただし外群が内群の片方とだけ同属なら除外</td>
+      <td class="mono">pattern5</td>
+    </tr>
+  </table>
+  </div>
+
+  <h3>属名は何を判定しているのか（pattern5 の意味）</h3>
+
+  <p>
+    trio は <code>((B,C),A)</code>——<strong>外群 A が内群 B・C の両方から等しく外側にいる</strong>——
+    という topology を前提にしている。「外群と片方の内群が一致したら、もう片方が変異した」という
+    パーシモニーの推論は、この前提が崩れた瞬間に意味を失う。
+    属名はその前提に対する<strong>安価な反証テスト</strong>として使われている。
+  </p>
+
+  <div class="wrap">
+  <table>
+    <tr><th></th><th>属の配置</th><th>topology への含意</th><th>扱い</th></tr>
+    <tr>
+      <td class="mono">pattern1</td>
+      <td class="mono">A≠B, A≠C, <strong>B=C</strong></td>
+      <td>内群2種が同属、外群だけ別属。前提を<strong>積極的に支持</strong></td>
+      <td>identity 順序を見ずに<strong>無条件採用</strong></td>
+    </tr>
+    <tr>
+      <td class="mono">pattern3</td>
+      <td class="mono">3種とも同属</td>
+      <td>属名が3種を区別しない → <strong>情報なし</strong></td>
+      <td>identity 順序に判断を委ねる</td>
+    </tr>
+    <tr>
+      <td class="mono">pattern4</td>
+      <td class="mono">3種とも別属</td>
+      <td>属名が3種を等しく分ける → <strong>情報なし</strong></td>
+      <td>identity 順序に判断を委ねる</td>
+    </tr>
+    <tr>
+      <td class="mono"><strong>pattern5</strong></td>
+      <td class="mono"><strong>A=B, C≠</strong> または <strong>A=C, B≠</strong></td>
+      <td><strong>外群が内群の片方とだけ同属</strong>——分類学は
+        <code>((A,B),C)</code> だと言っている。前提と<strong>正面から矛盾</strong></td>
+      <td><strong>除外</strong></td>
+    </tr>
+  </table>
+  </div>
+
+  <p>
+    pattern3 と pattern4 が「許容」なのは、属名が正しさを保証しているからではなく、
+    <strong>反証を出していない</strong>から。判断材料がないので実測 identity の順序
+    (<code>Id_AB &lt; Id_BC</code> かつ <code>Id_AC &lt; Id_BC</code> = 内群ペアが最も似ている) に委ねる。
+    対して pattern5 では属名が「A は C より B に近い」と<strong>能動的に主張</strong>しており、
+    これは外群の定義そのものへの反証なので、identity の順序が通っていても却下する。
+    ——つまり<strong>属名は採用の根拠ではなく、拒否の根拠</strong>として効いている。
+  </p>
+
+  <div class="note plain">
+    <span class="m">→</span>
+    <div><p>コード上は <code>org1</code> が外群なので
+    <code>pattern5 = (org1==org3 &amp;&amp; org1!=org2) || (org1==org2 &amp;&amp; org1!=org3)</code>
+    （<code>collect_run_summary.py:135-146</code>）。「2対1」という言い方は
+    <em>3種が属で 2 : 1 に割れ、その割れ目が内群/外群の境界と一致していない</em>状態を指す。
+    pattern1 も 2 : 1 に割れているが、そちらは割れ目が境界と<strong>一致</strong>している。</p></div>
+  </div>
+
+  <p>
+    したがって<strong>規則を書き直すのではなく、再利用する</strong>のが正しい。
+    設計を縛る事実が2つある。
+  </p>
+
+  <div class="note warn">
+    <span class="m">1</span>
+    <div>
+      <p><strong>樹だけでは trio を決められない。</strong>
+      <code>Primates_tree.nwk</code> は厳密に ultrametric（＝全ての葉が root から等距離。
+      実測した root-to-tip 深度のばらつきは 7.3e-10 しかない）。</p>
+
+      <p>ultrametric な樹では、外群 A は内群 B・C から<strong>必ず等距離</strong>になる。
+      つまり <code>Id_AB == Id_AC</code> が恒等的に成立し、
+      内群ペアの <code>Id_BC</code> は topology 上つねにそれより大きい。
+      すると論文の順序判定 <code>Id_AB &lt; Id_BC かつ Id_AC &lt; Id_BC</code> は——</p>
+
+      <p><strong>「判定できない」のではない。「常に成立してしまう」のだ。</strong>
+      実際に <code>Primates_tree.nwk</code> で全 trio を列挙して樹の距離で判定すると:</p>
+
+<pre><code>trio 列挙数                        : 12291
+Id_AB == Id_AC                    : 12291 / 12291   (max |diff| = 4.0e-10)
+順序判定が<strong>通る</strong>                    : <strong>12291 / 12291   (= 100%)</strong></code></pre>
+
+      <p><strong>フィルタとして 1 件も落とさない = 選別能力ゼロ。</strong>
+      理由は単純で、この順序判定は本来<strong>内群2種の進化速度の非対称性</strong>を検出するためのものだが、
+      ultrametric な樹はその非対称性を<strong>定義上ゼロに潰している</strong>から。
+      樹に埋まっていない情報は樹からは取り出せない。</p>
+
+      <p>したがって樹の役割は <strong>trio の列挙</strong>と<strong>粗い深さの事前絞り込み</strong>だけ。
+      本審査には <code>last-train</code> の<strong>実測 identity</strong> が要る——
+      実際のゲノム配列は ultrametric ではないので、そこで初めて速度の非対称性が数字に出る。</p>
+    </div>
+  </div>
+
+  <div class="note warn">
+    <span class="m">2</span>
+    <div>
+      <p><strong>last-train が支配的コスト。だから trio 単位で回してはいけない。</strong>
+      last-train は<strong>種ペア</strong>に対して1回走る（trio 1つにつき3ペア）。
+      そして候補 trio は種を大量に共有するので、trio ごとに素直に回すと
+      <strong>同じ種ペアを何度も再計算する</strong>ことになる。</p>
+
+      <p>霊長類 37種の場合:</p>
+
+<pre><code>trio 単位で回す : 12291 trio × 3 ペア = <strong>36873 回</strong>の last-train
+種ペア単位      : 37種から作れるペアは全部で <strong>666 通り</strong>しかない
+                  <span class="c">→ 最悪でも 666 回。実際は候補に出てくるペアだけなのでさらに少ない</span></code></pre>
+
+      <p><strong>キャッシュの単位を「trio」ではなく「ユニークな種ペア」にする。</strong>
+      幸い <code>last_train.sh</code> は <code>.train</code> ファイルが既にあればスキップする作りなので、
+      <strong>出力ディレクトリを全 trio で共有するだけで再利用が効く</strong>（実装コストはほぼゼロ）。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="tag">STEP 1</span><h2>論文の規則を1箇所に集約</h2></div>
+
+  <p>
+    <code>src/select/trio_filter.py</code> を新設し、以下を
+    <code>collect_run_summary.py</code> から<strong>そのまま</strong>移す:
+  </p>
+  <ul>
+    <li><code>extract_genus_label</code></li>
+    <li><code>evaluate_genus_patterns</code></li>
+    <li><code>parse_identity_percentage</code></li>
+    <li><code>evaluate_identity_condition</code></li>
+    <li><code>evaluate_filter_status</code></li>
+  </ul>
+
+  <p>
+    <code>collect_run_summary.py</code> は定義を消して import に置き換える。
+    <strong>純粋な移動なので挙動は不変</strong>——レポート出力はバイト一致しなければならない。
+  </p>
+
+  <p>R から一括で呼べるようバッチ CLI を足す:</p>
+
+<pre><code>python3 src/select/trio_filter.py \
+    --trios trios.tsv --idt-threshold 80 --out verdict.tsv
+
+<span class="c"># 入力 TSV:  out_acc  in1_acc  in2_acc  idt_12 idt_13 idt_23  genus_1 genus_2 genus_3</span>
+<span class="c"># 出力 TSV:  入力列 + filter_details の全キー (excluded, genus_condition_met, ...)</span></code></pre>
+
+  <div class="note warn">
+    <span class="m">!</span>
+    <div>
+      <p><strong>ラベル規約に注意。</strong>コードベースは一貫して
+      <code>org1 = 外群</code>, <code>org2</code>/<code>org3</code> = 内群。
+      つまり <code>idt_12</code>, <code>idt_13</code> が外群-内群、<code>idt_23</code> が内群ペア。</p>
+      <p><strong>論文は逆の文字を使っている（A = 外群）。式をそのまま写すと外群と内群が入れ替わる。</strong></p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="tag">STEP 2</span><h2>trio_selection.R の書き換え</h2></div>
+
+  <div class="flow">
+<pre><code>Stage 0  樹の葉を 1種1アセンブリに剪定       [NCBI metadata, 1 API call]
+Stage 1  trio 列挙 + 樹による事前絞り込み      [tree only, 無料]
+Stage 2  候補に含まれる accession のみ DL      [dwl_organism.sh]
+Stage 3  <strong>ユニークな種ペア</strong>ごとに last-train    [last_train.sh, 共有キャッシュ]
+Stage 4  論文の規則で最終選別                  [trio_filter.py]</code></pre>
+  </div>
+
+  <h3>Stage 0 — 1種1アセンブリに剪定</h3>
+  <p>
+    全葉の accession を <strong>1回のバッチ呼び出し</strong>で <code>dataset_report</code> 取得
+    (<code>?page_size=1000</code>——既定のページサイズは20で<strong>黙って切り捨てる</strong>)。
+    種ごとに最良のアセンブリを残す: <code>assembly_info.refseq_category == "reference genome"</code>
+    を優先し、無ければ <code>assembly_level</code> / contig N50 でフォールバック。
+  </p>
+  <div class="note plain">
+    <span class="m">→</span>
+    <div><p>厳格に reference genome のみにすると霊長類 37種中 <strong>11種が丸ごと脱落</strong>する
+    (<em>M. mulatta</em>, <em>Pan paniscus</em>, <em>Pongo abelii</em> 等)。
+    best-per-species なら 37種を維持したまま重複除去できる。</p>
+    <p>NCBI が返さなくなった accession（<code>GCA_037993035.1</code> は既に消滅）は警告して葉ごと落とす。</p></div>
+  </div>
+
+  <h3>Stage 1 — 列挙と事前絞り込み</h3>
+  <p>
+    既存の <code>descendant_tips()</code> / <code>sister_tips()</code> をそのまま再利用する。
+    これらは <code>((B,C),A)</code> の topology を<strong>構成的に保証</strong>している。
+    葉ラベルは <code>Genus_species_ACCESSION</code> なので genus は第1トークン——
+    無料で属の事前判定に使える。
+  </p>
+  <p>
+    樹 identity <code>100 - patristic</code>（枝長は<strong>percent sequence difference</strong>）で絞るが、
+    <code>--idt-threshold</code> より<strong>緩いマージン</strong>を取る。樹の identity は
+    実測 identity の近似にすぎず、厳格に切ると実データなら通る trio を捨ててしまうため。
+    clade あたりの候補数に上限を設けてコストを縛る。
+  </p>
+  <div class="note ok">
+    <span class="m">DEL</span>
+    <div><p><code>parsimony_ratio()</code> と <code>BALANCE_DELTA</code> を<strong>削除</strong>する。
+    ultrametric な樹では <code>p_B == p_C</code> が恒等的に成立するので両方とも無意味であり、
+    そもそも論文の方法ではない。</p></div>
+  </div>
+
+  <h3>Stage 2-3 — ダウンロードと last-train</h3>
+  <p>
+    生き残った候補に含まれる accession だけ <code>src/dwl_organism.sh</code> で取得（既に冪等）。
+    次に全候補 trio から<strong>ユニークな無向種ペア</strong>を集め、ペアごとに1回だけ:
+  </p>
+<pre><code>src/align/last_train.sh &lt;DATE&gt; &lt;fa2&gt; &lt;fa3&gt; &lt;short2&gt; &lt;short3&gt; &lt;shared_cache_dir&gt;</code></pre>
+  <p>
+    <code>last_train.sh</code> は <code>.train</code> が存在すればスキップするので、
+    <strong>out_dir を共有するだけで trio 間の再利用が無料で効く</strong>
+    （<code>lastdb</code> も種ごとに1回で済む）。
+    identity は <code># substitution percent identity:</code> 行から取る。
+  </p>
+
+  <h3>Stage 4 — 最終選別</h3>
+  <p>
+    trio テーブルを書き出し、<code>trio_filter.py</code> を <code>system2()</code> で1回だけ叩き、
+    判定を join して <code>selected_trios.tsv</code> を出す。
+  </p>
+
+  <h3>新しいオプション</h3>
+  <p>
+    <code>--tree</code>, <code>--idt-threshold</code>（既定 80）, <code>--prescreen-margin</code>,
+    <code>--top-k</code>, <code>--genome-dir</code>, <code>--out-dir</code>, <code>--date</code>
+  </p>
+</section>
+
+<section>
+  <div class="sec-head"><span class="tag">STEP 3</span><h2>sbst_fromDwl.sh に --tree モード</h2></div>
+  <p>
+    <code>--tree &lt;file.nwk&gt;</code> を追加し、指定時は4つの位置引数を省略可能にする。
+    <code>trio_selection.R</code> を実行し、選別された各 trio に対して通常のパイプラインを回す。
+    <code>--idt-threshold</code> は R まで通す。
+  </p>
+  <div class="note plain">
+    <span class="m">→</span>
+    <div><p>スクリーニングで <code>sbst_fromDwl.sh</code> を<strong>再入させない</strong>こと。
+    <code>trio_selection.R</code> は <code>dwl_organism.sh</code> / <code>last_train.sh</code> を
+    直接呼ぶので再帰は起きない。</p></div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="tag">FILES</span><h2>変更ファイル</h2></div>
+  <div class="wrap">
+  <table class="files">
+    <tr><th></th><th>path</th><th>内容</th></tr>
+    <tr><td><span class="new">NEW</span></td><td class="mono">src/select/trio_filter.py</td><td>論文の規則（移動）+ バッチ CLI</td></tr>
+    <tr><td><span class="mod">MOD</span></td><td class="mono">src/report/collect_run_summary.py</td><td>移した関数を削除し import に</td></tr>
+    <tr><td><span class="mod">MOD</span></td><td class="mono">trio_selection.R</td><td>全面書き換え（<code>src/select/</code> 配下へ移動）</td></tr>
+    <tr><td><span class="mod">MOD</span></td><td class="mono">src/sbst_fromDwl.sh</td><td><code>--tree</code> モード追加</td></tr>
+    <tr><td><span class="new">NEW</span></td><td class="mono">test/test_trio_filter.py</td><td>規則のユニットテスト</td></tr>
+    <tr><td><span class="mod">MOD</span></td><td class="mono">CLAUDE.md</td><td>外群の規約を修正（下記）</td></tr>
+  </table>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="tag">BUG</span><h2>ついでに直す既存の不整合</h2></div>
+  <div class="note warn">
+    <span class="m">!</span>
+    <div>
+      <p><code>CLAUDE.md</code> は「Species A = outgroup, B/C = ingroups」と書いているが、
+      <code>src/count/isParsimonious.py</code> は「A and B are the ingroup. C is the outgroup」と書いており、
+      <strong>コード（<code>org1</code> = 外群）は後者に従っている</strong>。</p>
+      <p><code>CLAUDE.md</code> の方が誤り。影響範囲が最小なのでそちらを直し、
+      論文の「A = 外群」という文字割り当てが新しいコードに写り込むのを防ぐ。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="tag">VERIFY</span><h2>検証</h2></div>
+  <ul>
+    <li><strong>リファクタが無害であること:</strong> 既存の results ディレクトリに対して
+      <code>collect_run_summary.py</code> を移動前後で実行し、JSON が <code>diff</code> で一致すること。</li>
+    <li><strong>ユニットテスト</strong> (<code>trio_filter.py</code>): 属パターン 1/3/4/5、identity 順序規則、
+      閾値ゲートを網羅。特に<strong>論文規則を特徴づけるケース</strong>——
+      pattern1 が真だが identity 順序が偽 → それでも採用される——を必ず含める。</li>
+    <li><strong>Stage 0-1 のドライラン:</strong> <code>trio_selection.R --tree Primates_tree.nwk</code> を
+      ダウンロード無効で実行し、43葉 → 37種になること、
+      出力された全候補で外群が内群 clade の外にあることを確認。</li>
+    <li><strong>小規模な end-to-end:</strong> 1 clade（例: Hominidae）に限定して全体を通し、
+      <code>.train</code> キャッシュを見て <code>last_train.sh</code> が
+      <strong>trio 数ではなくユニークペア数だけ</strong>呼ばれていることを確認。</li>
+    <li>既存の <code>Edit</code>/<code>Write</code> フックが <code>src/</code> 変更時に
+      パイプライン統合テストを回す——これが通り続けること。</li>
+  </ul>
+</section>
+
+<footer>
+  trio_selection.R &middot; ape / dplyr &middot; LAST (last-train) &middot; NCBI Datasets v2 &middot; EvoSubster
+</footer>
+
+</div>
