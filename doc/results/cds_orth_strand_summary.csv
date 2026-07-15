@@ -1,0 +1,4 @@
+trio,min_non_gap,nonCodingIncluded,codingStrandConsistent,strandContradictions,insufficientEvidence,total_runs,classified_runs,blocks_seen,blocks_lt3
+lenEdo,10,10283,57972,98,2592,70945,68353,6085,0
+puffer,10,42368,175159,25,4091,221643,217552,37763,0
+styPis,10,15547,135927,44,5314,156832,151518,122217,0
