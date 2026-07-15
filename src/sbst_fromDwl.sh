@@ -56,6 +56,7 @@ FORCE_DOWNLOAD=0
 TREE_FILE=""
 IDT_THRESHOLD=""
 INGROUP_MIN=""
+MIN_CONTIG_N50=""
 POSITIONAL_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -80,6 +81,8 @@ Tree mode:
   --idt-threshold N    Minimum pairwise percent identity for trio selection (default: 80).
   --ingroup-min N      Minimum ingroup-pair tree identity used to prescreen candidates;
                        the effective cost knob on an ultrametric tree (default: 0 = off).
+  --min-contig-n50 BP  Drop species whose best assembly has contig N50 below this
+                       (Stage 0 quality gate; default: 0 = off, opt-in e.g. 1000000).
 
 Options:
   --genome-dir PATH    Genome storage directory (default: ./genomes)
@@ -181,7 +184,7 @@ EOF
             shift
             continue
             ;;
-        --idt-threshold|--ingroup-min)
+        --idt-threshold|--ingroup-min|--min-contig-n50)
             if [[ -z "${2:-}" ]]; then
                 echo "Error: $1 requires a non-negative number argument." >&2
                 exit 1
@@ -190,18 +193,26 @@ EOF
                 echo "Error: $1 must be a non-negative number (got: $2)." >&2
                 exit 1
             fi
-            if [[ "$1" == "--idt-threshold" ]]; then IDT_THRESHOLD="$2"; else INGROUP_MIN="$2"; fi
+            case "$1" in
+                --idt-threshold)  IDT_THRESHOLD="$2" ;;
+                --ingroup-min)    INGROUP_MIN="$2" ;;
+                --min-contig-n50) MIN_CONTIG_N50="$2" ;;
+            esac
             shift 2
             continue
             ;;
-        --idt-threshold=*|--ingroup-min=*)
+        --idt-threshold=*|--ingroup-min=*|--min-contig-n50=*)
             _opt_key="${1%%=*}"
             _opt_val="${1#*=}"
             if ! [[ "$_opt_val" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
                 echo "Error: $_opt_key must be a non-negative number (got: $_opt_val)." >&2
                 exit 1
             fi
-            if [[ "$_opt_key" == "--idt-threshold" ]]; then IDT_THRESHOLD="$_opt_val"; else INGROUP_MIN="$_opt_val"; fi
+            case "$_opt_key" in
+                --idt-threshold)  IDT_THRESHOLD="$_opt_val" ;;
+                --ingroup-min)    INGROUP_MIN="$_opt_val" ;;
+                --min-contig-n50) MIN_CONTIG_N50="$_opt_val" ;;
+            esac
             shift
             continue
             ;;
@@ -286,6 +297,7 @@ if [ -n "$TREE_FILE" ]; then
             --threads "$THREAD_NUM_OVERRIDE")
     [ -n "$IDT_THRESHOLD" ] && r_args+=(--idt-threshold "$IDT_THRESHOLD")
     [ -n "$INGROUP_MIN" ] && r_args+=(--ingroup-min "$INGROUP_MIN")
+    [ -n "$MIN_CONTIG_N50" ] && r_args+=(--min-contig-n50 "$MIN_CONTIG_N50")
 
     echo "--- [tree mode] selecting trios from $TREE_FILE"
     if ! Rscript "$SCRIPT_DIR/select/trio_selection.R" "${r_args[@]}"; then

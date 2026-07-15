@@ -66,6 +66,7 @@ defaults <- list(
   prescreen_margin = 10,
   top_k = 3,
   ingroup_min = 0,
+  min_contig_n50 = 0,
   genome_dir = "./genomes",
   out_dir = "./results/trio_selection",
   date = format(Sys.Date(), "%Y%m%d"),
@@ -89,6 +90,13 @@ usage <- function() {
     "                          tree the outgroup is equidistant from both ingroups, so the",
     "                          ingroup pair's closeness is the only discriminating tree",
     "                          signal and hence the effective cost knob (default: 0 = off).",
+    "  --min-contig-n50 BP     Drop a species whose best assembly has a contig N50 below",
+    "                          this (Stage 0 quality gate). assembly_level and",
+    "                          refseq_category mislabel fragmented assemblies, so contig",
+    "                          N50 is the honest contiguity signal. Default 0 = off (keep",
+    "                          every species); this only gates the on-tree assembly, so it",
+    "                          is opt-in until the all-assembly redesign lands (e.g. pass",
+    "                          1000000 for a primate tree).",
     "  --genome-dir DIR        Genome storage (default: ./genomes).",
     "  --out-dir DIR           Output and last-train cache (default: ./results/trio_selection).",
     "  --date YYYYMMDD         Run date, used in cache filenames (default: today).",
@@ -114,6 +122,7 @@ parse_args <- function(argv) {
       "--prescreen-margin" = { opts$prescreen_margin <- as.numeric(take()); i <- i + 2 },
       "--top-k"            = { opts$top_k <- as.integer(take()); i <- i + 2 },
       "--ingroup-min"      = { opts$ingroup_min <- as.numeric(take()); i <- i + 2 },
+      "--min-contig-n50"   = { opts$min_contig_n50 <- as.numeric(take()); i <- i + 2 },
       "--genome-dir"       = { opts$genome_dir <- take(); i <- i + 2 },
       "--out-dir"          = { opts$out_dir <- take(); i <- i + 2 },
       "--date"             = { opts$date <- take(); i <- i + 2 },
@@ -202,7 +211,7 @@ sister_tips <- function(tree, node) {
 
 # --- Stage 0: prune the tree to one assembly per species ---------------------
 
-prune_to_best_assembly <- function(tree, out_dir) {
+prune_to_best_assembly <- function(tree, out_dir, min_contig_n50 = 0) {
   accessions <- accession_from_label(tree$tip.label)
   if (anyNA(accessions)) {
     stop("Leaf label(s) without a trailing NCBI accession: ",
@@ -246,6 +255,33 @@ prune_to_best_assembly <- function(tree, out_dir) {
     ungroup()
 
   log_stage(" ", nrow(leaves), "assemblies ->", nrow(best), "species")
+
+  # Species-level quality gate.  assembly_level labels every primate assembly
+  # "Chromosome" even when its contig N50 is ~13 kb, and refseq_category
+  # "reference genome" likewise covers badly fragmented assemblies, so neither is a
+  # usable quality signal -- gate on contig N50, the honest contiguity measure.  A
+  # species whose best assembly is below the floor is dropped entirely (all of its
+  # trios go with it), because a fragmented genome shrinks the alignable and
+  # callable-CDS fraction and biases which genes and sequence contexts are observed
+  # (contig N50 measures continuity only -- not completeness, base accuracy, or
+  # contamination, and can even be inflated by mis-joins).
+  #
+  # LIMITATION: this gates only the assembly that happens to be on the tree, so a
+  # species whose tree accession is fragmented is dropped even when a better current
+  # assembly exists off-tree (e.g. Pongo abelii: tree 16 kb vs current best 146 Mb).
+  # The planned fix is to fetch every current assembly per species, gate the set, and
+  # drop the species only when no candidate passes.  contig N50 is also assembly-size
+  # relative; NG50 (against expected genome size) is preferable across distant taxa.
+  if (min_contig_n50 > 0) {
+    low <- best[best$contig_n50 < min_contig_n50, , drop = FALSE]
+    if (nrow(low)) {
+      log_stage("  quality gate: dropping", nrow(low), "species with contig N50 <",
+                format(min_contig_n50, scientific = FALSE, big.mark = ","), "bp:",
+                paste(sprintf("%s (%.3g)", low$species, low$contig_n50), collapse = ", "))
+      best <- best[best$contig_n50 >= min_contig_n50, , drop = FALSE]
+    }
+    log_stage("  ", nrow(best), "species pass the contig-N50 gate")
+  }
 
   pruned <- drop.tip(tree, setdiff(tree$tip.label, best$tip))
   best <- best[match(pruned$tip.label, best$tip), ]
@@ -446,7 +482,7 @@ main <- function() {
   tree <- read.tree(opts$tree)
   log_stage("tree:", opts$tree, "-", Ntip(tree), "leaves")
 
-  pruned <- prune_to_best_assembly(tree, opts$out_dir)
+  pruned <- prune_to_best_assembly(tree, opts$out_dir, opts$min_contig_n50)
   write_tsv(pruned$leaves, file.path(opts$out_dir, "selected_assemblies.tsv"))
 
   trios <- enumerate_trios(pruned$tree, pruned$leaves)

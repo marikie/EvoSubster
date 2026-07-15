@@ -129,6 +129,18 @@
   </p>
 </header>
 
+<div class="note ok">
+  <span class="m">✓</span>
+  <div>
+    <p><strong>実装状況（2026-07-15）。</strong> STEP 1–3 はローカルコミット済み
+    (<code>4ef0ee1</code>、<strong>未 push</strong> なので他クローンには無い)。Stage 0 の
+    <strong>簡易 N50 ゲート</strong>(<code>--min-contig-n50</code>) も実装済みだが
+    <strong>既定 0 = 無効の opt-in</strong>（tree-only の暫定ゲートで種を誤って落とさないため）。
+    ただし本改訂で示す <strong>Stage 0 の再設計（種ごとに全 assembly を探索してから選ぶ順序）は未実装</strong>——
+    下の「FIX」を参照。数値はすべて <code>Primates_tree.nwk</code> と NCBI taxon 検索での実測。</p>
+  </div>
+</div>
+
 <section>
   <div class="sec-head"><span class="tag">CONTEXT</span><h2>なぜ変えるか</h2></div>
 
@@ -244,7 +256,7 @@
       すると論文の順序判定 <code>Id_AB &lt; Id_BC かつ Id_AC &lt; Id_BC</code> は——</p>
 
       <p><strong>「判定できない」のではない。「常に成立してしまう」のだ。</strong>
-      実際に <code>Primates_tree.nwk</code> で全 trio を列挙して樹の距離で判定すると:</p>
+      剪定前の生の樹（43葉）で全 trio を列挙して樹の距離で判定すると:</p>
 
 <pre><code>trio 列挙数                        : 12291
 Id_AB == Id_AC                    : 12291 / 12291   (max |diff| = 4.0e-10)
@@ -271,8 +283,8 @@ Id_AB == Id_AC                    : 12291 / 12291   (max |diff| = 4.0e-10)
 
       <p>霊長類 37種の場合:</p>
 
-<pre><code>trio 単位で回す : 12291 trio × 3 ペア = <strong>36873 回</strong>の last-train
-種ペア単位      : 37種から作れるペアは全部で <strong>666 通り</strong>しかない
+<pre><code>trio 単位で回す : 剪定後 37 種で 7732 trio × 3 ペア = <strong>23196 回</strong>の last-train
+種ペア単位      : 37 種から作れるペアは全部で <strong>666 通り</strong>しかない
                   <span class="c">→ 最悪でも 666 回。実際は候補に出てくるペアだけなのでさらに少ない</span></code></pre>
 
       <p><strong>キャッシュの単位を「trio」ではなく「ユニークな種ペア」にする。</strong>
@@ -325,26 +337,123 @@ Id_AB == Id_AC                    : 12291 / 12291   (max |diff| = 4.0e-10)
   <div class="sec-head"><span class="tag">STEP 2</span><h2>trio_selection.R の書き換え</h2></div>
 
   <div class="flow">
-<pre><code>Stage 0  樹の葉を 1種1アセンブリに剪定       [NCBI metadata, 1 API call]
+<pre><code>Stage 0  種ごとに全assembly→品質ゲート→代表選択  [NCBI metadata, taxon 検索]
 Stage 1  trio 列挙 + 樹による事前絞り込み      [tree only, 無料]
 Stage 2  候補に含まれる accession のみ DL      [dwl_organism.sh]
 Stage 3  <strong>ユニークな種ペア</strong>ごとに last-train    [last_train.sh, 共有キャッシュ]
 Stage 4  論文の規則で最終選別                  [trio_filter.py]</code></pre>
   </div>
 
-  <h3>Stage 0 — 1種1アセンブリに剪定</h3>
+  <h3>Stage 0 — 種ごとに最良アセンブリを選び、低品質種を落とす</h3>
+
+  <div class="note warn">
+    <span class="m">FIX</span>
+    <div>
+      <p><strong>選択の順序が肝心（現行実装の最大の欠点）。</strong>
+      いまは <em>木に載っている accession から代表を選ぶ → N50 ゲート → 落とす</em> の順なので、
+      木の accession がたまたま断片的だとその種ごと捨ててしまう。正しい順序は:</p>
+    </div>
+  </div>
+
+  <div class="flow"><pre><code>種ごとに <strong>全 current assembly</strong> を取得    <span class="c"># accession ではなく taxon（種名）で検索</span>
+  → 品質ゲート（下の層を順に）
+  → 合格候補から1つ選ぶ                  <span class="c"># 同等なら annotation 付き → reference を優先</span>
+  → <strong>候補が全滅した種だけ</strong>木から削除</code></pre></div>
+
   <p>
-    全葉の accession を <strong>1回のバッチ呼び出し</strong>で <code>dataset_report</code> 取得
-    (<code>?page_size=1000</code>——既定のページサイズは20で<strong>黙って切り捨てる</strong>)。
-    種ごとに最良のアセンブリを残す: <code>assembly_info.refseq_category == "reference genome"</code>
-    を優先し、無ければ <code>assembly_level</code> / contig N50 でフォールバック。
+    取得は従来どおり <code>dataset_report</code> の1バッチ呼び出し
+    (<code>?page_size=1000</code>——既定20で<strong>黙って切り捨てる</strong>) のまま、
+    引くキーを<strong>木の accession から種（taxon）へ</strong>変えるだけ。
+    霊長類ではまず 43葉 → 42アセンブリ（消えた <code>GCA_037993035.1</code> を除外）→
+    <strong>37種</strong>に重複除去（ここまでは trio を1件も減らさない）。
   </p>
+
+  <div class="note ok">
+    <span class="m">✓</span>
+    <div><p><strong>この順序修正で残る種が 23 → 31 に増える（taxon 検索で裏取り済み）。</strong>
+    現行が落とす 14種のうち <strong>8種</strong>には N50 ≥ 1 Mb の別 assembly が現存する——
+    <em>Pongo abelii</em> は木上 16 kb だが現行最良は <strong>146 Mb</strong>、
+    <em>Theropithecus gelada</em> は 0.31 → <strong>109 Mb</strong>。全候補が 1 Mb 未満なのは残り 6種だけ。
+    同じ 1 Mb 基準でも <strong>31種 / 4441 trio</strong> を確保できる
+    （現行の tree-only ゲートは 23種 / 1724 trio）。</p></div>
+  </div>
+
+  <div class="note warn">
+    <span class="m">!</span>
+    <div><p><strong>NCBI の分かりやすい「品質ラベル」は当てにならない。</strong>
+    この 37 代表では、どちらも<strong>断片的なアセンブリを見分けられなかった</strong>:</p></div>
+  </div>
+
+  <div class="wrap">
+  <table>
+    <tr><th>指標</th><th>37代表での分布（実測）</th><th>品質判定に使えるか</th></tr>
+    <tr>
+      <td class="mono">assembly_level</td>
+      <td>37種<strong>すべて "Chromosome"</strong></td>
+      <td>✗ contig N50 が 13 kb でも "Chromosome" 表示</td>
+    </tr>
+    <tr>
+      <td class="mono">refseq_category</td>
+      <td>reference 26 / 非reference 11</td>
+      <td>✗ "reference genome" にも N50 &lt; 1 Mb が<strong>7種</strong></td>
+    </tr>
+    <tr>
+      <td class="mono">contig_n50</td>
+      <td>13 kb 〜 150 Mb（中央 15.6 Mb）</td>
+      <td>✓ <strong>唯一の正直な連続性の指標</strong></td>
+    </tr>
+  </table>
+  </div>
+
+  <p>
+    ゲートは <strong>contig N50</strong> にかける（<code>assembly_level</code> でも
+    <code>refseq_category</code> でもなく）。ただし <strong>N50 は連続性しか測らない</strong>——
+    完全性・塩基精度・汚染・誤連結は評価できず、contig を<strong>誤って繋いでも N50 は上がる</strong>
+    (QUAST)。しかも N50 は assembly 自身の総長が分母なので、短く不完全でも高く出うる。
+    分類群をまたぐ比較では<strong>既知ゲノムサイズを分母にする NG50</strong> が本来適切
+    （霊長類はゲノムサイズが近いので固定 1 Mb でも実害は小さいが、
+    <strong>菌類・昆虫・植物に同じ既定値は使わない</strong>）。1 Mb 自体は霊長類では頑健で、
+    落ちる 14種は全て N50 ≤ 0.31 Mb・残りは全て ≥ 5 Mb と自然な空隙があるため、
+    0.5〜5 Mb のどこでも同じ結果になる。
+  </p>
+
+  <div class="note warn">
+    <span class="m">!</span>
+    <div><p><strong><code>reference genome</code> も「最も連続」とは限らない。</strong>
+    NCBI の reference は汚染・完全性・RefSeq・N50・染色体配置で選ばれるので単なるラベルではないが、
+    最良の連続性は保証しない。実データでも <em>Nomascus leucogenys</em> は
+    <strong>reference 12.8 Mb に対し 非reference が 102 Mb</strong>。よって reference は
+    <strong>「品質基準を満たし、CDS 解析用の annotation があり、同等候補が並んだときの優先順位」</strong>
+    として使い、無条件の第一選択にはしない。</p></div>
+  </div>
+
+  <p>ゲートは<strong>層</strong>で考える。いま実装できるものと、外部ツール/データが要るものを分ける:</p>
+
+  <div class="wrap">
+  <table>
+    <tr><th>層</th><th>判定</th><th>状態</th></tr>
+    <tr><td class="mono">status = current</td><td>suppressed / replaced を除外</td><td class="mono">今すぐ</td></tr>
+    <tr><td class="mono">atypical / 汚染</td><td><code>assembly_info.atypical</code>・FCS contamination を除外</td><td class="mono">今すぐ〜要データ</td></tr>
+    <tr><td class="mono">contig N50 ≥ 1 Mb</td><td>霊長類の暫定最低。可能なら NG50 に置換</td><td class="mono">実装済(opt-in・既定off)</td></tr>
+    <tr><td class="mono">総長 vs 期待サイズ</td><td>期待ゲノムサイズから大きく外れる assembly を除外</td><td class="mono">要データ</td></tr>
+    <tr><td class="mono">BUSCO ≥ 90%</td><td>single-copy completeness（NCBI は RefSeq annotation への protein-mode）</td><td class="mono">要データ</td></tr>
+    <tr><td class="mono">後段 QC</td><td>相互 aligned coverage・3種で callable な CDS 割合。失敗→次点、全滅→種削除</td><td class="mono">Stage 4+ / 要実装</td></tr>
+  </table>
+  </div>
+
   <div class="note plain">
     <span class="m">→</span>
-    <div><p>厳格に reference genome のみにすると霊長類 37種中 <strong>11種が丸ごと脱落</strong>する
-    (<em>M. mulatta</em>, <em>Pan paniscus</em>, <em>Pongo abelii</em> 等)。
-    best-per-species なら 37種を維持したまま重複除去できる。</p>
-    <p>NCBI が返さなくなった accession（<code>GCA_037993035.1</code> は既に消滅）は警告して葉ごと落とす。</p></div>
+    <div>
+      <p><strong>「断片化 → identity が信頼できない」は言い過ぎだった。</strong>
+      主問題は identity そのものより、<strong>align 可能領域と callable CDS が減り、
+      観測される遺伝子・コンテキストが偏る</strong>こと。identity だけでは
+      「ゲノムの5%しか align していない 98% identity」を見抜けない——だから後段に
+      相互 coverage と callable CDS 割合の検査層を置く。</p>
+      <p><strong>木上にない新 assembly へ差し替える場合の注意:</strong>
+      枝長は accession 固有なので、差し替えると Stage 1 の樹 identity と対応が崩れる。
+      ただし超計量樹では樹 identity はもともと選別に効かず（100% 通過、最終判断は last-train）、
+      実害は小さい。方針は <strong>木は topology（列挙）専用、identity は last-train</strong> に一本化する。</p>
+    </div>
   </div>
 
   <h3>Stage 1 — 列挙と事前絞り込み</h3>
@@ -389,16 +498,19 @@ Stage 4  論文の規則で最終選別                  [trio_filter.py]</code>
   <h3>新しいオプション</h3>
   <p>
     <code>--tree</code>, <code>--idt-threshold</code>（既定 80）, <code>--prescreen-margin</code>,
-    <code>--top-k</code>, <code>--genome-dir</code>, <code>--out-dir</code>, <code>--date</code>
+    <code>--top-k</code>, <code>--ingroup-min</code>（内群近縁度の下限。既定 0 = 無効）,
+    <code>--min-contig-n50</code>（Stage 0 品質ゲート。既定 0 = 無効の opt-in）,
+    <code>--genome-dir</code>, <code>--out-dir</code>, <code>--date</code>, <code>--threads</code>
   </p>
 </section>
 
 <section>
   <div class="sec-head"><span class="tag">STEP 3</span><h2>sbst_fromDwl.sh に --tree モード</h2></div>
   <p>
-    <code>--tree &lt;file.nwk&gt;</code> を追加し、指定時は4つの位置引数を省略可能にする。
-    <code>trio_selection.R</code> を実行し、選別された各 trio に対して通常のパイプラインを回す。
-    <code>--idt-threshold</code> は R まで通す。
+    <code>--tree &lt;file.nwk&gt;</code> を追加し、指定時は4つの位置引数を省略可能にする（DATE は任意、既定は本日）。
+    <code>trio_selection.R</code> を実行し、出力 <code>selected_trios.tsv</code> の accession 列を
+    <strong>名前で引いて</strong>、選別された各 trio を<strong>位置引数モード</strong>で回す。
+    <code>--idt-threshold</code> / <code>--ingroup-min</code> / <code>--min-contig-n50</code> は R まで通す。
   </p>
   <div class="note plain">
     <span class="m">→</span>
@@ -415,7 +527,8 @@ Stage 4  論文の規則で最終選別                  [trio_filter.py]</code>
     <tr><th></th><th>path</th><th>内容</th></tr>
     <tr><td><span class="new">NEW</span></td><td class="mono">src/select/trio_filter.py</td><td>論文の規則（移動）+ バッチ CLI</td></tr>
     <tr><td><span class="mod">MOD</span></td><td class="mono">src/report/collect_run_summary.py</td><td>移した関数を削除し import に</td></tr>
-    <tr><td><span class="mod">MOD</span></td><td class="mono">trio_selection.R</td><td>全面書き換え（<code>src/select/</code> 配下へ移動）</td></tr>
+    <tr><td><span class="mod">MOD</span></td><td class="mono">src/select/trio_selection.R</td><td>全面書き換え + 簡易品質ゲート（<code>--min-contig-n50</code>）/ コストノブ（<code>--ingroup-min</code>）</td></tr>
+    <tr><td><span style="color:var(--ink-faint);font-weight:700;font-size:11px;font-family:ui-monospace,monospace">TODO</span></td><td class="mono">src/select/fetch_assembly_metadata.py</td><td>再設計: 種(taxon)単位で全 current assembly を取得し、Stage 0 でゲート→選択→種削除</td></tr>
     <tr><td><span class="mod">MOD</span></td><td class="mono">src/sbst_fromDwl.sh</td><td><code>--tree</code> モード追加</td></tr>
     <tr><td><span class="new">NEW</span></td><td class="mono">test/test_trio_filter.py</td><td>規則のユニットテスト</td></tr>
     <tr><td><span class="mod">MOD</span></td><td class="mono">CLAUDE.md</td><td>外群の規約を修正（下記）</td></tr>
@@ -445,9 +558,13 @@ Stage 4  論文の規則で最終選別                  [trio_filter.py]</code>
     <li><strong>ユニットテスト</strong> (<code>trio_filter.py</code>): 属パターン 1/3/4/5、identity 順序規則、
       閾値ゲートを網羅。特に<strong>論文規則を特徴づけるケース</strong>——
       pattern1 が真だが identity 順序が偽 → それでも採用される——を必ず含める。</li>
-    <li><strong>Stage 0-1 のドライラン:</strong> <code>trio_selection.R --tree Primates_tree.nwk</code> を
-      ダウンロード無効で実行し、43葉 → 37種になること、
+    <li><strong>Stage 0-1 のドライラン:</strong> <code>trio_selection.R --tree Primates_tree.nwk --dry-run</code> を
+      実行し、43葉 → 42アセンブリ → 37種 → 品質ゲートで <strong>23種</strong>になること、
       出力された全候補で外群が内群 clade の外にあることを確認。</li>
+    <li><strong>品質ゲート（現行・簡易）:</strong> <strong>既定は 0（無効）</strong>で指定しなければ
+      37種/7732 trio のまま。明示 <code>--min-contig-n50 1e6</code> で 37種→23種・7732→1724 trio、
+      落ちる 14種が全て N50 ≤ 0.31 Mb（実測済み）。<strong>再設計後</strong>は同じ 1 Mb 基準でも
+      種ごとに全 assembly を探索し <strong>31種 / 4441 trio</strong> を確保する見込み（要実装）。</li>
     <li><strong>小規模な end-to-end:</strong> 1 clade（例: Hominidae）に限定して全体を通し、
       <code>.train</code> キャッシュを見て <code>last_train.sh</code> が
       <strong>trio 数ではなくユニークペア数だけ</strong>呼ばれていることを確認。</li>
