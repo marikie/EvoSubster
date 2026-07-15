@@ -53,20 +53,33 @@ BASE_GENOMES_OVERRIDE=""
 IDT_ONLY=0
 THREAD_NUM_OVERRIDE=8
 FORCE_DOWNLOAD=0
+TREE_FILE=""
+IDT_THRESHOLD=""
+INGROUP_MIN=""
 POSITIONAL_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help)
             cat <<'EOF'
-Usage: sbst_fromDwl.sh <DATE> <ACC1> <ACC2> <ACC3> [OPTIONS]
+Usage:
+  sbst_fromDwl.sh <DATE> <ACC1> <ACC2> <ACC3> [OPTIONS]   # single trio
+  sbst_fromDwl.sh --tree <FILE.nwk> [DATE] [OPTIONS]       # select trios from a tree
 
 Download genomes from NCBI and run the substitution spectrum pipeline.
 
-Positional arguments:
+Positional arguments (single-trio mode):
   DATE     Run date (e.g. 20240101)
   ACC1     Outgroup accession ID (e.g. GCA_023078555.1)
   ACC2     Ingroup accession ID (e.g. GCA_900538255.1)
   ACC3     Ingroup accession ID (e.g. GCA_024500015.1)
+
+Tree mode:
+  --tree FILE.nwk      Select trios from a Newick tree (src/select/trio_selection.R),
+                       then run the pipeline for each selected trio. The four positional
+                       accessions are unused here; DATE is optional (defaults to today).
+  --idt-threshold N    Minimum pairwise percent identity for trio selection (default: 80).
+  --ingroup-min N      Minimum ingroup-pair tree identity used to prescreen candidates;
+                       the effective cost knob on an ultrametric tree (default: 0 = off).
 
 Options:
   --genome-dir PATH    Genome storage directory (default: ./genomes)
@@ -150,6 +163,48 @@ EOF
             shift
             continue
             ;;
+        --tree)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: --tree requires a Newick file path." >&2
+                exit 1
+            fi
+            TREE_FILE="$2"
+            shift 2
+            continue
+            ;;
+        --tree=*)
+            TREE_FILE="${1#*=}"
+            if [[ -z "$TREE_FILE" ]]; then
+                echo "Error: --tree requires a Newick file path." >&2
+                exit 1
+            fi
+            shift
+            continue
+            ;;
+        --idt-threshold|--ingroup-min)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: $1 requires a non-negative number argument." >&2
+                exit 1
+            fi
+            if ! [[ "$2" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+                echo "Error: $1 must be a non-negative number (got: $2)." >&2
+                exit 1
+            fi
+            if [[ "$1" == "--idt-threshold" ]]; then IDT_THRESHOLD="$2"; else INGROUP_MIN="$2"; fi
+            shift 2
+            continue
+            ;;
+        --idt-threshold=*|--ingroup-min=*)
+            _opt_key="${1%%=*}"
+            _opt_val="${1#*=}"
+            if ! [[ "$_opt_val" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+                echo "Error: $_opt_key must be a non-negative number (got: $_opt_val)." >&2
+                exit 1
+            fi
+            if [[ "$_opt_key" == "--idt-threshold" ]]; then IDT_THRESHOLD="$_opt_val"; else INGROUP_MIN="$_opt_val"; fi
+            shift
+            continue
+            ;;
         --)
             shift
             POSITIONAL_ARGS+=("$@")
@@ -174,8 +229,9 @@ org2ID="$3"
 org3ID="$4"
 
 
-# Check minimally required arguments (DATE and 3 accessions)
-if [ -z "$DATE" ] || [ -z "$org1ID" ] || [ -z "$org2ID" ] || [ -z "$org3ID" ]; then
+# Check minimally required arguments (DATE and 3 accessions).
+# Tree mode picks its own trios, so the positional accessions are optional there.
+if [ -z "$TREE_FILE" ] && { [ -z "$DATE" ] || [ -z "$org1ID" ] || [ -z "$org2ID" ] || [ -z "$org3ID" ]; }; then
     echo "$(get_config '.errors.arg_count' | sed "s/{arg_num}/$(get_config '.settings.required_args')/g")" >&2
    echo "$(get_config '.errors.usage')" >&2
    exit 1
@@ -209,6 +265,79 @@ if [ ! -d "$out_dir_base" ]; then
         echo "Error: Unable to create output base directory at $out_dir_base" >&2
         exit 1
     fi
+fi
+
+# --- Tree mode: select trios from a Newick tree, then run the pipeline per trio ---
+# trio_selection.R downloads genomes and runs last-train itself to score candidates;
+# here we only loop the per-trio pipeline over the trios it selected.  Each per-trio
+# call takes the positional path (no --tree), so selection never re-enters itself.
+if [ -n "$TREE_FILE" ]; then
+    if [ ! -f "$TREE_FILE" ]; then
+        echo "Error: --tree file not found: $TREE_FILE" >&2
+        exit 1
+    fi
+    DATE="${DATE:-$(date +%Y%m%d)}"
+
+    rt_out_dir="$out_dir_base/trio_selection"
+    r_args=(--tree "$TREE_FILE"
+            --genome-dir "$base_genomes"
+            --out-dir "$rt_out_dir"
+            --date "$DATE"
+            --threads "$THREAD_NUM_OVERRIDE")
+    [ -n "$IDT_THRESHOLD" ] && r_args+=(--idt-threshold "$IDT_THRESHOLD")
+    [ -n "$INGROUP_MIN" ] && r_args+=(--ingroup-min "$INGROUP_MIN")
+
+    echo "--- [tree mode] selecting trios from $TREE_FILE"
+    if ! Rscript "$SCRIPT_DIR/select/trio_selection.R" "${r_args[@]}"; then
+        echo "Error: trio_selection.R failed" >&2
+        exit 1
+    fi
+
+    selected_file="$rt_out_dir/selected_trios.tsv"
+    if [ ! -s "$selected_file" ]; then
+        echo "[tree mode] trio_selection.R selected no trios; nothing to run."
+        exit 0
+    fi
+
+    # Locate the accession columns by name so the table layout can change freely.
+    IFS= read -r _hdr < "$selected_file"
+    col_index() {
+        local target="$1" n=0 field
+        local IFS=$'\t'
+        for field in $_hdr; do
+            n=$((n + 1))
+            if [ "$field" = "$target" ]; then echo "$n"; return 0; fi
+        done
+        return 1
+    }
+    out_col=$(col_index out_acc) && in1_col=$(col_index in1_acc) && in2_col=$(col_index in2_acc) || {
+        echo "Error: $selected_file is missing an out_acc/in1_acc/in2_acc column." >&2
+        exit 1
+    }
+
+    # Options forwarded to every single-trio run.
+    pass_opts=(--genome-dir "$base_genomes" --out-dir "$out_dir_base" --thread "$THREAD_NUM_OVERRIDE")
+    [ "$IDT_ONLY" -eq 1 ] && pass_opts+=(--idt-only)
+    [ "$FORCE_DOWNLOAD" -eq 1 ] && pass_opts+=(--force)
+
+    trio_count=0
+    trio_failures=0
+    while IFS=$'\t' read -r out_acc in1_acc in2_acc; do
+        if [ -z "$out_acc" ] || [ -z "$in1_acc" ] || [ -z "$in2_acc" ]; then
+            continue
+        fi
+        trio_count=$((trio_count + 1))
+        echo "=== [tree mode] trio $trio_count: outgroup=$out_acc ingroup=$in1_acc,$in2_acc ==="
+        if ! bash "$SCRIPT_DIR/sbst_fromDwl.sh" "$DATE" "$out_acc" "$in1_acc" "$in2_acc" "${pass_opts[@]}"; then
+            echo "Warning: pipeline failed for trio $out_acc/$in1_acc/$in2_acc; continuing." >&2
+            trio_failures=$((trio_failures + 1))
+        fi
+    done < <(awk -F'\t' -v o="$out_col" -v a="$in1_col" -v b="$in2_col" \
+                 'NR > 1 { print $o "\t" $a "\t" $b }' "$selected_file")
+
+    echo "[tree mode] ran pipeline on $trio_count trio(s); $trio_failures failed."
+    [ "$trio_failures" -gt 0 ] && exit 1
+    exit 0
 fi
 
 # Download genome + taxonomy for each accession via dwl_organism.sh

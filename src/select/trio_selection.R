@@ -65,6 +65,7 @@ defaults <- list(
   idt_threshold = 80,
   prescreen_margin = 10,
   top_k = 3,
+  ingroup_min = 0,
   genome_dir = "./genomes",
   out_dir = "./results/trio_selection",
   date = format(Sys.Date(), "%Y%m%d"),
@@ -83,6 +84,11 @@ usage <- function() {
     "                          distances, which only approximate aligned identity",
     "                          (default: 10).",
     "  --top-k N               Keep at most N outgroups per ingroup pair (default: 3).",
+    "  --ingroup-min N         Require the ingroup pair's tree identity to be at least",
+    "                          this before a trio becomes a candidate. On an ultrametric",
+    "                          tree the outgroup is equidistant from both ingroups, so the",
+    "                          ingroup pair's closeness is the only discriminating tree",
+    "                          signal and hence the effective cost knob (default: 0 = off).",
     "  --genome-dir DIR        Genome storage (default: ./genomes).",
     "  --out-dir DIR           Output and last-train cache (default: ./results/trio_selection).",
     "  --date YYYYMMDD         Run date, used in cache filenames (default: today).",
@@ -107,6 +113,7 @@ parse_args <- function(argv) {
       "--idt-threshold"    = { opts$idt_threshold <- as.numeric(take()); i <- i + 2 },
       "--prescreen-margin" = { opts$prescreen_margin <- as.numeric(take()); i <- i + 2 },
       "--top-k"            = { opts$top_k <- as.integer(take()); i <- i + 2 },
+      "--ingroup-min"      = { opts$ingroup_min <- as.numeric(take()); i <- i + 2 },
       "--genome-dir"       = { opts$genome_dir <- take(); i <- i + 2 },
       "--out-dir"          = { opts$out_dir <- take(); i <- i + 2 },
       "--date"             = { opts$date <- take(); i <- i + 2 },
@@ -307,7 +314,7 @@ prescreen_trios <- function(trios, opts) {
       tree_idt_min = pmin(tree_idt_12, tree_idt_13, tree_idt_23),
       outgroup_idt = pmin(tree_idt_12, tree_idt_13)
     ) %>%
-    filter(!genus_two_vs_one, tree_idt_min >= floor_idt) %>%
+    filter(!genus_two_vs_one, tree_idt_min >= floor_idt, tree_idt_23 >= opts$ingroup_min) %>%
     # The closest admissible outgroup resolves substitutions best, so rank on it.
     group_by(in1_tip, in2_tip) %>%
     arrange(desc(outgroup_idt), .by_group = TRUE) %>%
@@ -447,8 +454,8 @@ main <- function() {
 
   candidates <- prescreen_trios(trios, opts)
   log_stage(" ", nrow(candidates), "candidates after prescreen",
-            sprintf("(two-vs-one genera dropped; tree identity >= %g; top %d outgroups per ingroup pair)",
-                    opts$idt_threshold - opts$prescreen_margin, opts$top_k))
+            sprintf("(two-vs-one genera dropped; tree identity >= %g; ingroup identity >= %g; top %d outgroups per ingroup pair)",
+                    opts$idt_threshold - opts$prescreen_margin, opts$ingroup_min, opts$top_k))
 
   if (!nrow(candidates)) {
     log_stage("No candidate trios survived the prescreen; nothing to do.")

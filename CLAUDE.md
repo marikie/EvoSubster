@@ -12,11 +12,13 @@ Applied to 60 trios across 7 lineages (fungi, cnidarians, Apicomplexa, Phaeophyc
 
 **Parsimony case classification:**
 
-- Species A = outgroup, B/C = ingroups
+- org1 = outgroup, org2/org3 = ingroups (the pipeline's slot convention). The thesis
+  and `src/metrics/isParsimonious.py` use A/B/C letters with the outgroup in different
+  positions, so do not transcribe their lettering into new code — follow org1/org2/org3.
 - Case 0: all three identical → no substitution, increment count
-- Case 1: only A differs → ambiguous, excluded
-- Case 2: only B differs → substitution inferred in B
-- Case 3: only C differs → substitution inferred in C
+- Case 1: only org1 (outgroup) differs → ambiguous, excluded
+- Case 2: only org2 differs → substitution inferred in org2
+- Case 3: only org3 differs → substitution inferred in org3
 - Case 4: all three differ → multiple scenarios, excluded
 
 ## Automation
