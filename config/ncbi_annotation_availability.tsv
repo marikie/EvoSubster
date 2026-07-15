@@ -1,0 +1,23 @@
+checked_at_utc	trio	role	accession	exact_gff_available	selected_for_three_way_qc	check_method
+2026-07-15	acrDig	ingroup B	GCA_964291705.1	false	false	NCBI Datasets report plus exact FTP HEAD
+2026-07-15	acrDig	ingroup C	GCF_013753865.1	true	false	NCBI Datasets report plus exact FTP HEAD
+2026-07-15	acrMil	ingroup B	GCA_014634205.1	false	false	NCBI Datasets report plus exact FTP HEAD
+2026-07-15	acrMil	ingroup C	GCA_014634165.1	false	false	NCBI Datasets report plus exact FTP HEAD
+2026-07-15	agaBis	ingroup B	GCA_030246685.1	false	false	NCBI Datasets report plus exact FTP HEAD
+2026-07-15	agaBis	ingroup C	GCA_022315185.1	false	false	NCBI Datasets report plus exact FTP HEAD
+2026-07-15	arabidopsis	ingroup B	GCA_026151145.1	false	false	NCBI Datasets report plus exact FTP HEAD
+2026-07-15	arabidopsis	ingroup C	GCA_964271285.1	true	false	NCBI Datasets report plus exact FTP HEAD
+2026-07-15	armBor	ingroup B	GCA_037576215.1	false	false	NCBI Datasets report plus exact FTP HEAD
+2026-07-15	armBor	ingroup C	GCA_022818075.1	false	false	NCBI Datasets report plus exact FTP HEAD
+2026-07-15	drosophila	ingroup B	GCA_016746395.2	false	false	NCBI Datasets report plus exact FTP HEAD
+2026-07-15	drosophila	ingroup C	GCA_004382195.2	false	false	NCBI Datasets report plus exact FTP HEAD
+2026-07-15	lenEdo	ingroup B	GCA_028011325.1	true	true	NCBI Datasets report plus exact FTP HEAD
+2026-07-15	lenEdo	ingroup C	GCA_027921425.1	true	true	NCBI Datasets report plus exact FTP HEAD
+2026-07-15	neurospora	ingroup B	GCA_052058435.2	false	false	NCBI Datasets report plus exact FTP HEAD
+2026-07-15	neurospora	ingroup C	GCA_000213175.1	true	false	NCBI Datasets report plus exact FTP HEAD
+2026-07-15	pleOst	ingroup B	GCA_029467805.1	false	false	NCBI Datasets report plus exact FTP HEAD
+2026-07-15	pleOst	ingroup C	GCA_036872985.1	false	false	NCBI Datasets report plus exact FTP HEAD
+2026-07-15	puffer	ingroup B	GCF_003711565.1	true	true	NCBI Datasets report plus exact FTP HEAD
+2026-07-15	puffer	ingroup C	GCA_004026145.2	true	true	NCBI Datasets report plus exact FTP HEAD
+2026-07-15	styPis	ingroup B	GCF_036669915.1	true	true	NCBI Datasets report plus exact FTP HEAD
+2026-07-15	styPis	ingroup C	GCF_003704095.1	true	true	NCBI Datasets report plus exact FTP HEAD
