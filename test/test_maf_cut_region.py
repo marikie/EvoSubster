@@ -135,6 +135,12 @@ DNA = ("ACGTAGCTAGGCTAACCGGTTACGTGCATGCAATTCCGGATCGATCGTAGCTAGCAT"
 
 
 class TestCutAlignmentUnit(unittest.TestCase):
+    def test_maf_reader_preserves_legacy_tuple_shape(self):
+        rows = list(MCR.read_maf_alignments(io.StringIO(
+            "a\ns ref 10 4 + 100 ACGT\n\n"
+        )))
+        self.assertEqual(rows, [[("ref", 10, "+", "100", "ACGT")]])
+
     def test_inside_single_interval_no_gaps(self):
         seq = DNA[:12]
         maf = make_block("ref", 0, [seq, seq, seq])

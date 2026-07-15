@@ -35,16 +35,16 @@ countable windows minus a small, well-defined set of boundary windows.
 import argparse
 import bisect
 import collections
-import gzip
 import sys
+
+try:
+    from src.align.maf_io import iter_maf_blocks, open_text
+except ModuleNotFoundError:
+    from maf_io import iter_maf_blocks, open_text
 
 
 def open_file(file_name):
-    if file_name == "-":
-        return sys.stdin
-    if file_name.endswith(".gz"):
-        return gzip.open(file_name, "rt")
-    return open(file_name)
+    return open_text(file_name)
 
 
 def read_gff_regions(lines, want_type):
@@ -110,18 +110,11 @@ def shrunk_range(beg, end):
 
 def read_maf_alignments(lines):
     """Yield a MAF block as a list of (seqName, start, strand, seqLen, seq)."""
-    rows = []
-    for line in lines:
-        f = line.split()
-        if not f:  # blank line separates alignments
-            if rows:
-                yield rows
-            rows = []
-        elif f[0] == "s":
-            _s, seq_name, start, _span, strand, seq_len, seq = f
-            rows.append((seq_name, int(start), strand, seq_len, seq))
-    if rows:
-        yield rows
+    for block in iter_maf_blocks(lines):
+        yield [
+            (row.seqid, row.start0, row.strand, str(row.seqlen), row.sequence)
+            for row in block
+        ]
 
 
 def print_maf(seq_names, begs, ends, strands, seq_lengths, seqs, aln_beg, aln_end,
