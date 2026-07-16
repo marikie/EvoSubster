@@ -66,6 +66,7 @@ defaults <- list(
   tree = NULL,
   idt_threshold = 80,
   max_outgroup_tries = 5,
+  ingroup_pairing = "matching",
   min_contig_n50 = 0,
   genome_dir = "./genomes",
   out_dir = "./results/trio_selection",
@@ -84,6 +85,11 @@ usage <- function() {
     "  --max-outgroup-tries N  Give up on an ingroup pair after training this many outgroup",
     "                          candidates without a thesis-rule pass (default: 5). Caps the",
     "                          per-pair last-train cost.",
+    "  --ingroup-pairing MODE  Which ingroup couples to consider (default: matching).",
+    "                            matching  greedy closest-first disjoint matching -- each",
+    "                                      species used at most once, ~n/2 independent",
+    "                                      sister-pair couples (phylogenetic-pairs design).",
+    "                            all       every tip pair (exhaustive; C(n,2) couples).",
     "  --min-contig-n50 BP     Drop a species whose best assembly has a contig N50 below",
     "                          this (Stage 0 quality gate). assembly_level and",
     "                          refseq_category mislabel fragmented assemblies, so contig",
@@ -115,6 +121,7 @@ parse_args <- function(argv) {
       "--tree"               = { opts$tree <- take(); i <- i + 2 },
       "--idt-threshold"      = { opts$idt_threshold <- as.numeric(take()); i <- i + 2 },
       "--max-outgroup-tries" = { opts$max_outgroup_tries <- as.integer(take()); i <- i + 2 },
+      "--ingroup-pairing"    = { opts$ingroup_pairing <- take(); i <- i + 2 },
       "--min-contig-n50"     = { opts$min_contig_n50 <- as.numeric(take()); i <- i + 2 },
       "--genome-dir"         = { opts$genome_dir <- take(); i <- i + 2 },
       "--out-dir"            = { opts$out_dir <- take(); i <- i + 2 },
@@ -129,6 +136,10 @@ parse_args <- function(argv) {
   if (is.null(opts$tree)) {
     usage()
     stop("--tree is required.", call. = FALSE)
+  }
+  if (!opts$ingroup_pairing %in% c("matching", "all")) {
+    stop("--ingroup-pairing must be 'matching' or 'all' (got: ", opts$ingroup_pairing, ")",
+         call. = FALSE)
   }
   opts
 }
@@ -311,23 +322,83 @@ candidate_outgroups <- function(tree, tipA, tipB, leaves) {
   tree$tip.label[cands]
 }
 
-# Enumerate every ingroup pair that has an available outgroup, with its ordered
-# candidate list.  Used by --dry-run to expose the search order without training.
-enumerate_pairs_dry <- function(tree, leaves) {
+# Choose which ingroup couples to consider, using tree topology only (no last-train).
+#
+#   "matching" (default): a phylogenetically-independent sister-pair design -- pair each
+#     species with its closest relative and use each species at most once.  Candidate
+#     couples are ranked closest-first by TOPOLOGICAL distance (the number of edges between
+#     the tips: every edge counts as 1, so a cherry = distance 2 and beats any deeper pair)
+#     and greedily matched, giving ~n/2 disjoint, independent sister-pair couples.  Topology
+#     (not branch length) is used deliberately: rate variation or additive (substitutions/
+#     site) branch lengths could otherwise rank a non-sister pair with short branches ahead
+#     of a true cherry with long branches.  Only couples with an available outgroup (MRCA is
+#     not the root) are eligible, so a species is never spent on a couple that could yield no
+#     trio.  A species left unmatched on a ladder-like tree simply produces no trio.
+#
+#   "all": every tip pair (exhaustive C(n,2)); the pre-restriction behavior, kept as an
+#     opt-out / validation path.
+#
+# Returns a list of c(tipA, tipB) character pairs.
+ingroup_pairs <- function(tree, leaves, mode = "matching") {
   tips <- tree$tip.label
   n <- length(tips)
+  if (n < 2) return(list())
+
+  if (mode == "all") {
+    combs <- utils::combn(n, 2)
+    return(lapply(seq_len(ncol(combs)), function(k) tips[combs[, k]]))
+  }
+
+  # Closeness is measured on the tree TOPOLOGY, not branch lengths: set every edge to 1
+  # so a pair's distance is the number of edges between them.  A cherry (true sisters) is
+  # always distance 2 -- the minimum -- so cherries are matched before any non-sister pair.
+  # Real branch lengths would break this: on a tree with rate variation or additive
+  # (substitutions/site) lengths a non-sister pair with short branches can have a smaller
+  # patristic distance than a true sister pair with long branches, so branch-length ranking
+  # could pair non-sisters.  Topology also makes the matching independent of the tree's units
+  # (time vs substitutions) and of whether it is ultrametric.
+  t2 <- tree
+  t2$edge.length <- rep(1, nrow(t2$edge))
+  D <- cophenetic(t2)[tips, tips]
+  M <- mrca(tree)
+  root <- Ntip(tree) + 1L
+
+  ij <- which(upper.tri(D), arr.ind = TRUE)     # candidate i<j pairs (by tip index)
+  eligible <- M[ij] != root                     # keep only couples that have an outgroup
+  ij <- ij[eligible, , drop = FALSE]
+  if (!nrow(ij)) return(list())
+
+  # Deterministic ordering: fewest edges (closest / most-nested) first, then better combined
+  # assembly quality, then tip names -- so the same tree always yields the same matching.
+  q <- leaves$contig_n50[match(tips, leaves$tip)]
+  q[is.na(q)] <- 0
+  score <- q[ij[, 1]] + q[ij[, 2]]
+  ord <- order(D[ij], -score, tips[ij[, 1]], tips[ij[, 2]])
+
+  used <- logical(n)
+  pairs <- list()
+  for (k in ord) {
+    a <- ij[k, 1]; b <- ij[k, 2]
+    if (used[a] || used[b]) next
+    used[a] <- TRUE; used[b] <- TRUE
+    pairs[[length(pairs) + 1L]] <- c(tips[a], tips[b])
+  }
+  pairs
+}
+
+# Enumerate the selected ingroup couples with their ordered candidate-outgroup list.
+# Used by --dry-run to expose the search order without training.
+enumerate_pairs_dry <- function(tree, leaves, mode = "matching") {
   rows <- list()
-  for (i in seq_len(n - 1)) {
-    for (j in (i + 1):n) {
-      cands <- candidate_outgroups(tree, tips[i], tips[j], leaves)
-      if (!length(cands)) next
-      rows[[length(rows) + 1]] <- data.frame(
-        in1_tip = tips[i], in2_tip = tips[j],
-        n_candidates = length(cands),
-        candidate_order = paste(cands, collapse = ","),
-        stringsAsFactors = FALSE
-      )
-    }
+  for (p in ingroup_pairs(tree, leaves, mode)) {
+    cands <- candidate_outgroups(tree, p[1], p[2], leaves)
+    if (!length(cands)) next
+    rows[[length(rows) + 1]] <- data.frame(
+      in1_tip = p[1], in2_tip = p[2],
+      n_candidates = length(cands),
+      candidate_order = paste(cands, collapse = ","),
+      stringsAsFactors = FALSE
+    )
   }
   if (!length(rows)) return(data.frame())
   do.call(rbind, rows)
@@ -450,71 +521,73 @@ select_trios <- function(tree, leaves, opts, fetch = NULL) {
 
   info_of <- function(tip) leaves[match(tip, leaves$tip), , drop = FALSE]
 
-  tips <- tree$tip.label
-  n <- length(tips)
+  couples <- ingroup_pairs(tree, leaves, opts$ingroup_pairing)
+  covered <- unique(unlist(couples))
+  uncovered <- setdiff(tree$tip.label, covered)
   results <- list()
   no_outgroup <- 0L
   too_diverged <- 0L
   no_valid_outgroup <- 0L
 
+  log_stage(sprintf("Stage 1: %s pairing -> %d ingroup couple(s); %d species not paired",
+                    opts$ingroup_pairing, length(couples), length(uncovered)))
   log_stage("Stage 1: searching one outgroup per ingroup pair (nearest-first, first-pass)")
 
-  for (i in seq_len(n - 1)) {
-    for (j in (i + 1):n) {
-      tipA <- tips[i]; tipB <- tips[j]
-      cands <- candidate_outgroups(tree, tipA, tipB, leaves)
-      if (!length(cands)) { no_outgroup <- no_outgroup + 1L; next }
+  for (couple in couples) {
+    tipA <- couple[1]; tipB <- couple[2]
+    cands <- candidate_outgroups(tree, tipA, tipB, leaves)
+    if (!length(cands)) { no_outgroup <- no_outgroup + 1L; next }
 
-      infoA <- info_of(tipA); infoB <- info_of(tipB)
-      idt_23 <- get_identity(infoA$short_name, infoA$accession,
+    infoA <- info_of(tipA); infoB <- info_of(tipB)
+    idt_23 <- get_identity(infoA$short_name, infoA$accession,
+                           infoB$short_name, infoB$accession)
+    if (is.na(idt_23) || idt_23 <= threshold) { too_diverged <- too_diverged + 1L; next }
+
+    chosen <- NULL
+    tries <- 0L
+    for (og in cands) {
+      infoO <- info_of(og)
+      # Free pre-filter: a two-vs-one genus split is always excluded -> never train it.
+      if (is_two_vs_one(infoO$genus, infoA$genus, infoB$genus)) next
+      if (tries >= opts$max_outgroup_tries) break
+      tries <- tries + 1L
+
+      idt_12 <- get_identity(infoO$short_name, infoO$accession,
+                             infoA$short_name, infoA$accession)
+      idt_13 <- get_identity(infoO$short_name, infoO$accession,
                              infoB$short_name, infoB$accession)
-      if (is.na(idt_23) || idt_23 <= threshold) { too_diverged <- too_diverged + 1L; next }
+      if (is.na(idt_12) || is.na(idt_13)) next  # unusable alignment, try the next candidate
 
-      chosen <- NULL
-      tries <- 0L
-      for (og in cands) {
-        infoO <- info_of(og)
-        # Free pre-filter: a two-vs-one genus split is always excluded -> never train it.
-        if (is_two_vs_one(infoO$genus, infoA$genus, infoB$genus)) next
-        if (tries >= opts$max_outgroup_tries) break
-        tries <- tries + 1L
+      row <- build_row(infoO, infoA, infoB, idt_12, idt_13, idt_23, tries)
+      verdict <- evaluate_one(row, opts, tmp_in, tmp_out)
 
-        idt_12 <- get_identity(infoO$short_name, infoO$accession,
-                               infoA$short_name, infoA$accession)
-        idt_13 <- get_identity(infoO$short_name, infoO$accession,
-                               infoB$short_name, infoB$accession)
-        if (is.na(idt_12) || is.na(idt_13)) next  # unusable alignment, try the next candidate
-
-        row <- build_row(infoO, infoA, infoB, idt_12, idt_13, idt_23, tries)
-        verdict <- evaluate_one(row, opts, tmp_in, tmp_out)
-
-        if (identical(verdict$excluded, "FALSE")) {           # pass -> fix this trio, stop
-          chosen <- verdict
-          break
-        }
-        if (identical(verdict$idt_threshold_condition, "FALSE")) {
-          # too far: an outgroup-ingroup identity fell below the threshold, and every
-          # farther candidate is more diverged still -> the window has closed.
-          break
-        }
-        # else "too close" (strict ordering failed) -> the next candidate is farther out.
+      if (identical(verdict$excluded, "FALSE")) {           # pass -> fix this trio, stop
+        chosen <- verdict
+        break
       }
-
-      if (!is.null(chosen)) {
-        results[[length(results) + 1]] <- chosen
-        log_stage(sprintf("  %s + %s  ->  %s  (idt 12/13/23 = %s/%s/%s; %d tried)",
-                          infoA$species, infoB$species, chosen$out_species,
-                          chosen$idt_12, chosen$idt_13, chosen$idt_23, tries))
-      } else {
-        no_valid_outgroup <- no_valid_outgroup + 1L
+      if (identical(verdict$idt_threshold_condition, "FALSE")) {
+        # too far: an outgroup-ingroup identity fell below the threshold, and every
+        # farther candidate is more diverged still -> the window has closed.
+        break
       }
+      # else "too close" (strict ordering failed) -> the next candidate is farther out.
+    }
+
+    if (!is.null(chosen)) {
+      results[[length(results) + 1]] <- chosen
+      log_stage(sprintf("  %s + %s  ->  %s  (idt 12/13/23 = %s/%s/%s; %d tried)",
+                        infoA$species, infoB$species, chosen$out_species,
+                        chosen$idt_12, chosen$idt_13, chosen$idt_23, tries))
+    } else {
+      no_valid_outgroup <- no_valid_outgroup + 1L
     }
   }
 
   log_stage(sprintf("last-train runs: %d | downloads: %d", fetch$counters$trains,
                     fetch$counters$downloads))
-  log_stage(sprintf("ingroup pairs: %d selected | %d no outgroup on tree | %d ingroup pair below threshold | %d no external outgroup found",
-                    length(results), no_outgroup, too_diverged, no_valid_outgroup))
+  log_stage(sprintf("ingroup couples: %d selected | %d no outgroup on tree | %d couple below threshold | %d no external outgroup found | %d species unpaired",
+                    length(results), no_outgroup, too_diverged, no_valid_outgroup,
+                    length(uncovered)))
 
   if (!length(results)) return(data.frame())
   do.call(rbind, results)
@@ -535,11 +608,11 @@ main <- function() {
   leaves <- pruned$leaves
 
   if (opts$dry_run) {
-    pairs <- enumerate_pairs_dry(tree, leaves)
+    pairs <- enumerate_pairs_dry(tree, leaves, opts$ingroup_pairing)
     out <- file.path(opts$out_dir, "candidate_outgroups.tsv")
     write_tsv(pairs, out)
-    log_stage("Stage 1 (dry-run):", nrow(pairs),
-              "ingroup pairs with an available outgroup; candidate order ->", out)
+    log_stage("Stage 1 (dry-run):", nrow(pairs), "ingroup couple(s) with an available",
+              "outgroup (", opts$ingroup_pairing, "pairing); candidate order ->", out)
     return(invisible(NULL))
   }
 

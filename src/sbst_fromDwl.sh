@@ -56,6 +56,7 @@ FORCE_DOWNLOAD=0
 TREE_FILE=""
 IDT_THRESHOLD=""
 MAX_OUTGROUP_TRIES=""
+INGROUP_PAIRING=""
 MIN_CONTIG_N50=""
 POSITIONAL_ARGS=()
 while [[ $# -gt 0 ]]; do
@@ -81,6 +82,9 @@ Tree mode:
   --idt-threshold N    Minimum pairwise percent identity for trio selection (default: 80).
   --max-outgroup-tries N  Give up on an ingroup pair after training this many outgroup
                        candidates without a thesis-rule pass (default: 5). Per-pair cost cap.
+  --ingroup-pairing MODE  Which ingroup couples to consider: 'matching' (default; greedy
+                       closest-first disjoint sister-pair matching, ~n/2 independent couples)
+                       or 'all' (every tip pair, exhaustive).
   --min-contig-n50 BP  Drop species whose best assembly has contig N50 below this
                        (Stage 0 quality gate; default: 0 = off, opt-in e.g. 1000000).
 
@@ -216,6 +220,29 @@ EOF
             shift
             continue
             ;;
+        --ingroup-pairing)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: $1 requires a mode argument (matching or all)." >&2
+                exit 1
+            fi
+            if ! [[ "$2" =~ ^(matching|all)$ ]]; then
+                echo "Error: --ingroup-pairing must be 'matching' or 'all' (got: $2)." >&2
+                exit 1
+            fi
+            INGROUP_PAIRING="$2"
+            shift 2
+            continue
+            ;;
+        --ingroup-pairing=*)
+            _opt_val="${1#*=}"
+            if ! [[ "$_opt_val" =~ ^(matching|all)$ ]]; then
+                echo "Error: --ingroup-pairing must be 'matching' or 'all' (got: $_opt_val)." >&2
+                exit 1
+            fi
+            INGROUP_PAIRING="$_opt_val"
+            shift
+            continue
+            ;;
         --)
             shift
             POSITIONAL_ARGS+=("$@")
@@ -297,6 +324,7 @@ if [ -n "$TREE_FILE" ]; then
             --threads "$THREAD_NUM_OVERRIDE")
     [ -n "$IDT_THRESHOLD" ] && r_args+=(--idt-threshold "$IDT_THRESHOLD")
     [ -n "$MAX_OUTGROUP_TRIES" ] && r_args+=(--max-outgroup-tries "$MAX_OUTGROUP_TRIES")
+    [ -n "$INGROUP_PAIRING" ] && r_args+=(--ingroup-pairing "$INGROUP_PAIRING")
     [ -n "$MIN_CONTIG_N50" ] && r_args+=(--min-contig-n50 "$MIN_CONTIG_N50")
 
     echo "--- [tree mode] selecting trios from $TREE_FILE"

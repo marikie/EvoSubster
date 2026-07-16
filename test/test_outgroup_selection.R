@@ -55,6 +55,55 @@ check(identical(candidate_outgroups(tree, "A", "B", leaves), c("C", "D")),
 check(length(candidate_outgroups(tree, "A", "D", leaves)) == 0,
       "pair whose MRCA is the root has no outgroup")
 
+# --- ingroup_pairs: closest-first disjoint matching -------------------------
+pair_keys <- function(pairs) sort(vapply(pairs, function(p) {
+  s <- sort(p); paste(s[1], s[2], sep = "|")
+}, character(1)))
+
+# (((A,B),C),(D,E)): the two cherries (A,B) and (D,E) are the closest couples;
+# both get matched, C is left unpaired (its only partners A/B are already used).
+tree2 <- read.tree(text = "(((A,B),C),(D,E));")
+leaves2 <- data.frame(
+  tip = c("A", "B", "C", "D", "E"),
+  accession = c("a", "b", "c", "d", "e"),
+  species = c("Genus_a", "Genus_b", "Genus_c", "Genus_d", "Genus_e"),
+  genus = c("Genus", "Genus", "Genus", "Genus", "Genus"),
+  short_name = c("A", "B", "C", "D", "E"),
+  contig_n50 = c(1, 1, 1, 1, 1),
+  stringsAsFactors = FALSE
+)
+mpairs <- ingroup_pairs(tree2, leaves2, "matching")
+check(identical(pair_keys(mpairs), c("A|B", "D|E")),
+      "matching on (((A,B),C),(D,E)) yields the two cherries {A,B},{D,E}")
+check({ tips_used <- unlist(mpairs); length(tips_used) == length(unique(tips_used)) },
+      "matching uses each species at most once (disjoint)")
+check(all(vapply(mpairs, function(p)
+        length(candidate_outgroups(tree2, p[1], p[2], leaves2)) > 0, logical(1))),
+      "every matched couple has an available outgroup (MRCA != root)")
+check(length(setdiff(tree2$tip.label, unlist(mpairs))) == 1,
+      "matching leaves exactly the stranded species (C) unpaired")
+
+# "all" mode is the exhaustive C(n,2) enumeration (opt-out path).
+check(length(ingroup_pairs(tree2, leaves2, "all")) == choose(5, 2),
+      "all-pairing enumerates every tip pair")
+
+# Regression: closeness must be topological, not branch-length.  Here the true cherry (A,B)
+# has long terminal branches (patristic distance 6) while the NON-sister pair (A,C) has a
+# SMALLER patristic distance (3.6); ranking by branch length would wrongly pair (A,C) and
+# strand B.  Topological ranking (a cherry = 2 edges) must still pick the sister pair (A,B).
+tree3 <- read.tree(text = "(((A:3,B:3):0.1,C:0.5):1,D:5);")
+leaves3 <- data.frame(
+  tip = c("A", "B", "C", "D"),
+  accession = c("a", "b", "c", "d"),
+  species = c("Genus_a", "Genus_b", "Genus_c", "Genus_d"),
+  genus = c("Genus", "Genus", "Genus", "Genus"),
+  short_name = c("A", "B", "C", "D"),
+  contig_n50 = c(1, 1, 1, 1),
+  stringsAsFactors = FALSE
+)
+check(identical(pair_keys(ingroup_pairs(tree3, leaves3, "matching")), "A|B"),
+      "topological matching picks the true cherry (A,B), not the shorter-patristic (A,C)")
+
 # --- select_trios early-stop ------------------------------------------------
 # For (A,B): nearest outgroup C is TOO CLOSE (idt_1x > idt_23, ordering fails);
 # the farther outgroup D passes. Expect D chosen after 2 candidates tried.
