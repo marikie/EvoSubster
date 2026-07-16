@@ -55,7 +55,7 @@ THREAD_NUM_OVERRIDE=8
 FORCE_DOWNLOAD=0
 TREE_FILE=""
 IDT_THRESHOLD=""
-INGROUP_MIN=""
+MAX_OUTGROUP_TRIES=""
 MIN_CONTIG_N50=""
 POSITIONAL_ARGS=()
 while [[ $# -gt 0 ]]; do
@@ -79,8 +79,8 @@ Tree mode:
                        then run the pipeline for each selected trio. The four positional
                        accessions are unused here; DATE is optional (defaults to today).
   --idt-threshold N    Minimum pairwise percent identity for trio selection (default: 80).
-  --ingroup-min N      Minimum ingroup-pair tree identity used to prescreen candidates;
-                       the effective cost knob on an ultrametric tree (default: 0 = off).
+  --max-outgroup-tries N  Give up on an ingroup pair after training this many outgroup
+                       candidates without a thesis-rule pass (default: 5). Per-pair cost cap.
   --min-contig-n50 BP  Drop species whose best assembly has contig N50 below this
                        (Stage 0 quality gate; default: 0 = off, opt-in e.g. 1000000).
 
@@ -184,7 +184,7 @@ EOF
             shift
             continue
             ;;
-        --idt-threshold|--ingroup-min|--min-contig-n50)
+        --idt-threshold|--max-outgroup-tries|--min-contig-n50)
             if [[ -z "${2:-}" ]]; then
                 echo "Error: $1 requires a non-negative number argument." >&2
                 exit 1
@@ -194,14 +194,14 @@ EOF
                 exit 1
             fi
             case "$1" in
-                --idt-threshold)  IDT_THRESHOLD="$2" ;;
-                --ingroup-min)    INGROUP_MIN="$2" ;;
-                --min-contig-n50) MIN_CONTIG_N50="$2" ;;
+                --idt-threshold)      IDT_THRESHOLD="$2" ;;
+                --max-outgroup-tries) MAX_OUTGROUP_TRIES="$2" ;;
+                --min-contig-n50)     MIN_CONTIG_N50="$2" ;;
             esac
             shift 2
             continue
             ;;
-        --idt-threshold=*|--ingroup-min=*|--min-contig-n50=*)
+        --idt-threshold=*|--max-outgroup-tries=*|--min-contig-n50=*)
             _opt_key="${1%%=*}"
             _opt_val="${1#*=}"
             if ! [[ "$_opt_val" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
@@ -209,9 +209,9 @@ EOF
                 exit 1
             fi
             case "$_opt_key" in
-                --idt-threshold)  IDT_THRESHOLD="$_opt_val" ;;
-                --ingroup-min)    INGROUP_MIN="$_opt_val" ;;
-                --min-contig-n50) MIN_CONTIG_N50="$_opt_val" ;;
+                --idt-threshold)      IDT_THRESHOLD="$_opt_val" ;;
+                --max-outgroup-tries) MAX_OUTGROUP_TRIES="$_opt_val" ;;
+                --min-contig-n50)     MIN_CONTIG_N50="$_opt_val" ;;
             esac
             shift
             continue
@@ -296,7 +296,7 @@ if [ -n "$TREE_FILE" ]; then
             --date "$DATE"
             --threads "$THREAD_NUM_OVERRIDE")
     [ -n "$IDT_THRESHOLD" ] && r_args+=(--idt-threshold "$IDT_THRESHOLD")
-    [ -n "$INGROUP_MIN" ] && r_args+=(--ingroup-min "$INGROUP_MIN")
+    [ -n "$MAX_OUTGROUP_TRIES" ] && r_args+=(--max-outgroup-tries "$MAX_OUTGROUP_TRIES")
     [ -n "$MIN_CONTIG_N50" ] && r_args+=(--min-contig-n50 "$MIN_CONTIG_N50")
 
     echo "--- [tree mode] selecting trios from $TREE_FILE"

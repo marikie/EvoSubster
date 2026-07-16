@@ -6,18 +6,20 @@
 # (section 2.3) rule -- measured sequence percent identity plus genus names --
 # instead of tree distances.
 #
-# The tree cannot decide a trio on its own.  On an ultrametric tree the outgroup
-# sits at an identical distance from both ingroup species, so the thesis'
-# identity ordering test is satisfied by *every* trio the tree can produce and
-# filters nothing.  The asymmetry that test looks for only exists in real aligned
-# sequence, so the tree is used to enumerate and cheaply prescreen candidates,
-# and last-train supplies the identities that actually decide them.
+# One outgroup per ingroup pair.  The tree is used only for TOPOLOGY: for an
+# ingroup couple it gives the candidate outgroups ordered nearest -> farthest
+# (sister of their MRCA, then sister of the grandparent, ...).  The tree is
+# ultrametric, so its distances cannot rank outgroups -- the real decision needs
+# last-train identity.  For each pair we walk the candidates nearest-first,
+# download + last-train on demand, and STOP at the first outgroup that passes the
+# thesis rule.  The strict thesis ordering (idt_12 < idt_23 AND idt_13 < idt_23)
+# is itself the "not too close" boundary, and --idt-threshold is the "not too far"
+# boundary, so nearest-first + first-pass yields the closest still-external
+# outgroup while training as few pairs as possible.
 #
-# Stage 0  prune the tree to one assembly per species   [NCBI metadata, no download]
-# Stage 1  enumerate trios and prescreen on the tree    [free]
-# Stage 2  download the surviving accessions            [dwl_organism.sh]
-# Stage 3  last-train once per unique species pair      [last_train.sh, shared cache]
-# Stage 4  apply the thesis rule                        [trio_filter.py]
+# Stage 0  prune the tree to one assembly per species      [NCBI metadata, no download]
+# Stage 1  per ingroup pair: search outgroups near->far,   [dwl_organism.sh + last_train.sh
+#          stop at the first thesis-rule pass -> one trio    on demand; trio_filter.py to judge]
 #
 # Usage:
 #   Rscript src/select/trio_selection.R --tree Primates_tree.nwk [options]
@@ -63,9 +65,7 @@ ASSEMBLY_LEVEL_RANK <- c(
 defaults <- list(
   tree = NULL,
   idt_threshold = 80,
-  prescreen_margin = 10,
-  top_k = 3,
-  ingroup_min = 0,
+  max_outgroup_tries = 5,
   min_contig_n50 = 0,
   genome_dir = "./genomes",
   out_dir = "./results/trio_selection",
@@ -81,15 +81,9 @@ usage <- function() {
     "Options:",
     "  --tree FILE             Newick tree; leaf labels end in an NCBI accession. (required)",
     "  --idt-threshold N       Every pairwise identity must exceed this (default: 80).",
-    "  --prescreen-margin N    Slack below the threshold when prescreening on tree",
-    "                          distances, which only approximate aligned identity",
-    "                          (default: 10).",
-    "  --top-k N               Keep at most N outgroups per ingroup pair (default: 3).",
-    "  --ingroup-min N         Require the ingroup pair's tree identity to be at least",
-    "                          this before a trio becomes a candidate. On an ultrametric",
-    "                          tree the outgroup is equidistant from both ingroups, so the",
-    "                          ingroup pair's closeness is the only discriminating tree",
-    "                          signal and hence the effective cost knob (default: 0 = off).",
+    "  --max-outgroup-tries N  Give up on an ingroup pair after training this many outgroup",
+    "                          candidates without a thesis-rule pass (default: 5). Caps the",
+    "                          per-pair last-train cost.",
     "  --min-contig-n50 BP     Drop a species whose best assembly has a contig N50 below",
     "                          this (Stage 0 quality gate). assembly_level and",
     "                          refseq_category mislabel fragmented assemblies, so contig",
@@ -101,7 +95,8 @@ usage <- function() {
     "  --out-dir DIR           Output and last-train cache (default: ./results/trio_selection).",
     "  --date YYYYMMDD         Run date, used in cache filenames (default: today).",
     "  --threads N             Threads for lastdb/last-train (default: 8).",
-    "  --dry-run               Stop after Stage 1; download nothing and run no last-train.",
+    "  --dry-run               Enumerate ingroup pairs + candidate-outgroup order only;",
+    "                          download nothing and run no last-train.",
     "",
     sep = "\n"
   )
@@ -117,19 +112,17 @@ parse_args <- function(argv) {
       argv[i + 1]
     }
     switch(key,
-      "--tree"             = { opts$tree <- take(); i <- i + 2 },
-      "--idt-threshold"    = { opts$idt_threshold <- as.numeric(take()); i <- i + 2 },
-      "--prescreen-margin" = { opts$prescreen_margin <- as.numeric(take()); i <- i + 2 },
-      "--top-k"            = { opts$top_k <- as.integer(take()); i <- i + 2 },
-      "--ingroup-min"      = { opts$ingroup_min <- as.numeric(take()); i <- i + 2 },
-      "--min-contig-n50"   = { opts$min_contig_n50 <- as.numeric(take()); i <- i + 2 },
-      "--genome-dir"       = { opts$genome_dir <- take(); i <- i + 2 },
-      "--out-dir"          = { opts$out_dir <- take(); i <- i + 2 },
-      "--date"             = { opts$date <- take(); i <- i + 2 },
-      "--threads"          = { opts$threads <- as.integer(take()); i <- i + 2 },
-      "--dry-run"          = { opts$dry_run <- TRUE; i <- i + 1 },
-      "-h"                 = { usage(); quit(status = 0) },
-      "--help"             = { usage(); quit(status = 0) },
+      "--tree"               = { opts$tree <- take(); i <- i + 2 },
+      "--idt-threshold"      = { opts$idt_threshold <- as.numeric(take()); i <- i + 2 },
+      "--max-outgroup-tries" = { opts$max_outgroup_tries <- as.integer(take()); i <- i + 2 },
+      "--min-contig-n50"     = { opts$min_contig_n50 <- as.numeric(take()); i <- i + 2 },
+      "--genome-dir"         = { opts$genome_dir <- take(); i <- i + 2 },
+      "--out-dir"            = { opts$out_dir <- take(); i <- i + 2 },
+      "--date"               = { opts$date <- take(); i <- i + 2 },
+      "--threads"            = { opts$threads <- as.integer(take()); i <- i + 2 },
+      "--dry-run"            = { opts$dry_run <- TRUE; i <- i + 1 },
+      "-h"                   = { usage(); quit(status = 0) },
+      "--help"               = { usage(); quit(status = 0) },
       stop("Unknown option: ", key, call. = FALSE)
     )
   }
@@ -144,8 +137,9 @@ parse_args <- function(argv) {
 
 log_stage <- function(...) cat("[trio_selection]", ..., "\n")
 
-run <- function(command, args) {
-  output <- suppressWarnings(system2(command, args, stdout = TRUE, stderr = ""))
+run <- function(command, args, quiet_stderr = FALSE) {
+  output <- suppressWarnings(system2(command, args, stdout = TRUE,
+                                     stderr = if (quiet_stderr) FALSE else ""))
   status <- attr(output, "status")
   if (!is.null(status) && status != 0) {
     stop("Command failed (", status, "): ", command, " ", paste(args, collapse = " "),
@@ -194,12 +188,12 @@ make_short_names <- function(species) {
 }
 
 descendant_tips <- function(tree, node) {
+  # A tip is its own only descendant tip; otherwise recurse into the children.
+  # (Without the tip base case a single-leaf sister clade is silently dropped, so
+  # a pair whose only outgroups are lone leaves would get no candidates at all.)
+  if (node <= Ntip(tree)) return(node)
   kids <- tree$edge[tree$edge[, 1] == node, 2]
-  tips <- kids[kids <= Ntip(tree)]
-  internal <- kids[kids > Ntip(tree)]
-  out <- tips
-  for (u in internal) out <- c(out, descendant_tips(tree, u))
-  out
+  unlist(lapply(kids, descendant_tips, tree = tree))
 }
 
 sister_tips <- function(tree, node) {
@@ -290,117 +284,64 @@ prune_to_best_assembly <- function(tree, out_dir, min_contig_n50 = 0) {
   list(tree = pruned, leaves = best)
 }
 
-# --- Stage 1: enumerate trios and prescreen on the tree ----------------------
+# --- Stage 1: per ingroup pair, ordered candidate outgroups (near -> far) -----
 
-enumerate_trios <- function(tree, leaves) {
-  # Branch lengths are percent sequence difference, so identity is 100 - distance.
-  tree_identity <- 100 - cophenetic(tree)
+# For the ingroup couple (tipA, tipB), list candidate outgroups nearest first:
+# the sister clade of their MRCA, then the sister of the grandparent, ... up to
+# the root.  On an ultrametric tree the members of one sister clade are tied, so
+# they are ordered by Stage-0 assembly quality (contig N50) as a tie-break.
+# Returns an empty vector when the pair's MRCA is the root (no outgroup exists).
+candidate_outgroups <- function(tree, tipA, tipB, leaves) {
+  mrca <- getMRCA(tree, c(tipA, tipB))
+  root <- Ntip(tree) + 1L
+  if (is.null(mrca)) return(character(0))
+
+  cands <- integer(0)
+  node <- mrca
+  while (length(node) == 1 && node != root) {
+    sibs <- sister_tips(tree, node)
+    if (length(sibs)) {
+      q <- leaves$contig_n50[match(tree$tip.label[sibs], leaves$tip)]
+      q[is.na(q)] <- 0
+      cands <- c(cands, sibs[order(-q)])
+    }
+    parent <- tree$edge[tree$edge[, 2] == node, 1]
+    node <- if (length(parent)) parent else root
+  }
+  tree$tip.label[cands]
+}
+
+# Enumerate every ingroup pair that has an available outgroup, with its ordered
+# candidate list.  Used by --dry-run to expose the search order without training.
+enumerate_pairs_dry <- function(tree, leaves) {
   tips <- tree$tip.label
-  info <- leaves[match(tips, leaves$tip), ]
-
+  n <- length(tips)
   rows <- list()
-  for (node in (Ntip(tree) + 1):(Ntip(tree) + tree$Nnode)) {
-    ingroup <- descendant_tips(tree, node)
-    if (length(ingroup) < 2) next
-    outgroup <- sister_tips(tree, node)
-    if (!length(outgroup)) next
-
-    pairs <- combn(ingroup, 2)
-    for (p in seq_len(ncol(pairs))) {
-      in1 <- pairs[1, p]
-      in2 <- pairs[2, p]
-      for (out in outgroup) {
-        rows[[length(rows) + 1]] <- tibble::tibble(
-          mrca_node = node,
-          out_tip = tips[out], in1_tip = tips[in1], in2_tip = tips[in2],
-          out_acc = info$accession[out],
-          in1_acc = info$accession[in1],
-          in2_acc = info$accession[in2],
-          out_species = info$species[out],
-          in1_species = info$species[in1],
-          in2_species = info$species[in2],
-          out_short = info$short_name[out],
-          in1_short = info$short_name[in1],
-          in2_short = info$short_name[in2],
-          # Slot 1 is the outgroup, matching org1/org2/org3 in the rest of the pipeline.
-          genus_1 = info$genus[out],
-          genus_2 = info$genus[in1],
-          genus_3 = info$genus[in2],
-          tree_idt_12 = tree_identity[tips[out], tips[in1]],
-          tree_idt_13 = tree_identity[tips[out], tips[in2]],
-          tree_idt_23 = tree_identity[tips[in1], tips[in2]]
-        )
-      }
+  for (i in seq_len(n - 1)) {
+    for (j in (i + 1):n) {
+      cands <- candidate_outgroups(tree, tips[i], tips[j], leaves)
+      if (!length(cands)) next
+      rows[[length(rows) + 1]] <- data.frame(
+        in1_tip = tips[i], in2_tip = tips[j],
+        n_candidates = length(cands),
+        candidate_order = paste(cands, collapse = ","),
+        stringsAsFactors = FALSE
+      )
     }
   }
-  bind_rows(rows)
+  if (!length(rows)) return(data.frame())
+  do.call(rbind, rows)
 }
 
-prescreen_trios <- function(trios, opts) {
-  # A trio whose genera split two-vs-one -- the outgroup congeneric with exactly
-  # one ingroup species -- is excluded by the thesis rule whatever the identities
-  # say, so it can be discarded before spending a single download.
-  floor_idt <- opts$idt_threshold - opts$prescreen_margin
-
-  trios %>%
-    mutate(
-      genus_two_vs_one =
-        (genus_1 == genus_2 & genus_1 != genus_3) |
-        (genus_1 == genus_3 & genus_1 != genus_2),
-      tree_idt_min = pmin(tree_idt_12, tree_idt_13, tree_idt_23),
-      outgroup_idt = pmin(tree_idt_12, tree_idt_13)
-    ) %>%
-    filter(!genus_two_vs_one, tree_idt_min >= floor_idt, tree_idt_23 >= opts$ingroup_min) %>%
-    # The closest admissible outgroup resolves substitutions best, so rank on it.
-    group_by(in1_tip, in2_tip) %>%
-    arrange(desc(outgroup_idt), .by_group = TRUE) %>%
-    slice_head(n = opts$top_k) %>%
-    ungroup()
+# Mirror of trio_filter.py pattern5: the outgroup is congeneric with exactly one
+# ingroup species.  The thesis rule excludes such a trio whatever the identities
+# say, so skipping it here avoids a wasted last-train.
+is_two_vs_one <- function(g_out, g_in1, g_in2) {
+  o <- tolower(g_out); a <- tolower(g_in1); b <- tolower(g_in2)
+  xor(o == a, o == b)
 }
 
-# --- Stage 2: download the surviving accessions ------------------------------
-
-download_genomes <- function(trios, opts) {
-  wanted <- unique(c(trios$out_acc, trios$in1_acc, trios$in2_acc))
-  log_stage("Stage 2: downloading", length(wanted), "genomes into", opts$genome_dir)
-
-  fasta <- character(0)
-  for (accession in wanted) {
-    result <- run("bash", c(shQuote(DWL_ORGANISM), accession,
-                            "--out-dir", shQuote(opts$genome_dir)))
-    # dwl_organism.sh prints dir_name|fasta_path|summary_json|raw_name|ncbi_full|tax_json
-    fields <- strsplit(tail(result, 1), "|", fixed = TRUE)[[1]]
-    if (length(fields) < 2 || !nzchar(fields[2])) {
-      stop("dwl_organism.sh returned no FASTA path for ", accession, call. = FALSE)
-    }
-    # last_train.sh cds into its lastdb directory, so the FASTA path must be absolute.
-    fasta[accession] <- normalizePath(fields[2], mustWork = TRUE)
-  }
-  fasta
-}
-
-# --- Stage 3: last-train once per unique species pair ------------------------
-
-unique_species_pairs <- function(trios) {
-  pairs <- bind_rows(
-    trios %>% transmute(a_acc = out_acc, a_short = out_short,
-                        b_acc = in1_acc, b_short = in1_short),
-    trios %>% transmute(a_acc = out_acc, a_short = out_short,
-                        b_acc = in2_acc, b_short = in2_short),
-    trios %>% transmute(a_acc = in1_acc, a_short = in1_short,
-                        b_acc = in2_acc, b_short = in2_short)
-  )
-  # Canonical (unordered) orientation: one species pair must map to one cache
-  # entry regardless of which slots it occupied in any given trio.
-  pairs %>%
-    mutate(
-      first_acc = ifelse(a_short <= b_short, a_acc, b_acc),
-      first_short = ifelse(a_short <= b_short, a_short, b_short),
-      second_acc = ifelse(a_short <= b_short, b_acc, a_acc),
-      second_short = ifelse(a_short <= b_short, b_short, a_short)
-    ) %>%
-    distinct(first_acc, first_short, second_acc, second_short)
-}
+# --- on-demand download + last-train, memoized ------------------------------
 
 train_file_path <- function(cache_dir, short_a, short_b, date) {
   file.path(cache_dir, sprintf("%s2%s_%s.train", short_a, short_b, date))
@@ -414,63 +355,169 @@ parse_train_identity <- function(path) {
   if (!length(value)) NA_real_ else as.numeric(value)
 }
 
-train_species_pairs <- function(pairs, fasta, opts) {
+# Build closures that download a genome and last-train a species pair at most
+# once each (memoized), so a species trained for one ingroup pair is reused for
+# every other.  The shared cache dir also lets last_train.sh skip work across runs.
+make_fetchers <- function(leaves, opts) {
+  fasta_cache <- new.env(parent = emptyenv())
+  idt_cache <- new.env(parent = emptyenv())
+  counters <- new.env(parent = emptyenv())
+  counters$downloads <- 0L
+  counters$trains <- 0L
+
   cache_dir <- file.path(opts$out_dir, "train_cache")
   dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
   Sys.setenv(THREAD_NUM = opts$threads)
 
-  log_stage("Stage 3: last-train on", nrow(pairs), "unique species pairs")
-
-  identity <- numeric(nrow(pairs))
-  for (i in seq_len(nrow(pairs))) {
-    short_a <- pairs$first_short[i]
-    short_b <- pairs$second_short[i]
-    train <- train_file_path(cache_dir, short_a, short_b, opts$date)
-
-    if (file.exists(train)) {
-      log_stage("  cached:", basename(train))
-    } else {
-      log_stage("  training:", short_a, "vs", short_b)
-      # last_train.sh is idempotent: it skips lastdb and last-train when their
-      # outputs already exist, so a shared cache_dir gives cross-trio reuse.
-      run("bash", c(shQuote(LAST_TRAIN), opts$date,
-                    shQuote(fasta[[pairs$first_acc[i]]]),
-                    shQuote(fasta[[pairs$second_acc[i]]]),
-                    short_a, short_b, shQuote(cache_dir)))
+  get_fasta <- function(acc) {
+    hit <- fasta_cache[[acc]]
+    if (!is.null(hit)) return(hit)
+    result <- run("bash", c(shQuote(DWL_ORGANISM), acc, "--out-dir", shQuote(opts$genome_dir)))
+    # dwl_organism.sh prints dir_name|fasta_path|summary_json|raw_name|ncbi_full|tax_json
+    fields <- strsplit(tail(result, 1), "|", fixed = TRUE)[[1]]
+    if (length(fields) < 2 || !nzchar(fields[2])) {
+      stop("dwl_organism.sh returned no FASTA path for ", acc, call. = FALSE)
     }
-    identity[i] <- parse_train_identity(train)
+    # last_train.sh cds into its lastdb directory, so the FASTA path must be absolute.
+    path <- normalizePath(fields[2], mustWork = TRUE)
+    fasta_cache[[acc]] <- path
+    counters$downloads <- counters$downloads + 1L
+    path
   }
 
-  pairs$identity <- identity
-  pairs
+  get_identity <- function(short_a, acc_a, short_b, acc_b) {
+    # Canonical (unordered) orientation so one species pair is one cache entry.
+    if (short_a <= short_b) {
+      s1 <- short_a; a1 <- acc_a; s2 <- short_b; a2 <- acc_b
+    } else {
+      s1 <- short_b; a1 <- acc_b; s2 <- short_a; a2 <- acc_a
+    }
+    key <- paste(s1, s2, sep = "|")
+    hit <- idt_cache[[key]]
+    if (!is.null(hit)) return(hit)
+
+    train <- train_file_path(cache_dir, s1, s2, opts$date)
+    if (!file.exists(train)) {
+      fa1 <- get_fasta(a1); fa2 <- get_fasta(a2)
+      run("bash", c(shQuote(LAST_TRAIN), opts$date, shQuote(fa1), shQuote(fa2),
+                    s1, s2, shQuote(cache_dir)))
+      counters$trains <- counters$trains + 1L
+    }
+    val <- parse_train_identity(train)
+    idt_cache[[key]] <- val
+    val
+  }
+
+  list(get_identity = get_identity, counters = counters)
 }
 
-attach_identities <- function(trios, pairs) {
-  lookup <- setNames(pairs$identity, paste(pairs$first_short, pairs$second_short, sep = "|"))
-  key <- function(x, y) ifelse(x <= y, paste(x, y, sep = "|"), paste(y, x, sep = "|"))
+# --- the thesis rule, judged one candidate at a time ------------------------
 
-  trios %>%
-    mutate(
-      idt_12 = unname(lookup[key(out_short, in1_short)]),
-      idt_13 = unname(lookup[key(out_short, in2_short)]),
-      idt_23 = unname(lookup[key(in1_short, in2_short)])
-    )
-}
-
-# --- Stage 4: apply the thesis rule ------------------------------------------
-
-apply_thesis_rule <- function(trios, opts) {
-  trios_file <- file.path(opts$out_dir, "candidate_trios.tsv")
-  verdict_file <- file.path(opts$out_dir, "trio_verdicts.tsv")
-
-  write_tsv(trios, trios_file)
-  log_stage("Stage 4: applying the thesis rule via trio_filter.py")
+# Shell one candidate trio through trio_filter.py (the single source of the
+# thesis rule) and return its verdict row.
+evaluate_one <- function(row, opts, tmp_in, tmp_out) {
+  write_tsv(row, tmp_in)
   run("python3", c(shQuote(TRIO_FILTER),
-                   "--trios", shQuote(trios_file),
+                   "--trios", shQuote(tmp_in),
                    "--idt-threshold", opts$idt_threshold,
-                   "--out", shQuote(verdict_file)))
+                   "--out", shQuote(tmp_out)),
+      quiet_stderr = TRUE)
+  read_tsv(tmp_out)[1, , drop = FALSE]
+}
 
-  read_tsv(verdict_file)
+build_row <- function(infoO, infoA, infoB, idt_12, idt_13, idt_23, tries) {
+  data.frame(
+    out_tip = infoO$tip, in1_tip = infoA$tip, in2_tip = infoB$tip,
+    out_acc = infoO$accession, in1_acc = infoA$accession, in2_acc = infoB$accession,
+    out_species = infoO$species, in1_species = infoA$species, in2_species = infoB$species,
+    out_short = infoO$short_name, in1_short = infoA$short_name, in2_short = infoB$short_name,
+    # Slot 1 is the outgroup, matching org1/org2/org3 in the rest of the pipeline.
+    genus_1 = infoO$genus, genus_2 = infoA$genus, genus_3 = infoB$genus,
+    idt_12 = idt_12, idt_13 = idt_13, idt_23 = idt_23,
+    outgroup_tries = tries,
+    stringsAsFactors = FALSE
+  )
+}
+
+# --- Stage 1 driver: one nearest-but-external outgroup per ingroup pair -------
+
+select_trios <- function(tree, leaves, opts, fetch = NULL) {
+  if (is.null(fetch)) fetch <- make_fetchers(leaves, opts)
+  get_identity <- fetch$get_identity
+  threshold <- opts$idt_threshold
+  tmp_in <- file.path(opts$out_dir, ".candidate_in.tsv")
+  tmp_out <- file.path(opts$out_dir, ".candidate_out.tsv")
+
+  info_of <- function(tip) leaves[match(tip, leaves$tip), , drop = FALSE]
+
+  tips <- tree$tip.label
+  n <- length(tips)
+  results <- list()
+  no_outgroup <- 0L
+  too_diverged <- 0L
+  no_valid_outgroup <- 0L
+
+  log_stage("Stage 1: searching one outgroup per ingroup pair (nearest-first, first-pass)")
+
+  for (i in seq_len(n - 1)) {
+    for (j in (i + 1):n) {
+      tipA <- tips[i]; tipB <- tips[j]
+      cands <- candidate_outgroups(tree, tipA, tipB, leaves)
+      if (!length(cands)) { no_outgroup <- no_outgroup + 1L; next }
+
+      infoA <- info_of(tipA); infoB <- info_of(tipB)
+      idt_23 <- get_identity(infoA$short_name, infoA$accession,
+                             infoB$short_name, infoB$accession)
+      if (is.na(idt_23) || idt_23 <= threshold) { too_diverged <- too_diverged + 1L; next }
+
+      chosen <- NULL
+      tries <- 0L
+      for (og in cands) {
+        infoO <- info_of(og)
+        # Free pre-filter: a two-vs-one genus split is always excluded -> never train it.
+        if (is_two_vs_one(infoO$genus, infoA$genus, infoB$genus)) next
+        if (tries >= opts$max_outgroup_tries) break
+        tries <- tries + 1L
+
+        idt_12 <- get_identity(infoO$short_name, infoO$accession,
+                               infoA$short_name, infoA$accession)
+        idt_13 <- get_identity(infoO$short_name, infoO$accession,
+                               infoB$short_name, infoB$accession)
+        if (is.na(idt_12) || is.na(idt_13)) next  # unusable alignment, try the next candidate
+
+        row <- build_row(infoO, infoA, infoB, idt_12, idt_13, idt_23, tries)
+        verdict <- evaluate_one(row, opts, tmp_in, tmp_out)
+
+        if (identical(verdict$excluded, "FALSE")) {           # pass -> fix this trio, stop
+          chosen <- verdict
+          break
+        }
+        if (identical(verdict$idt_threshold_condition, "FALSE")) {
+          # too far: an outgroup-ingroup identity fell below the threshold, and every
+          # farther candidate is more diverged still -> the window has closed.
+          break
+        }
+        # else "too close" (strict ordering failed) -> the next candidate is farther out.
+      }
+
+      if (!is.null(chosen)) {
+        results[[length(results) + 1]] <- chosen
+        log_stage(sprintf("  %s + %s  ->  %s  (idt 12/13/23 = %s/%s/%s; %d tried)",
+                          infoA$species, infoB$species, chosen$out_species,
+                          chosen$idt_12, chosen$idt_13, chosen$idt_23, tries))
+      } else {
+        no_valid_outgroup <- no_valid_outgroup + 1L
+      }
+    }
+  }
+
+  log_stage(sprintf("last-train runs: %d | downloads: %d", fetch$counters$trains,
+                    fetch$counters$downloads))
+  log_stage(sprintf("ingroup pairs: %d selected | %d no outgroup on tree | %d ingroup pair below threshold | %d no external outgroup found",
+                    length(results), no_outgroup, too_diverged, no_valid_outgroup))
+
+  if (!length(results)) return(data.frame())
+  do.call(rbind, results)
 }
 
 # --- main --------------------------------------------------------------------
@@ -484,38 +531,22 @@ main <- function() {
 
   pruned <- prune_to_best_assembly(tree, opts$out_dir, opts$min_contig_n50)
   write_tsv(pruned$leaves, file.path(opts$out_dir, "selected_assemblies.tsv"))
-
-  trios <- enumerate_trios(pruned$tree, pruned$leaves)
-  log_stage("Stage 1:", nrow(trios), "trios enumerated")
-
-  candidates <- prescreen_trios(trios, opts)
-  log_stage(" ", nrow(candidates), "candidates after prescreen",
-            sprintf("(two-vs-one genera dropped; tree identity >= %g; ingroup identity >= %g; top %d outgroups per ingroup pair)",
-                    opts$idt_threshold - opts$prescreen_margin, opts$ingroup_min, opts$top_k))
-
-  if (!nrow(candidates)) {
-    log_stage("No candidate trios survived the prescreen; nothing to do.")
-    return(invisible(NULL))
-  }
+  tree <- pruned$tree
+  leaves <- pruned$leaves
 
   if (opts$dry_run) {
-    out <- file.path(opts$out_dir, "candidate_trios.tsv")
-    write_tsv(candidates, out)
-    log_stage("--dry-run: stopping after Stage 1. Candidates written to", out)
+    pairs <- enumerate_pairs_dry(tree, leaves)
+    out <- file.path(opts$out_dir, "candidate_outgroups.tsv")
+    write_tsv(pairs, out)
+    log_stage("Stage 1 (dry-run):", nrow(pairs),
+              "ingroup pairs with an available outgroup; candidate order ->", out)
     return(invisible(NULL))
   }
 
-  fasta <- download_genomes(candidates, opts)
-  pairs <- train_species_pairs(unique_species_pairs(candidates), fasta, opts)
-  candidates <- attach_identities(candidates, pairs)
-
-  verdicts <- apply_thesis_rule(candidates, opts)
-  selected <- verdicts[verdicts$excluded == "FALSE", , drop = FALSE]
-
+  selected <- select_trios(tree, leaves, opts)
   selected_file <- file.path(opts$out_dir, "selected_trios.tsv")
   write_tsv(selected, selected_file)
-
-  log_stage("Selected", nrow(selected), "of", nrow(verdicts), "trios ->", selected_file)
+  log_stage("Selected", nrow(selected), "trios (one per ingroup pair) ->", selected_file)
 }
 
 if (sys.nframe() == 0) {
