@@ -57,7 +57,7 @@ TREE_FILE=""
 IDT_THRESHOLD=""
 MAX_OUTGROUP_TRIES=""
 INGROUP_PAIRING=""
-MIN_CONTIG_N50=""
+MIN_REL_CONTIG_N50=""
 POSITIONAL_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -85,8 +85,9 @@ Tree mode:
   --ingroup-pairing MODE  Which ingroup couples to consider: 'matching' (default; greedy
                        closest-first disjoint sister-pair matching, ~n/2 independent couples)
                        or 'all' (every tip pair, exhaustive).
-  --min-contig-n50 BP  Drop species whose best assembly has contig N50 below this
-                       (Stage 0 quality gate; default: 0 = off, opt-in e.g. 1000000).
+  --min-rel-contig-n50 F  Drop a species unless some current assembly has relative contig
+                       N50 (contig_n50/total_ungapped_length) >= F. Size-normalized so one
+                       value works across lineages; default: 0 = off, e.g. 0.005.
 
 Options:
   --genome-dir PATH    Genome storage directory (default: ./genomes)
@@ -188,7 +189,7 @@ EOF
             shift
             continue
             ;;
-        --idt-threshold|--max-outgroup-tries|--min-contig-n50)
+        --idt-threshold|--max-outgroup-tries|--min-rel-contig-n50)
             if [[ -z "${2:-}" ]]; then
                 echo "Error: $1 requires a non-negative number argument." >&2
                 exit 1
@@ -200,12 +201,12 @@ EOF
             case "$1" in
                 --idt-threshold)      IDT_THRESHOLD="$2" ;;
                 --max-outgroup-tries) MAX_OUTGROUP_TRIES="$2" ;;
-                --min-contig-n50)     MIN_CONTIG_N50="$2" ;;
+                --min-rel-contig-n50) MIN_REL_CONTIG_N50="$2" ;;
             esac
             shift 2
             continue
             ;;
-        --idt-threshold=*|--max-outgroup-tries=*|--min-contig-n50=*)
+        --idt-threshold=*|--max-outgroup-tries=*|--min-rel-contig-n50=*)
             _opt_key="${1%%=*}"
             _opt_val="${1#*=}"
             if ! [[ "$_opt_val" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
@@ -215,7 +216,7 @@ EOF
             case "$_opt_key" in
                 --idt-threshold)      IDT_THRESHOLD="$_opt_val" ;;
                 --max-outgroup-tries) MAX_OUTGROUP_TRIES="$_opt_val" ;;
-                --min-contig-n50)     MIN_CONTIG_N50="$_opt_val" ;;
+                --min-rel-contig-n50) MIN_REL_CONTIG_N50="$_opt_val" ;;
             esac
             shift
             continue
@@ -325,7 +326,7 @@ if [ -n "$TREE_FILE" ]; then
     [ -n "$IDT_THRESHOLD" ] && r_args+=(--idt-threshold "$IDT_THRESHOLD")
     [ -n "$MAX_OUTGROUP_TRIES" ] && r_args+=(--max-outgroup-tries "$MAX_OUTGROUP_TRIES")
     [ -n "$INGROUP_PAIRING" ] && r_args+=(--ingroup-pairing "$INGROUP_PAIRING")
-    [ -n "$MIN_CONTIG_N50" ] && r_args+=(--min-contig-n50 "$MIN_CONTIG_N50")
+    [ -n "$MIN_REL_CONTIG_N50" ] && r_args+=(--min-rel-contig-n50 "$MIN_REL_CONTIG_N50")
 
     echo "--- [tree mode] selecting trios from $TREE_FILE"
     if ! Rscript "$SCRIPT_DIR/select/trio_selection.R" "${r_args[@]}"; then

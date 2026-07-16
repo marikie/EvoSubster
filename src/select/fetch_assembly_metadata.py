@@ -38,6 +38,9 @@ COLUMNS = (
     "refseq_category",
     "assembly_level",
     "contig_n50",
+    "total_ungapped_length",
+    "total_number_of_chromosomes",
+    "has_annotation",
     "assembly_status",
 )
 
@@ -68,6 +71,33 @@ def fetch_reports(accessions: List[str]) -> List[dict]:
     return reports
 
 
+def fetch_reports_by_taxon(taxons: List[str]) -> List[dict]:
+    """All current, non-atypical assemblies for each taxon (many reports per taxon)."""
+    reports: List[dict] = []
+    page_token = ""
+    while True:
+        payload = {
+            "taxons": taxons,
+            "filters": {"assembly_version": "current", "exclude_atypical": True},
+            "page_size": PAGE_SIZE,
+        }
+        if page_token:
+            payload["page_token"] = page_token
+        response = post_json(DATASET_REPORT_URL, payload)
+        reports.extend(response.get("reports", []))
+        page_token = response.get("next_page_token", "")
+        if not page_token:
+            break
+    return reports
+
+
+def read_lines(path: str) -> List[str]:
+    """Read non-blank, non-comment lines from a file, de-duplicated, order-preserving."""
+    with open(path, encoding="utf-8") as handle:
+        items = [line.strip() for line in handle if line.strip() and not line.startswith("#")]
+    return list(dict.fromkeys(items))
+
+
 def split_organism_name(organism_name: str) -> Dict[str, str]:
     tokens = organism_name.split()
     genus = tokens[0] if tokens else ""
@@ -93,6 +123,9 @@ def report_to_row(report: dict) -> Dict[str, str]:
         "refseq_category": assembly_info.get("refseq_category") or "",
         "assembly_level": assembly_info.get("assembly_level") or "",
         "contig_n50": str(assembly_stats.get("contig_n50") or ""),
+        "total_ungapped_length": str(assembly_stats.get("total_ungapped_length") or ""),
+        "total_number_of_chromosomes": str(assembly_stats.get("total_number_of_chromosomes") or ""),
+        "has_annotation": "true" if report.get("annotation_info") else "false",
         "assembly_status": assembly_info.get("assembly_status") or "",
     }
 
@@ -116,6 +149,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--accession", action="append", help="Accession to fetch; may be repeated."
     )
+    parser.add_argument(
+        "--taxons",
+        help="File with one species name per line; fetch ALL current, non-atypical "
+        "assemblies for each species (instead of specific accessions).",
+    )
     parser.add_argument("--out", help="Output TSV path. Defaults to stdout.")
     return parser.parse_args()
 
@@ -136,6 +174,33 @@ def write_rows(rows: Iterable[Dict[str, str]], out_path: str) -> None:
 
 def main() -> int:
     args = parse_args()
+
+    if args.taxons:
+        taxons = read_lines(args.taxons)
+        if not taxons:
+            print("error: no taxons given in --taxons file.", file=sys.stderr)
+            return 1
+        try:
+            reports = fetch_reports_by_taxon(taxons)
+        except urllib.error.URLError as exc:
+            print(f"error: NCBI request failed: {exc}", file=sys.stderr)
+            return 1
+        rows = [report_to_row(report) for report in reports]
+        present = {row["species"] for row in rows}
+        for taxon in taxons:
+            if taxon not in present:
+                print(
+                    f"warning: NCBI returned no current assembly for taxon '{taxon}'; "
+                    "species dropped.",
+                    file=sys.stderr,
+                )
+        write_rows(rows, args.out)
+        print(
+            f"{len(rows)} assemblies for {len(present)}/{len(taxons)} taxa.",
+            file=sys.stderr,
+        )
+        return 0
+
     accessions = read_accessions(args)
     if not accessions:
         print("error: no accessions given (use --accessions or --accession).", file=sys.stderr)

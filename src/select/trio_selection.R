@@ -67,7 +67,7 @@ defaults <- list(
   idt_threshold = 80,
   max_outgroup_tries = 5,
   ingroup_pairing = "matching",
-  min_contig_n50 = 0,
+  min_rel_contig_n50 = 0,
   genome_dir = "./genomes",
   out_dir = "./results/trio_selection",
   date = format(Sys.Date(), "%Y%m%d"),
@@ -90,13 +90,12 @@ usage <- function() {
     "                                      species used at most once, ~n/2 independent",
     "                                      sister-pair couples (phylogenetic-pairs design).",
     "                            all       every tip pair (exhaustive; C(n,2) couples).",
-    "  --min-contig-n50 BP     Drop a species whose best assembly has a contig N50 below",
-    "                          this (Stage 0 quality gate). assembly_level and",
-    "                          refseq_category mislabel fragmented assemblies, so contig",
-    "                          N50 is the honest contiguity signal. Default 0 = off (keep",
-    "                          every species); this only gates the on-tree assembly, so it",
-    "                          is opt-in until the all-assembly redesign lands (e.g. pass",
-    "                          1000000 for a primate tree).",
+    "  --min-rel-contig-n50 F  Drop a species unless some current assembly has relative contig",
+    "                          N50 (contig_n50 / total_ungapped_length) >= F. Size-normalized,",
+    "                          so one threshold works across lineages -- absolute N50 is",
+    "                          meaningless across taxa (a perfect ~12 Mb yeast reference has a",
+    "                          0.92 Mb contig N50). Default 0 = off (keep every species);",
+    "                          e.g. 0.005 = 0.5%.",
     "  --genome-dir DIR        Genome storage (default: ./genomes).",
     "  --out-dir DIR           Output and last-train cache (default: ./results/trio_selection).",
     "  --date YYYYMMDD         Run date, used in cache filenames (default: today).",
@@ -122,7 +121,7 @@ parse_args <- function(argv) {
       "--idt-threshold"      = { opts$idt_threshold <- as.numeric(take()); i <- i + 2 },
       "--max-outgroup-tries" = { opts$max_outgroup_tries <- as.integer(take()); i <- i + 2 },
       "--ingroup-pairing"    = { opts$ingroup_pairing <- take(); i <- i + 2 },
-      "--min-contig-n50"     = { opts$min_contig_n50 <- as.numeric(take()); i <- i + 2 },
+      "--min-rel-contig-n50" = { opts$min_rel_contig_n50 <- as.numeric(take()); i <- i + 2 },
       "--genome-dir"         = { opts$genome_dir <- take(); i <- i + 2 },
       "--out-dir"            = { opts$out_dir <- take(); i <- i + 2 },
       "--date"               = { opts$date <- take(); i <- i + 2 },
@@ -178,6 +177,19 @@ accession_from_label <- function(labels) {
   result
 }
 
+# "Genus_species_...GCA_000000000.1" -> "Genus species": strip the trailing accession, then
+# take the first two tokens.  Matches split_organism_name() in fetch_assembly_metadata.py so
+# the parsed name joins cleanly to the NCBI organism species (both drop subspecies/strain).
+species_from_label <- function(labels) {
+  base <- sub(paste0("_?", ACCESSION_RE), "", labels)
+  vapply(base, function(name) {
+    tokens <- strsplit(name, "[ _]+")[[1]]
+    tokens <- tokens[nzchar(tokens)]
+    if (length(tokens) >= 2) paste(tokens[1], tokens[2])
+    else if (length(tokens)) tokens[1] else ""
+  }, character(1), USE.NAMES = FALSE)
+}
+
 # Short names must be stable per species and must NOT carry a trio slot number:
 # the last-train cache is keyed on the species pair, so the same species has to
 # produce the same name no matter which slot it lands in.  (sbst_fromDwl.sh's
@@ -214,39 +226,38 @@ sister_tips <- function(tree, node) {
   unlist(lapply(siblings, descendant_tips, tree = tree))
 }
 
-# --- Stage 0: prune the tree to one assembly per species ---------------------
+# --- Stage 0: prune the tree to one best assembly per species ----------------
 
-prune_to_best_assembly <- function(tree, out_dir, min_contig_n50 = 0) {
-  accessions <- accession_from_label(tree$tip.label)
-  if (anyNA(accessions)) {
-    stop("Leaf label(s) without a trailing NCBI accession: ",
-         paste(head(tree$tip.label[is.na(accessions)], 5), collapse = ", "), call. = FALSE)
-  }
-
-  acc_file <- file.path(out_dir, "tree_accessions.txt")
-  meta_file <- file.path(out_dir, "assembly_metadata.tsv")
-  writeLines(unique(accessions), acc_file)
-
-  log_stage("Stage 0: fetching NCBI metadata for", length(unique(accessions)), "accessions")
-  run("python3", c(shQuote(FETCH_METADATA),
-                   "--accessions", shQuote(acc_file),
-                   "--out", shQuote(meta_file)))
-
-  meta <- read_tsv(meta_file)
+# Given the metadata table for all fetched assemblies, keep only current ones, apply the
+# size-normalized quality gate, and pick one best assembly per species.  Split out from
+# prune_to_best_assembly() so it can be unit-tested without hitting NCBI.
+#
+# Gate metric = relative contig N50 = contig_n50 / total_ungapped_length.  Absolute contig
+# N50 is meaningless across taxa (a perfect ~12 Mb yeast reference has a 0.92 Mb contig N50,
+# below what a mammal needs), so gate on the fraction of the genome in the median contig; a
+# perfect chromosome-level assembly sits near 1/(chromosome count), orders of magnitude above
+# fragmented junk.  Selection is REFERENCE-FIRST, then most-contiguous: a passing reference
+# genome wins even if a non-reference is more contiguous, and when no reference passes the
+# most contiguous assembly is chosen (contig_n50); annotation only breaks contiguity ties, so
+# un-annotated species are still kept.  contig_n50 is absolute (same species => same size).
+select_best_assemblies <- function(meta, min_rel_contig_n50 = 0) {
+  meta <- meta[!is.na(meta$assembly_status) & meta$assembly_status == "current", , drop = FALSE]
   meta$contig_n50 <- suppressWarnings(as.numeric(meta$contig_n50))
+  meta$total_ungapped_length <- suppressWarnings(as.numeric(meta$total_ungapped_length))
+  meta$rel_contig_n50 <- ifelse(
+    is.na(meta$total_ungapped_length) | meta$total_ungapped_length <= 0 | is.na(meta$contig_n50),
+    0, meta$contig_n50 / meta$total_ungapped_length
+  )
 
-  leaves <- tibble::tibble(tip = tree$tip.label, accession = accessions) %>%
-    inner_join(meta, by = "accession")
-
-  dropped <- setdiff(tree$tip.label, leaves$tip)
-  if (length(dropped)) {
-    log_stage("  dropping", length(dropped), "leaf/leaves with no NCBI record:",
-              paste(dropped, collapse = ", "))
+  if (min_rel_contig_n50 > 0) {
+    meta <- meta[meta$rel_contig_n50 >= min_rel_contig_n50, , drop = FALSE]
   }
+  if (!nrow(meta)) return(meta[0, , drop = FALSE])
 
-  best <- leaves %>%
+  meta %>%
     mutate(
       is_reference = as.integer(refseq_category == "reference genome"),
+      has_annotation_rank = as.integer(tolower(has_annotation) == "true"),
       level_rank = ifelse(
         assembly_level %in% names(ASSEMBLY_LEVEL_RANK),
         ASSEMBLY_LEVEL_RANK[assembly_level],
@@ -254,45 +265,63 @@ prune_to_best_assembly <- function(tree, out_dir, min_contig_n50 = 0) {
       ),
       contig_n50 = ifelse(is.na(contig_n50), 0, contig_n50)
     ) %>%
-    arrange(species, desc(is_reference), level_rank, desc(contig_n50)) %>%
+    arrange(species, desc(is_reference), desc(contig_n50), desc(has_annotation_rank),
+            level_rank, desc(accession)) %>%
+    group_by(species) %>%
+    slice_head(n = 1) %>%
+    ungroup()
+}
+
+# Fetch every current assembly of each species on the tree (not just the leaf accession),
+# gate + pick the best per species, and prune the tree to the species that keep an assembly.
+# The tree is topology only; leaves$accession becomes the chosen accession, which may differ
+# from the leaf label's accession (intentional -- a better off-tree assembly, or recovery of
+# a species whose leaf accession is dead).  Duplicate-species leaves collapse to one tip.
+prune_to_best_assembly <- function(tree, out_dir, min_rel_contig_n50 = 0) {
+  accessions <- accession_from_label(tree$tip.label)
+  if (anyNA(accessions)) {
+    stop("Leaf label(s) without a trailing NCBI accession: ",
+         paste(head(tree$tip.label[is.na(accessions)], 5), collapse = ", "), call. = FALSE)
+  }
+
+  tip_species <- species_from_label(tree$tip.label)
+  taxa <- unique(tip_species)
+
+  tax_file <- file.path(out_dir, "tree_taxa.txt")
+  meta_file <- file.path(out_dir, "assembly_metadata.tsv")
+  writeLines(taxa, tax_file)
+
+  log_stage("Stage 0: fetching all current assemblies for", length(taxa), "species")
+  run("python3", c(shQuote(FETCH_METADATA),
+                   "--taxons", shQuote(tax_file),
+                   "--out", shQuote(meta_file)))
+
+  meta <- read_tsv(meta_file)
+  best <- select_best_assemblies(meta, min_rel_contig_n50)
+
+  # Keep one tip per species (first in tree order); duplicate-species tips are dropped.
+  leaves <- tibble::tibble(tip = tree$tip.label, species = tip_species) %>%
+    inner_join(best, by = "species") %>%
     group_by(species) %>%
     slice_head(n = 1) %>%
     ungroup()
 
-  log_stage(" ", nrow(leaves), "assemblies ->", nrow(best), "species")
-
-  # Species-level quality gate.  assembly_level labels every primate assembly
-  # "Chromosome" even when its contig N50 is ~13 kb, and refseq_category
-  # "reference genome" likewise covers badly fragmented assemblies, so neither is a
-  # usable quality signal -- gate on contig N50, the honest contiguity measure.  A
-  # species whose best assembly is below the floor is dropped entirely (all of its
-  # trios go with it), because a fragmented genome shrinks the alignable and
-  # callable-CDS fraction and biases which genes and sequence contexts are observed
-  # (contig N50 measures continuity only -- not completeness, base accuracy, or
-  # contamination, and can even be inflated by mis-joins).
-  #
-  # LIMITATION: this gates only the assembly that happens to be on the tree, so a
-  # species whose tree accession is fragmented is dropped even when a better current
-  # assembly exists off-tree (e.g. Pongo abelii: tree 16 kb vs current best 146 Mb).
-  # The planned fix is to fetch every current assembly per species, gate the set, and
-  # drop the species only when no candidate passes.  contig N50 is also assembly-size
-  # relative; NG50 (against expected genome size) is preferable across distant taxa.
-  if (min_contig_n50 > 0) {
-    low <- best[best$contig_n50 < min_contig_n50, , drop = FALSE]
-    if (nrow(low)) {
-      log_stage("  quality gate: dropping", nrow(low), "species with contig N50 <",
-                format(min_contig_n50, scientific = FALSE, big.mark = ","), "bp:",
-                paste(sprintf("%s (%.3g)", low$species, low$contig_n50), collapse = ", "))
-      best <- best[best$contig_n50 >= min_contig_n50, , drop = FALSE]
-    }
-    log_stage("  ", nrow(best), "species pass the contig-N50 gate")
+  dropped_species <- setdiff(unique(tip_species), unique(leaves$species))
+  if (length(dropped_species)) {
+    log_stage("  dropping", length(dropped_species),
+              "species with no current assembly passing the gate:",
+              paste(dropped_species, collapse = ", "))
   }
 
-  pruned <- drop.tip(tree, setdiff(tree$tip.label, best$tip))
-  best <- best[match(pruned$tip.label, best$tip), ]
-  best$short_name <- make_short_names(best$species)
+  gate_note <- if (min_rel_contig_n50 > 0)
+    sprintf("(relative contig-N50 gate >= %.4g)", min_rel_contig_n50) else ""
+  log_stage("  ", nrow(meta), "assembly records ->", nrow(leaves), "species kept", gate_note)
 
-  list(tree = pruned, leaves = best)
+  pruned <- drop.tip(tree, setdiff(tree$tip.label, leaves$tip))
+  leaves <- leaves[match(pruned$tip.label, leaves$tip), ]
+  leaves$short_name <- make_short_names(leaves$species)
+
+  list(tree = pruned, leaves = leaves)
 }
 
 # --- Stage 1: per ingroup pair, ordered candidate outgroups (near -> far) -----
@@ -602,7 +631,7 @@ main <- function() {
   tree <- read.tree(opts$tree)
   log_stage("tree:", opts$tree, "-", Ntip(tree), "leaves")
 
-  pruned <- prune_to_best_assembly(tree, opts$out_dir, opts$min_contig_n50)
+  pruned <- prune_to_best_assembly(tree, opts$out_dir, opts$min_rel_contig_n50)
   write_tsv(pruned$leaves, file.path(opts$out_dir, "selected_assemblies.tsv"))
   tree <- pruned$tree
   leaves <- pruned$leaves
