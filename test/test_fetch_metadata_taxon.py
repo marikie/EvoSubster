@@ -28,7 +28,6 @@ class ReportToRowTest(unittest.TestCase):
         self.assertEqual(row["species"], "Genus alpha")
         self.assertEqual(row["contig_n50"], "924431")
         self.assertEqual(row["total_ungapped_length"], "12071326")
-        self.assertEqual(row["total_number_of_chromosomes"], "16")
         self.assertEqual(row["has_annotation"], "true")
         self.assertEqual(row["assembly_status"], "current")
 
@@ -42,7 +41,6 @@ class ReportToRowTest(unittest.TestCase):
         row = f.report_to_row(report)
         self.assertEqual(row["has_annotation"], "false")
         self.assertEqual(row["total_ungapped_length"], "")
-        self.assertEqual(row["total_number_of_chromosomes"], "")
 
     def test_columns_match_dictwriter_fieldnames(self):
         # Every key report_to_row emits must be a declared column, and vice versa.

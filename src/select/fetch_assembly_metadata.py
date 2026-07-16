@@ -39,7 +39,6 @@ COLUMNS = (
     "assembly_level",
     "contig_n50",
     "total_ungapped_length",
-    "total_number_of_chromosomes",
     "has_annotation",
     "assembly_status",
 )
@@ -124,7 +123,6 @@ def report_to_row(report: dict) -> Dict[str, str]:
         "assembly_level": assembly_info.get("assembly_level") or "",
         "contig_n50": str(assembly_stats.get("contig_n50") or ""),
         "total_ungapped_length": str(assembly_stats.get("total_ungapped_length") or ""),
-        "total_number_of_chromosomes": str(assembly_stats.get("total_number_of_chromosomes") or ""),
         "has_annotation": "true" if report.get("annotation_info") else "false",
         "assembly_status": assembly_info.get("assembly_status") or "",
     }
@@ -186,7 +184,7 @@ def main() -> int:
             print(f"error: NCBI request failed: {exc}", file=sys.stderr)
             return 1
         rows = [report_to_row(report) for report in reports]
-        present = {row["species"] for row in rows}
+        present = {row["species"] for row in rows if row["assembly_status"] == "current"}
         for taxon in taxons:
             if taxon not in present:
                 print(

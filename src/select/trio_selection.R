@@ -140,6 +140,11 @@ parse_args <- function(argv) {
     stop("--ingroup-pairing must be 'matching' or 'all' (got: ", opts$ingroup_pairing, ")",
          call. = FALSE)
   }
+  if (is.na(opts$min_rel_contig_n50) || opts$min_rel_contig_n50 < 0 ||
+      opts$min_rel_contig_n50 > 1) {
+    stop("--min-rel-contig-n50 must be a fraction in [0, 1] (got: ", opts$min_rel_contig_n50,
+         "); it is contig_n50 / total_ungapped_length, e.g. 0.005 for 0.5%.", call. = FALSE)
+  }
   opts
 }
 
@@ -306,11 +311,36 @@ prune_to_best_assembly <- function(tree, out_dir, min_rel_contig_n50 = 0) {
     slice_head(n = 1) %>%
     ungroup()
 
+  # Report dropped species, distinguishing a name mismatch (NCBI returned nothing under the
+  # label-parsed name -- e.g. a synonym or reclassification) from a real quality-gate drop.
+  fetched_species <- unique(meta$species)
   dropped_species <- setdiff(unique(tip_species), unique(leaves$species))
-  if (length(dropped_species)) {
-    log_stage("  dropping", length(dropped_species),
+  no_metadata <- setdiff(dropped_species, fetched_species)
+  gate_dropped <- setdiff(dropped_species, no_metadata)
+  if (length(no_metadata)) {
+    log_stage("  dropping", length(no_metadata),
+              "species with NO matching NCBI metadata (name mismatch or no assemblies):",
+              paste(no_metadata, collapse = ", "))
+  }
+  if (length(gate_dropped)) {
+    log_stage("  dropping", length(gate_dropped),
               "species with no current assembly passing the gate:",
-              paste(dropped_species, collapse = ", "))
+              paste(gate_dropped, collapse = ", "))
+  }
+
+  # Note collapsed duplicate-species leaves: one tip (first in tree order) is kept, so the
+  # caller knows a topological position among duplicates was chosen arbitrarily.
+  dup_kept <- intersect(unique(tip_species[duplicated(tip_species)]), leaves$species)
+  if (length(dup_kept)) {
+    log_stage("  note:", length(dup_kept),
+              "species on multiple leaves; kept one tip each (first in tree order):",
+              paste(dup_kept, collapse = ", "))
+  }
+
+  if (!nrow(leaves)) {
+    stop("Stage 0 kept 0 species: every leaf failed the current-status filter or the ",
+         "--min-rel-contig-n50 gate (", min_rel_contig_n50, "). Lower the gate or check the ",
+         "tree's species names against NCBI.", call. = FALSE)
   }
 
   gate_note <- if (min_rel_contig_n50 > 0)
@@ -341,7 +371,9 @@ candidate_outgroups <- function(tree, tipA, tipB, leaves) {
   while (length(node) == 1 && node != root) {
     sibs <- sister_tips(tree, node)
     if (length(sibs)) {
-      q <- leaves$contig_n50[match(tree$tip.label[sibs], leaves$tip)]
+      # Relative (size-normalized) contig N50 tie-break: compare contiguity fairly across
+      # species with very different genome sizes, not raw base counts.
+      q <- leaves$rel_contig_n50[match(tree$tip.label[sibs], leaves$tip)]
       q[is.na(q)] <- 0
       cands <- c(cands, sibs[order(-q)])
     }
@@ -398,8 +430,9 @@ ingroup_pairs <- function(tree, leaves, mode = "matching") {
   if (!nrow(ij)) return(list())
 
   # Deterministic ordering: fewest edges (closest / most-nested) first, then better combined
-  # assembly quality, then tip names -- so the same tree always yields the same matching.
-  q <- leaves$contig_n50[match(tips, leaves$tip)]
+  # assembly quality (relative contig N50, size-normalized), then tip names -- so the same
+  # tree always yields the same matching.
+  q <- leaves$rel_contig_n50[match(tips, leaves$tip)]
   q[is.na(q)] <- 0
   score <- q[ij[, 1]] + q[ij[, 2]]
   ord <- order(D[ij], -score, tips[ij[, 1]], tips[ij[, 2]])

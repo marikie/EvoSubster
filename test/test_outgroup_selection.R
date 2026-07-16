@@ -48,6 +48,7 @@ leaves <- data.frame(
   genus = c("Genus", "Genus", "Genus", "Genus"),
   short_name = c("A", "B", "C", "D"),
   contig_n50 = c(1, 1, 1, 1),
+  rel_contig_n50 = c(1, 1, 1, 1),
   stringsAsFactors = FALSE
 )
 check(identical(candidate_outgroups(tree, "A", "B", leaves), c("C", "D")),
@@ -70,6 +71,7 @@ leaves2 <- data.frame(
   genus = c("Genus", "Genus", "Genus", "Genus", "Genus"),
   short_name = c("A", "B", "C", "D", "E"),
   contig_n50 = c(1, 1, 1, 1, 1),
+  rel_contig_n50 = c(1, 1, 1, 1, 1),
   stringsAsFactors = FALSE
 )
 mpairs <- ingroup_pairs(tree2, leaves2, "matching")
@@ -99,6 +101,7 @@ leaves3 <- data.frame(
   genus = c("Genus", "Genus", "Genus", "Genus"),
   short_name = c("A", "B", "C", "D"),
   contig_n50 = c(1, 1, 1, 1),
+  rel_contig_n50 = c(1, 1, 1, 1),
   stringsAsFactors = FALSE
 )
 check(identical(pair_keys(ingroup_pairs(tree3, leaves3, "matching")), "A|B"),
