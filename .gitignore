@@ -43,6 +43,7 @@ test_genomes/
 test_results/
 bench_genomes/
 bench_results/
+tmp/
 
 # Large documents
 *.pdf
