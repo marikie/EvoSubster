@@ -59,10 +59,14 @@ During execution the wrapper:
 ### Use FASTA files of your choice
 
 ```bash
-./src/sbst.sh <DATE> <ORG1_FASTA> <ORG2_FASTA> <ORG3_FASTA> <ORG1_GFF|NO_GFF_FILE> [--out-dir PATH] [--thread N] [--idt-only]
+./src/sbst.sh <DATE> <ORG1_FASTA> <ORG2_FASTA> <ORG3_FASTA> <ORG1_GFF|NO_GFF_FILE> [--out-dir PATH] [--train-cache-dir PATH] [--accession-ids ACC1 ACC2 ACC3] [--thread N] [--idt-only]
 ```
 
 - Provide paths to the FASTA files.
+- When reusing `last-train` cache files with custom FASTA names, provide the
+  exact versioned NCBI accessions through `--accession-ids`; otherwise cache
+  reuse is enabled only when all three filenames begin with a versioned
+  `GCA_...` or `GCF_...` accession.
 - Supply the outgroup GFF path or use `NO_GFF_FILE`.
 - `--out-dir`, `--thread`, and `--idt-only` behave the same as in the download wrapper.
 

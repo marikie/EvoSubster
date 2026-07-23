@@ -581,6 +581,7 @@ fi
 if [ -n "$TRAIN_CACHE_DIR_OVERRIDE" ]; then
     trisbst_args+=("--train-cache-dir" "$TRAIN_CACHE_DIR_OVERRIDE")
 fi
+trisbst_args+=("--accession-ids" "$org1ID" "$org2ID" "$org3ID")
 trisbst_args+=("--thread" "$THREAD_NUM_OVERRIDE")
 if [ "$IDT_ONLY" -eq 1 ]; then
     trisbst_args+=("--idt-only")

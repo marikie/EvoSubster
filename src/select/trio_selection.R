@@ -98,7 +98,7 @@ usage <- function() {
     "                          0.92 Mb contig N50). Default 0 = off (keep every species);",
     "                          e.g. 0.005 = 0.5%.",
     "  --genome-dir DIR        Genome storage (default: ./genomes).",
-    "  --out-dir DIR           Output and last-train cache (default: ./results/trio_selection).",
+    "  --out-dir DIR           Output directory (default: ./results/trio_selection).",
     "  --train-cache-dir DIR   Directory for cached last-train files (default: <out-dir>/train_cache).",
     "  --date YYYYMMDD         Run date, used in cache filenames (default: today).",
     "  --threads N             Threads for lastdb/last-train (default: 8).",
@@ -187,7 +187,7 @@ species_from_label <- function(labels) {
     tokens <- strsplit(name, "[ _]+")[[1]]
     tokens <- tokens[nzchar(tokens)]
     if (length(tokens) >= 2) paste(tokens[1], tokens[2])
-    else if (length(tokens)) tokens[1] else ""
+    else NA_character_
   }, character(1), USE.NAMES = FALSE)
 }
 
@@ -281,9 +281,10 @@ select_best_assemblies <- function(meta, min_rel_contig_n50 = 0) {
 # a species whose leaf accession is dead).  Duplicate-species leaves collapse to one tip.
 prune_to_best_assembly <- function(tree, out_dir, min_rel_contig_n50 = 0) {
   tip_species <- species_from_label(tree$tip.label)
-  if (any(!nzchar(tip_species))) {
+  invalid_labels <- is.na(tip_species) | !nzchar(tip_species)
+  if (any(invalid_labels)) {
     stop("Leaf label(s) could not be parsed into a genus_species name: ",
-         paste(head(tree$tip.label[!nzchar(tip_species)], 5), collapse = ", "), call. = FALSE)
+         paste(head(tree$tip.label[invalid_labels], 5), collapse = ", "), call. = FALSE)
   }
   taxa <- unique(tip_species)
 
@@ -536,13 +537,26 @@ make_fetchers <- function(leaves, opts) {
     if (!is.null(hit)) return(hit)
 
     train <- train_file_path(cache_dir, a1, a2, opts$date)
-    if (!file.exists(train)) {
+    val <- parse_train_identity(train)
+    if (is.na(val)) {
+      # last_train.sh treats every existing path as complete. Remove partial
+      # files and dangling links first so interrupted cache writes can recover.
+      link_target <- Sys.readlink(train)
+      path_exists <- file.exists(train) || (!is.na(link_target) && nzchar(link_target))
+      if (path_exists) {
+        unlink_status <- unlink(train)
+        link_target <- Sys.readlink(train)
+        path_exists <- file.exists(train) || (!is.na(link_target) && nzchar(link_target))
+        if (unlink_status != 0 || path_exists) {
+          stop("Could not remove invalid last-train cache file: ", train, call. = FALSE)
+        }
+      }
       fa1 <- get_fasta(a1); fa2 <- get_fasta(a2)
       run("bash", c(shQuote(LAST_TRAIN), opts$date, shQuote(fa1), shQuote(fa2),
                     a1, a2, shQuote(cache_dir)))
       counters$trains <- counters$trains + 1L
+      val <- parse_train_identity(train)
     }
-    val <- parse_train_identity(train)
     idt_cache[[key]] <- val
     val
   }
