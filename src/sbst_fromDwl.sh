@@ -49,6 +49,7 @@ make_short_name() {
 
 
 OUT_DIR_OVERRIDE=""
+TRAIN_CACHE_DIR_OVERRIDE=""
 BASE_GENOMES_OVERRIDE=""
 IDT_ONLY=0
 THREAD_NUM_OVERRIDE=8
@@ -90,12 +91,13 @@ Tree mode:
                        value works across lineages; default: 0 = off, e.g. 0.005.
 
 Options:
-  --genome-dir PATH    Genome storage directory (default: ./genomes)
-  --out-dir PATH       Output directory (default: ./results)
-  --thread N           Number of threads for LAST alignment (default: 8)
-  --idt-only           Stop after checking sequence percent identity among three genomes; skip downstream analysis
-  --force              Re-download genomes even if local files exist
-  -h, --help           Show this help message and exit
+  --genome-dir PATH       Genome storage directory (default: ./genomes)
+  --out-dir PATH          Output directory (default: ./results)
+  --train-cache-dir PATH  Directory containing cached last-train files
+  --thread N              Number of threads for LAST alignment (default: 8)
+  --idt-only              Stop after checking sequence percent identity among three genomes; skip downstream analysis
+  --force                 Re-download genomes even if local files exist
+  -h, --help              Show this help message and exit
 EOF
             exit 0
             ;;
@@ -148,6 +150,24 @@ EOF
             OUT_DIR_OVERRIDE="${1#*=}"
             if [[ -z "$OUT_DIR_OVERRIDE" ]]; then
                 echo "Error: --out-dir requires a non-empty path argument." >&2
+                exit 1
+            fi
+            shift
+            continue
+            ;;
+        --train-cache-dir)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: --train-cache-dir requires a non-empty path argument." >&2
+                exit 1
+            fi
+            TRAIN_CACHE_DIR_OVERRIDE="$2"
+            shift 2
+            continue
+            ;;
+        --train-cache-dir=*)
+            TRAIN_CACHE_DIR_OVERRIDE="${1#*=}"
+            if [[ -z "$TRAIN_CACHE_DIR_OVERRIDE" ]]; then
+                echo "Error: --train-cache-dir requires a non-empty path argument." >&2
                 exit 1
             fi
             shift
@@ -306,6 +326,10 @@ if [ ! -d "$out_dir_base" ]; then
     fi
 fi
 
+if [ -n "$TRAIN_CACHE_DIR_OVERRIDE" ]; then
+    TRAIN_CACHE_DIR_OVERRIDE=$(resolve_path "$TRAIN_CACHE_DIR_OVERRIDE")
+fi
+
 # --- Tree mode: select trios from a Newick tree, then run the pipeline per trio ---
 # trio_selection.R downloads genomes and runs last-train itself to score candidates;
 # here we only loop the per-trio pipeline over the trios it selected.  Each per-trio
@@ -327,6 +351,7 @@ if [ -n "$TREE_FILE" ]; then
     [ -n "$MAX_OUTGROUP_TRIES" ] && r_args+=(--max-outgroup-tries "$MAX_OUTGROUP_TRIES")
     [ -n "$INGROUP_PAIRING" ] && r_args+=(--ingroup-pairing "$INGROUP_PAIRING")
     [ -n "$MIN_REL_CONTIG_N50" ] && r_args+=(--min-rel-contig-n50 "$MIN_REL_CONTIG_N50")
+    [ -n "$TRAIN_CACHE_DIR_OVERRIDE" ] && r_args+=(--train-cache-dir "$TRAIN_CACHE_DIR_OVERRIDE")
 
     echo "--- [tree mode] selecting trios from $TREE_FILE"
     if ! Rscript "$SCRIPT_DIR/select/trio_selection.R" "${r_args[@]}"; then
@@ -358,6 +383,11 @@ if [ -n "$TREE_FILE" ]; then
 
     # Options forwarded to every single-trio run.
     pass_opts=(--genome-dir "$base_genomes" --out-dir "$out_dir_base" --thread "$THREAD_NUM_OVERRIDE")
+    if [ -n "$TRAIN_CACHE_DIR_OVERRIDE" ]; then
+        pass_opts+=(--train-cache-dir "$TRAIN_CACHE_DIR_OVERRIDE")
+    else
+        pass_opts+=(--train-cache-dir "$rt_out_dir/train_cache")
+    fi
     [ "$IDT_ONLY" -eq 1 ] && pass_opts+=(--idt-only)
     [ "$FORCE_DOWNLOAD" -eq 1 ] && pass_opts+=(--force)
 
@@ -547,6 +577,9 @@ done
 trisbst_args=()
 if [ -n "$OUT_DIR_OVERRIDE" ]; then
     trisbst_args+=("--out-dir" "$OUT_DIR_OVERRIDE")
+fi
+if [ -n "$TRAIN_CACHE_DIR_OVERRIDE" ]; then
+    trisbst_args+=("--train-cache-dir" "$TRAIN_CACHE_DIR_OVERRIDE")
 fi
 trisbst_args+=("--thread" "$THREAD_NUM_OVERRIDE")
 if [ "$IDT_ONLY" -eq 1 ]; then

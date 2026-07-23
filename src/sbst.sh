@@ -15,10 +15,11 @@ Positional arguments:
   ORG1.gff|NO_GFF_FILE    GFF annotation for outgroup, or literal NO_GFF_FILE
 
 Options:
-  --out-dir PATH   Output directory (default: ./results)
-  --thread N       Number of threads for LAST alignment (default: 8)
-  --idt-only       Stop after checking sequence percent identity among three genomes; skip downstream analysis
-  -h, --help       Show this help message and exit
+  --out-dir PATH          Output directory (default: ./results)
+  --train-cache-dir PATH  Directory containing cached last-train files
+  --thread N              Number of threads for LAST alignment (default: 8)
+  --idt-only              Stop after checking sequence percent identity among three genomes; skip downstream analysis
+  -h, --help              Show this help message and exit
 EOF
         exit 0
     fi
@@ -77,6 +78,7 @@ resolve_path() {
 }
 
 OUT_DIR_OVERRIDE=""
+TRAIN_CACHE_DIR=""
 IDT_ONLY=0
 THREAD_NUM_OVERRIDE=8
 POSITIONAL_ARGS=()
@@ -131,6 +133,24 @@ while [[ $# -gt 0 ]]; do
             shift
             continue
             ;;
+        --train-cache-dir)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: --train-cache-dir requires a non-empty path argument." >&2
+                exit 1
+            fi
+            TRAIN_CACHE_DIR="$2"
+            shift 2
+            continue
+            ;;
+        --train-cache-dir=*)
+            TRAIN_CACHE_DIR="${1#*=}"
+            if [[ -z "$TRAIN_CACHE_DIR" ]]; then
+                echo "Error: --train-cache-dir requires a non-empty path argument." >&2
+                exit 1
+            fi
+            shift
+            continue
+            ;;
         --)
             shift
             POSITIONAL_ARGS+=("$@")
@@ -147,6 +167,10 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 set -- "${POSITIONAL_ARGS[@]}"
+
+if [ -n "$TRAIN_CACHE_DIR" ]; then
+    TRAIN_CACHE_DIR=$(resolve_path "$TRAIN_CACHE_DIR")
+fi
 
 extract_accession_from_path() {
     local input_path=$1
@@ -194,6 +218,43 @@ make_short_name() {
     local second_trimmed="${second_part:0:3}"
 
     echo "${first_trimmed}${second_trimmed}${suffix}"
+}
+
+# The .train cache is keyed on NCBI accession (see trio_selection.R's
+# get_identity()/train_file_path()), not species short name -- an accession
+# pair uniquely identifies exactly the two genome sequences that were
+# last-trained, so a stale cache entry can never be silently reused after
+# Stage 0 picks a different current assembly for the same species in a later
+# run. trio_selection.R always trains with the alphabetically first (<=)
+# accession as the reference (db) and the other as query; last-train's
+# parameters are NOT symmetric under swapping reference and query
+# (insertion/deletion gap open/extend differ), so a cached file can only be
+# reused here when our needed reference/query direction already matches that
+# same alphabetical order -- otherwise it was trained backwards and must be
+# skipped (falls through to a fresh last-train run). Symlinked rather than
+# copied: the cache is the source of truth, and .train files are read-only
+# after last-train writes them, so nothing is lost by sharing the inode.
+maybe_reuse_cached_train() {
+    local ref_acc="$1" query_acc="$2" dest="$3"
+    if [ -z "$TRAIN_CACHE_DIR" ]; then
+        return 0
+    fi
+    if [ -e "$dest" ]; then
+        return 0
+    fi
+    if [[ "$query_acc" < "$ref_acc" ]]; then
+        echo "Train-cache skip: $ref_acc/$query_acc direction does not match trio_selection.R's cache convention"
+        return 0
+    fi
+    local cached_name
+    cached_name=$(get_config '.patterns.train' | sed "s/{org1_short}/$ref_acc/g" | sed "s/{org2_short}/$query_acc/g" | sed "s/{date}/$DATE/g")
+    local cached="${TRAIN_CACHE_DIR}/${cached_name}"
+    if [ -e "$cached" ]; then
+        echo "Reusing cached train file: $cached -> $dest"
+        ln -s "$(readlink -f "$cached")" "$dest"
+    else
+        echo "Train-cache miss: no cached file at $cached"
+    fi
 }
 
 # Get required arguments count from config
@@ -357,12 +418,15 @@ fi
 
 # Run last-train to check substitution percent identity between org1 and org2
 echo "$(get_config '.options.checkIdt.enabled_message')"
+maybe_reuse_cached_train "$org1ID" "$org2ID" "$train12"
 time bash "$ALIGN_DIR/last_train.sh" "$DATE" "$org1FASTA" "$org2FASTA" "$org1ShortName" "$org2ShortName" "$imf"
 # Run last-train to check substitution percent identity between org1 and org3
 echo "$(get_config '.options.checkIdt.enabled_message')"
+maybe_reuse_cached_train "$org1ID" "$org3ID" "$train13"
 time bash "$ALIGN_DIR/last_train.sh" "$DATE" "$org1FASTA" "$org3FASTA" "$org1ShortName" "$org3ShortName" "$imf"
 # Run last-train to check substitution percent identity between org2 and org3 (inner group)
 echo "$(get_config '.options.checkIdt.enabled_message')"
+maybe_reuse_cached_train "$org2ID" "$org3ID" "${imf}/${org2ShortName}2${org3ShortName}_${DATE}.train"
 time bash "$ALIGN_DIR/last_train.sh" "$DATE" "$org2FASTA" "$org3FASTA" "$org2ShortName" "$org3ShortName" "$imf"
 
 if [ "$IDT_ONLY" -eq 1 ]; then

@@ -111,12 +111,12 @@ check(identical(pair_keys(ingroup_pairs(tree3, leaves3, "matching")), "A|B"),
 # For (A,B): nearest outgroup C is TOO CLOSE (idt_1x > idt_23, ordering fails);
 # the farther outgroup D passes. Expect D chosen after 2 candidates tried.
 idt_tbl <- c(
-  "A|B" = 95,                 # ingroup pair
-  "A|C" = 96, "B|C" = 96,     # C too close
-  "A|D" = 90, "B|D" = 90      # D external -> passes the thesis rule
+  "a|b" = 95,                 # ingroup pair
+  "a|c" = 96, "b|c" = 96,     # C too close
+  "a|d" = 90, "b|d" = 90      # D external -> passes the thesis rule
 )
 key <- function(x, y) if (x <= y) paste(x, y, sep = "|") else paste(y, x, sep = "|")
-mock_get_identity <- function(sa, aa, sb, ab) unname(idt_tbl[key(sa, sb)])
+mock_get_identity <- function(acc_a, acc_b) unname(idt_tbl[key(acc_a, acc_b)])
 fetch <- list(
   get_identity = mock_get_identity,
   counters = local({ e <- new.env(); e$trains <- 0L; e$downloads <- 0L; e })

@@ -70,6 +70,7 @@ defaults <- list(
   min_rel_contig_n50 = 0,
   genome_dir = "./genomes",
   out_dir = "./results/trio_selection",
+  train_cache_dir = NULL,
   date = format(Sys.Date(), "%Y%m%d"),
   threads = 8,
   dry_run = FALSE
@@ -80,7 +81,7 @@ usage <- function() {
     "Usage: Rscript src/select/trio_selection.R --tree <file.nwk> [options]",
     "",
     "Options:",
-    "  --tree FILE             Newick tree; leaf labels end in an NCBI accession. (required)",
+    "  --tree FILE             Newick tree; leaf labels are genus_species (a trailing NCBI accession, if present, is ignored).",
     "  --idt-threshold N       Every pairwise identity must exceed this (default: 80).",
     "  --max-outgroup-tries N  Give up on an ingroup pair after training this many outgroup",
     "                          candidates without a thesis-rule pass (default: 5). Caps the",
@@ -98,6 +99,7 @@ usage <- function() {
     "                          e.g. 0.005 = 0.5%.",
     "  --genome-dir DIR        Genome storage (default: ./genomes).",
     "  --out-dir DIR           Output and last-train cache (default: ./results/trio_selection).",
+    "  --train-cache-dir DIR   Directory for cached last-train files (default: <out-dir>/train_cache).",
     "  --date YYYYMMDD         Run date, used in cache filenames (default: today).",
     "  --threads N             Threads for lastdb/last-train (default: 8).",
     "  --dry-run               Enumerate ingroup pairs + candidate-outgroup order only;",
@@ -124,6 +126,7 @@ parse_args <- function(argv) {
       "--min-rel-contig-n50" = { opts$min_rel_contig_n50 <- as.numeric(take()); i <- i + 2 },
       "--genome-dir"         = { opts$genome_dir <- take(); i <- i + 2 },
       "--out-dir"            = { opts$out_dir <- take(); i <- i + 2 },
+      "--train-cache-dir"    = { opts$train_cache_dir <- take(); i <- i + 2 },
       "--date"               = { opts$date <- take(); i <- i + 2 },
       "--threads"            = { opts$threads <- as.integer(take()); i <- i + 2 },
       "--dry-run"            = { opts$dry_run <- TRUE; i <- i + 1 },
@@ -172,15 +175,8 @@ read_tsv <- function(path) {
              colClasses = "character")
 }
 
-# Leaf labels look like Genus_species_GCA_000000000.1; the accession is the tail.
+# Leaf labels are Genus_species; a trailing NCBI accession is optional and ignored.
 ACCESSION_RE <- "GC[AF]_[0-9]+\\.[0-9]+$"
-
-accession_from_label <- function(labels) {
-  found <- regexpr(ACCESSION_RE, labels) > 0
-  result <- rep(NA_character_, length(labels))
-  result[found] <- regmatches(labels, regexpr(ACCESSION_RE, labels))
-  result
-}
 
 # "Genus_species_...GCA_000000000.1" -> "Genus species": strip the trailing accession, then
 # take the first two tokens.  Matches split_organism_name() in fetch_assembly_metadata.py so
@@ -195,10 +191,10 @@ species_from_label <- function(labels) {
   }, character(1), USE.NAMES = FALSE)
 }
 
-# Short names must be stable per species and must NOT carry a trio slot number:
-# the last-train cache is keyed on the species pair, so the same species has to
-# produce the same name no matter which slot it lands in.  (sbst_fromDwl.sh's
-# make_short_name appends the slot, which is why it cannot be reused here.)
+# Short names must be stable per species and must NOT carry a trio slot number
+# (sbst_fromDwl.sh's make_short_name appends the slot). Used only for readable
+# output/log naming (selected_trios.tsv's out_short/in1_short/in2_short columns
+# etc.) -- the last-train cache is keyed on NCBI accession, not on this name.
 make_short_names <- function(species) {
   base <- vapply(species, function(name) {
     tokens <- strsplit(name, "[ _]+")[[1]]
@@ -207,7 +203,7 @@ make_short_names <- function(species) {
     paste0(first, second)
   }, character(1), USE.NAMES = FALSE)
 
-  # Disambiguate collisions so two species never share one cache entry.
+  # Disambiguate collisions so two species never show the same short name in output.
   for (dup in unique(base[duplicated(base)])) {
     idx <- which(base == dup)
     base[idx] <- paste0(dup, seq_along(idx))
@@ -245,6 +241,7 @@ sister_tips <- function(tree, node) {
 # genome wins even if a non-reference is more contiguous, and when no reference passes the
 # most contiguous assembly is chosen (contig_n50); annotation only breaks contiguity ties, so
 # un-annotated species are still kept.  contig_n50 is absolute (same species => same size).
+# Full ties keep whichever assembly NCBI's metadata response listed first.
 select_best_assemblies <- function(meta, min_rel_contig_n50 = 0) {
   meta <- meta[!is.na(meta$assembly_status) & meta$assembly_status == "current", , drop = FALSE]
   meta$contig_n50 <- suppressWarnings(as.numeric(meta$contig_n50))
@@ -271,7 +268,7 @@ select_best_assemblies <- function(meta, min_rel_contig_n50 = 0) {
       contig_n50 = ifelse(is.na(contig_n50), 0, contig_n50)
     ) %>%
     arrange(species, desc(is_reference), desc(contig_n50), desc(has_annotation_rank),
-            level_rank, desc(accession)) %>%
+            level_rank) %>%
     group_by(species) %>%
     slice_head(n = 1) %>%
     ungroup()
@@ -283,13 +280,11 @@ select_best_assemblies <- function(meta, min_rel_contig_n50 = 0) {
 # from the leaf label's accession (intentional -- a better off-tree assembly, or recovery of
 # a species whose leaf accession is dead).  Duplicate-species leaves collapse to one tip.
 prune_to_best_assembly <- function(tree, out_dir, min_rel_contig_n50 = 0) {
-  accessions <- accession_from_label(tree$tip.label)
-  if (anyNA(accessions)) {
-    stop("Leaf label(s) without a trailing NCBI accession: ",
-         paste(head(tree$tip.label[is.na(accessions)], 5), collapse = ", "), call. = FALSE)
-  }
-
   tip_species <- species_from_label(tree$tip.label)
+  if (any(!nzchar(tip_species))) {
+    stop("Leaf label(s) could not be parsed into a genus_species name: ",
+         paste(head(tree$tip.label[!nzchar(tip_species)], 5), collapse = ", "), call. = FALSE)
+  }
   taxa <- unique(tip_species)
 
   tax_file <- file.path(out_dir, "tree_taxa.txt")
@@ -476,8 +471,8 @@ is_two_vs_one <- function(g_out, g_in1, g_in2) {
 
 # --- on-demand download + last-train, memoized ------------------------------
 
-train_file_path <- function(cache_dir, short_a, short_b, date) {
-  file.path(cache_dir, sprintf("%s2%s_%s.train", short_a, short_b, date))
+train_file_path <- function(cache_dir, acc_a, acc_b, date) {
+  file.path(cache_dir, sprintf("%s2%s_%s.train", acc_a, acc_b, date))
 }
 
 parse_train_identity <- function(path) {
@@ -491,6 +486,9 @@ parse_train_identity <- function(path) {
 # Build closures that download a genome and last-train a species pair at most
 # once each (memoized), so a species trained for one ingroup pair is reused for
 # every other.  The shared cache dir also lets last_train.sh skip work across runs.
+# Cached/memoized by accession pair, not species, so a stale cache entry can never
+# be silently reused after Stage 0 picks a different assembly for the same species
+# in a later run.
 make_fetchers <- function(leaves, opts) {
   fasta_cache <- new.env(parent = emptyenv())
   idt_cache <- new.env(parent = emptyenv())
@@ -498,7 +496,11 @@ make_fetchers <- function(leaves, opts) {
   counters$downloads <- 0L
   counters$trains <- 0L
 
-  cache_dir <- file.path(opts$out_dir, "train_cache")
+  cache_dir <- if (!is.null(opts$train_cache_dir) && nzchar(opts$train_cache_dir)) {
+    opts$train_cache_dir
+  } else {
+    file.path(opts$out_dir, "train_cache")
+  }
   dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
   Sys.setenv(THREAD_NUM = opts$threads)
 
@@ -518,22 +520,26 @@ make_fetchers <- function(leaves, opts) {
     path
   }
 
-  get_identity <- function(short_a, acc_a, short_b, acc_b) {
-    # Canonical (unordered) orientation so one species pair is one cache entry.
-    if (short_a <= short_b) {
-      s1 <- short_a; a1 <- acc_a; s2 <- short_b; a2 <- acc_b
+  get_identity <- function(acc_a, acc_b) {
+    # Canonical (unordered) orientation, keyed on NCBI accession -- not species
+    # short name -- so a stale cache entry can never be reused for a species
+    # whose Stage 0 pick changed to a different assembly between runs. An
+    # accession pair uniquely identifies exactly the two genome sequences that
+    # were last-trained.
+    if (acc_a <= acc_b) {
+      a1 <- acc_a; a2 <- acc_b
     } else {
-      s1 <- short_b; a1 <- acc_b; s2 <- short_a; a2 <- acc_a
+      a1 <- acc_b; a2 <- acc_a
     }
-    key <- paste(s1, s2, sep = "|")
+    key <- paste(a1, a2, sep = "|")
     hit <- idt_cache[[key]]
     if (!is.null(hit)) return(hit)
 
-    train <- train_file_path(cache_dir, s1, s2, opts$date)
+    train <- train_file_path(cache_dir, a1, a2, opts$date)
     if (!file.exists(train)) {
       fa1 <- get_fasta(a1); fa2 <- get_fasta(a2)
       run("bash", c(shQuote(LAST_TRAIN), opts$date, shQuote(fa1), shQuote(fa2),
-                    s1, s2, shQuote(cache_dir)))
+                    a1, a2, shQuote(cache_dir)))
       counters$trains <- counters$trains + 1L
     }
     val <- parse_train_identity(train)
@@ -601,8 +607,7 @@ select_trios <- function(tree, leaves, opts, fetch = NULL) {
     if (!length(cands)) { no_outgroup <- no_outgroup + 1L; next }
 
     infoA <- info_of(tipA); infoB <- info_of(tipB)
-    idt_23 <- get_identity(infoA$short_name, infoA$accession,
-                           infoB$short_name, infoB$accession)
+    idt_23 <- get_identity(infoA$accession, infoB$accession)
     if (is.na(idt_23) || idt_23 <= threshold) { too_diverged <- too_diverged + 1L; next }
 
     chosen <- NULL
@@ -614,10 +619,8 @@ select_trios <- function(tree, leaves, opts, fetch = NULL) {
       if (tries >= opts$max_outgroup_tries) break
       tries <- tries + 1L
 
-      idt_12 <- get_identity(infoO$short_name, infoO$accession,
-                             infoA$short_name, infoA$accession)
-      idt_13 <- get_identity(infoO$short_name, infoO$accession,
-                             infoB$short_name, infoB$accession)
+      idt_12 <- get_identity(infoO$accession, infoA$accession)
+      idt_13 <- get_identity(infoO$accession, infoB$accession)
       if (is.na(idt_12) || is.na(idt_13)) next  # unusable alignment, try the next candidate
 
       row <- build_row(infoO, infoA, infoB, idt_12, idt_13, idt_23, tries)
