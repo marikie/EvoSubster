@@ -5,6 +5,9 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 PATH="$SCRIPT_DIR:$PATH"
 
+# shellcheck source=lib/train_cache.sh
+source "$SCRIPT_DIR/lib/train_cache.sh"
+
 config_file="$ROOT_DIR/config/dwl_config.yaml"
 # Load YAML configuration using yq
 if [ ! -f "$config_file" ]; then
@@ -422,6 +425,38 @@ IFS='|' read -r org1FullName org1FASTA org1SummaryJson org1RawName org1NcbiFullN
 IFS='|' read -r org2FullName org2FASTA org2SummaryJson org2RawName org2NcbiFullName org2TaxJson <<< "$org2Result"
 IFS='|' read -r org3FullName org3FASTA org3SummaryJson org3RawName org3NcbiFullName org3TaxJson <<< "$org3Result"
 
+resolve_downloaded_accession() {
+    local requested="$1" summary_json="$2" fasta_path="$3"
+    local metadata_accession=""
+    if [ -f "$summary_json" ]; then
+        metadata_accession=$(jq -r 'try .reports[0].accession catch ""' "$summary_json")
+    fi
+
+    local fasta_accession
+    fasta_accession=$(extract_ncbi_accession_from_path "$fasta_path")
+    local candidate
+    for candidate in "$metadata_accession" "$fasta_accession" "$requested"; do
+        if [[ "$candidate" =~ ^GC[AF]_[0-9]+\.[0-9]+$ ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+resolvedOrg1ID=$(resolve_downloaded_accession "$org1ID" "$org1SummaryJson" "$org1FASTA") || {
+    echo "Error: Could not resolve a versioned NCBI accession for $org1ID." >&2
+    exit 1
+}
+resolvedOrg2ID=$(resolve_downloaded_accession "$org2ID" "$org2SummaryJson" "$org2FASTA") || {
+    echo "Error: Could not resolve a versioned NCBI accession for $org2ID." >&2
+    exit 1
+}
+resolvedOrg3ID=$(resolve_downloaded_accession "$org3ID" "$org3SummaryJson" "$org3FASTA") || {
+    echo "Error: Could not resolve a versioned NCBI accession for $org3ID." >&2
+    exit 1
+}
+
 echo "Derived org1FullName: $org1FullName"
 echo "Derived org2FullName: $org2FullName"
 echo "Derived org3FullName: $org3FullName"
@@ -581,7 +616,7 @@ fi
 if [ -n "$TRAIN_CACHE_DIR_OVERRIDE" ]; then
     trisbst_args+=("--train-cache-dir" "$TRAIN_CACHE_DIR_OVERRIDE")
 fi
-trisbst_args+=("--accession-ids" "$org1ID" "$org2ID" "$org3ID")
+trisbst_args+=("--accession-ids" "$resolvedOrg1ID" "$resolvedOrg2ID" "$resolvedOrg3ID")
 trisbst_args+=("--thread" "$THREAD_NUM_OVERRIDE")
 if [ "$IDT_ONLY" -eq 1 ]; then
     trisbst_args+=("--idt-only")

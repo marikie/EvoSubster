@@ -10,9 +10,55 @@ extract_ncbi_accession_from_path() {
 
 is_valid_train_file() {
     local path="$1"
-    [ -f "$path" ] &&
-        [ -s "$path" ] &&
-        grep -Fq '# substitution percent identity:' "$path"
+    [ -f "$path" ] && [ -s "$path" ] || return 1
+
+    # last-train prints several intermediate identity/score blocks. Only the
+    # final block contains the #last parameters and uncommented 4x4 matrix that
+    # lastal -p needs. Reset on every identity line so a truncated intermediate
+    # block can never be mistaken for a complete parameter file.
+    awk '
+        function is_identity_number(value) {
+            return value ~ /^[0-9]+([.][0-9]+)?$/ &&
+                   (value + 0) >= 0 && (value + 0) <= 100
+        }
+        function is_score_number(value) {
+            return value ~ /^-?[0-9]+([.][0-9]+)?$/
+        }
+        /^# substitution percent identity:[[:space:]]*/ {
+            value = $0
+            sub(/^# substitution percent identity:[[:space:]]*/, "", value)
+            valid_identity = is_identity_number(value)
+            seen_identity = 1
+            have_t = have_a = have_A = have_b = have_B = have_S = 0
+            in_matrix = 0
+            delete matrix_rows
+            next
+        }
+        !seen_identity { next }
+        /^#last -t/ { have_t = 1; next }
+        /^#last -a/ { have_a = 1; next }
+        /^#last -A/ { have_A = 1; next }
+        /^#last -b/ { have_b = 1; next }
+        /^#last -B/ { have_B = 1; next }
+        /^#last -S/ { have_S = 1; next }
+        /^# score matrix \(query letters = columns, reference letters = rows\):$/ {
+            in_matrix = 1
+            next
+        }
+        in_matrix && $1 ~ /^[ACGT]$/ && NF == 5 {
+            if (is_score_number($2) && is_score_number($3) &&
+                is_score_number($4) && is_score_number($5)) {
+                matrix_rows[$1] = 1
+            }
+        }
+        END {
+            complete = valid_identity && have_t && have_a && have_A &&
+                       have_b && have_B && have_S &&
+                       ("A" in matrix_rows) && ("C" in matrix_rows) &&
+                       ("G" in matrix_rows) && ("T" in matrix_rows)
+            exit !complete
+        }
+    ' "$path"
 }
 
 copy_train_file_atomically() {
@@ -21,6 +67,11 @@ copy_train_file_atomically() {
 
     rm -f "$tmp"
     if ! cp "$source" "$tmp"; then
+        rm -f "$tmp"
+        return 1
+    fi
+    if ! is_valid_train_file "$tmp"; then
+        echo "Warning: copied train cache failed validation: $source" >&2
         rm -f "$tmp"
         return 1
     fi

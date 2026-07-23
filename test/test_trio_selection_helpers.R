@@ -73,7 +73,39 @@ writeLines(c(">seq", "ACGT"), fake_fasta)
 acc_a <- "GCA_000000001.1"
 acc_b <- "GCA_000000002.1"
 cache_file <- train_file_path(cache_root, acc_a, acc_b, "20260723")
-writeLines("partial last-train output", cache_file)
+writeLines(
+  c(
+    "# substitution percent identity: 91.0",
+    "# count matrix (intermediate training iteration)",
+    "# score matrix (query letters = columns, reference letters = rows):"
+  ),
+  cache_file
+)
+
+write_complete_train <- function(path, final_identity) {
+  writeLines(
+    c(
+      "# substitution percent identity: 91.0",
+      "# count matrix (intermediate training iteration)",
+      paste("# substitution percent identity:", final_identity),
+      "# ref letter %: 25.0 25.0 25.0 25.0",
+      "# qry letter %: 25.0 25.0 25.0 25.0",
+      "#last -t4.5",
+      "#last -a 20",
+      "#last -A 20",
+      "#last -b 1",
+      "#last -B 1",
+      "#last -S 1",
+      "# score matrix (query letters = columns, reference letters = rows):",
+      "       A      C      G      T",
+      "A      6    -10     -7    -11",
+      "C    -10      6    -11     -7",
+      "G     -7    -11      6    -10",
+      "T    -11     -7    -10      6"
+    ),
+    path
+  )
+}
 
 real_run <- run
 run <- function(command, args, quiet_stderr = FALSE) {
@@ -81,7 +113,7 @@ run <- function(command, args, quiet_stderr = FALSE) {
     return(paste("Genus_species", fake_fasta, "", "", "", "", sep = "|"))
   }
   if (grepl("last_train[.]sh", args[1])) {
-    writeLines(c("# substitution percent identity: 88.5", "score matrix"), cache_file)
+    write_complete_train(cache_file, 88.5)
     return(character())
   }
   stop("Unexpected command in test stub: ", command, " ", paste(args, collapse = " "))
@@ -109,6 +141,20 @@ check(
 check(
   identical(fetch$counters$trains, 1L),
   "invalid cached train output triggers exactly one fresh training run"
+)
+
+complete_file <- tempfile("complete-train-")
+write_complete_train(complete_file, 87.25)
+check(
+  identical(parse_train_identity(complete_file), 87.25),
+  "complete train parsing uses the final identity instead of an intermediate iteration"
+)
+
+out_of_range_file <- tempfile("out-of-range-train-")
+write_complete_train(out_of_range_file, 101)
+check(
+  is.na(parse_train_identity(out_of_range_file)),
+  "train parsing rejects a final identity outside 0-100"
 )
 
 if (fail > 0L) {

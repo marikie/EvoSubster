@@ -29,7 +29,35 @@ trap 'rm -rf "$tmp_dir"' EXIT
 
 write_valid_train() {
     local path="$1" identity="${2:-95.5}"
-    printf '# substitution percent identity: %s\nscore matrix\n' "$identity" > "$path"
+    cat > "$path" <<EOF
+# substitution percent identity: 91.0
+# count matrix (intermediate training iteration)
+# score matrix (query letters = columns, reference letters = rows):
+# substitution percent identity: $identity
+# ref letter %: 25.0 25.0 25.0 25.0
+# qry letter %: 25.0 25.0 25.0 25.0
+#last -t4.5
+#last -a 20
+#last -A 20
+#last -b 1
+#last -B 1
+#last -S 1
+# score matrix (query letters = columns, reference letters = rows):
+       A      C      G      T
+A      6    -10     -7    -11
+C    -10      6    -11     -7
+G     -7    -11      6    -10
+T    -11     -7    -10      6
+EOF
+}
+
+write_truncated_train() {
+    local path="$1"
+    cat > "$path" <<'EOF'
+# substitution percent identity: 91.0
+# count matrix (intermediate training iteration)
+# score matrix (query letters = columns, reference letters = rows):
+EOF
 }
 
 # Strict accession extraction must never turn an arbitrary FASTA name into a cache key.
@@ -87,11 +115,17 @@ check "materialized legacy output survives cache cleanup" is_valid_train_file "$
 # Partial cache files must not be reused or leave a destination that makes last_train skip.
 invalid_cache="$cache_dir/GCA_000000003.12GCA_000000004.1_20260723.train"
 invalid_dest="$dest_dir/invalid.train"
-printf 'partial output\n' > "$invalid_cache"
+write_truncated_train "$invalid_cache"
 printf 'partial destination\n' > "$invalid_dest"
 reuse_cached_train "$cache_dir" "20260723" \
     "GCA_000000003.1" "GCA_000000004.1" "$invalid_dest"
 check "removes an invalid destination before fresh training" test ! -e "$invalid_dest"
+
+out_of_range_train="$cache_dir/out-of-range.train"
+write_valid_train "$out_of_range_train" 101
+check "rejects an out-of-range final identity" \
+    bash -c 'source "$1"; ! is_valid_train_file "$2"' \
+    bash "$TRAIN_CACHE_LIB" "$out_of_range_train"
 
 # sbst.sh must use accessions supplied by its downloader caller even when FASTA
 # basenames are custom, and it must attempt cache reuse for all three pairs.
@@ -123,7 +157,21 @@ if [ -s "$dest" ] && grep -Fq '# substitution percent identity:' "$dest"; then
     echo "reused" >> "$TRAIN_TEST_LOG"
 else
     echo "fresh" >> "$TRAIN_TEST_LOG"
-    printf '# substitution percent identity: 90\n' > "$dest"
+    cat > "$dest" <<'TRAIN'
+# substitution percent identity: 90
+#last -t4.5
+#last -a 20
+#last -A 20
+#last -b 1
+#last -B 1
+#last -S 1
+# score matrix (query letters = columns, reference letters = rows):
+       A      C      G      T
+A      6    -10     -7    -11
+C    -10      6    -11     -7
+G     -7    -11      6    -10
+T    -11     -7    -10      6
+TRAIN
 fi
 EOF
 chmod +x \

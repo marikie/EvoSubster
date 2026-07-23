@@ -22,8 +22,9 @@ check() {
 # sbst_fromDwl.sh can be replaced with deterministic process-boundary stubs.
 fixture_repo="$tmp_dir/repo"
 stub_bin="$tmp_dir/bin"
-mkdir -p "$fixture_repo/src/select" "$fixture_repo/config" "$stub_bin"
+mkdir -p "$fixture_repo/src/select" "$fixture_repo/src/lib" "$fixture_repo/config" "$stub_bin"
 cp "$ROOT_DIR/src/sbst_fromDwl.sh" "$fixture_repo/src/sbst_fromDwl.sh"
+cp "$ROOT_DIR/src/lib/train_cache.sh" "$fixture_repo/src/lib/train_cache.sh"
 cp "$ROOT_DIR/config/dwl_config.yaml" "$fixture_repo/config/dwl_config.yaml"
 
 cat > "$stub_bin/Rscript" <<'EOF'
@@ -69,14 +70,19 @@ while [ "$#" -gt 0 ]; do
             ;;
     esac
 done
-org_name="Species_${acc//[._]/_}"
+if [[ "$acc" =~ \.[0-9]+$ ]]; then
+    resolved_acc="$acc"
+else
+    resolved_acc="${acc}.9"
+fi
+org_name="Species_${resolved_acc//[._]/_}"
 org_dir="$out_dir/$org_name"
 mkdir -p "$org_dir"
-fasta="$org_dir/${acc}_genomic.fna"
+fasta="$org_dir/${resolved_acc}_genomic.fna"
 summary="$org_dir/summary.json"
 taxonomy="$org_dir/taxonomy.json"
 printf '>seq\nACGT\n' > "$fasta"
-printf '{}\n' > "$summary"
+printf '{"reports":[{"accession":"%s"}]}\n' "$resolved_acc" > "$summary"
 printf '{}\n' > "$taxonomy"
 printf '%s|%s|%s|%s|%s|%s\n' \
     "$org_name" "$fasta" "$summary" "$org_name" "$org_name" "$taxonomy"
@@ -151,6 +157,23 @@ check "custom cache path is passed to the R selector" \
     sh -c 'grep -Fxq -- "$1" "$2"' sh "$custom_cache" "$custom_r_log"
 check "the same custom cache path is passed to sbst.sh" \
     grep -Fq -- "--train-cache-dir $custom_cache" "$custom_sbst_log"
+
+unversioned_log="$tmp_dir/unversioned-sbst.log"
+PATH="$stub_bin:$PATH" \
+SBST_ARGS_LOG="$unversioned_log" \
+bash "$fixture_repo/src/sbst_fromDwl.sh" \
+    20260723 GCA_000000011 GCA_000000022 GCA_000000033 \
+    --genome-dir "$tmp_dir/unversioned-genomes" \
+    --out-dir "$tmp_dir/unversioned-out" \
+    --idt-only \
+    > "$tmp_dir/unversioned-wrapper.log" 2>&1
+unversioned_exit=$?
+
+check "single-trio wrapper preserves support for unversioned requested accessions" \
+    test "$unversioned_exit" -eq 0
+check "single-trio wrapper forwards resolved versioned accessions" \
+    grep -Fq -- "--accession-ids GCA_000000011.9 GCA_000000022.9 GCA_000000033.9" \
+    "$unversioned_log"
 
 if [ "$fail" -gt 0 ]; then
     echo

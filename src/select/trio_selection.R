@@ -478,10 +478,53 @@ train_file_path <- function(cache_dir, acc_a, acc_b, date) {
 
 parse_train_identity <- function(path) {
   if (!file.exists(path)) return(NA_real_)
-  line <- grep(IDENTITY_PREFIX, readLines(path, warn = FALSE), fixed = TRUE, value = TRUE)
-  if (!length(line)) return(NA_real_)
-  value <- regmatches(line[1], regexpr("[0-9]+\\.?[0-9]*", line[1]))
-  if (!length(value)) NA_real_ else as.numeric(value)
+  lines <- readLines(path, warn = FALSE)
+  identity_lines <- which(startsWith(lines, IDENTITY_PREFIX))
+  if (!length(identity_lines)) return(NA_real_)
+
+  # Intermediate training iterations also contain identity lines. The final
+  # identity is the last one and is valid only when followed by the complete
+  # parameter block consumed by lastal -p.
+  identity_idx <- tail(identity_lines, 1)
+  value_text <- trimws(sub(IDENTITY_PREFIX, "", lines[identity_idx], fixed = TRUE))
+  if (!grepl("^[0-9]+([.][0-9]+)?$", value_text)) return(NA_real_)
+  value <- as.numeric(value_text)
+  if (!is.finite(value) || value < 0 || value > 100) return(NA_real_)
+  if (identity_idx >= length(lines)) return(NA_real_)
+
+  final_block <- lines[(identity_idx + 1):length(lines)]
+  required_parameters <- c(
+    "#last -t", "#last -a", "#last -A",
+    "#last -b", "#last -B", "#last -S"
+  )
+  if (!all(vapply(
+    required_parameters,
+    function(prefix) any(startsWith(final_block, prefix)),
+    logical(1)
+  ))) return(NA_real_)
+
+  matrix_headers <- which(
+    final_block == "# score matrix (query letters = columns, reference letters = rows):"
+  )
+  if (!length(matrix_headers)) return(NA_real_)
+  matrix_idx <- tail(matrix_headers, 1)
+  if (matrix_idx >= length(final_block)) return(NA_real_)
+
+  score_number <- "-?[0-9]+([.][0-9]+)?"
+  row_pattern <- paste0(
+    "^([ACGT])[[:space:]]+", score_number,
+    "[[:space:]]+", score_number,
+    "[[:space:]]+", score_number,
+    "[[:space:]]+", score_number,
+    "[[:space:]]*$"
+  )
+  matrix_rows <- sub(
+    row_pattern, "\\1",
+    grep(row_pattern, final_block[(matrix_idx + 1):length(final_block)], value = TRUE)
+  )
+  if (!setequal(matrix_rows, c("A", "C", "G", "T"))) return(NA_real_)
+
+  value
 }
 
 # Build closures that download a genome and last-train a species pair at most
