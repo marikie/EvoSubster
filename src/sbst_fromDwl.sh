@@ -62,6 +62,8 @@ IDT_THRESHOLD=""
 MAX_OUTGROUP_TRIES=""
 INGROUP_PAIRING=""
 MIN_REL_CONTIG_N50=""
+STAGE0_TOP_K=""
+ASSEMBLY_QC=""
 POSITIONAL_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -92,6 +94,9 @@ Tree mode:
   --min-rel-contig-n50 F  Drop a species unless some current assembly has relative contig
                        N50 (contig_n50/total_ungapped_length) >= F. Size-normalized so one
                        value works across lineages; default: 0 = off, e.g. 0.005.
+  --stage0-top-k N     Keep N assembly candidates per species for second-pass quality ranking
+                       (default: 3; the eligible NCBI reference is anchored in the shortlist).
+  --assembly-qc FILE   Optional external QC TSV with BUSCO genome-mode and/or Merqury results.
 
 Options:
   --genome-dir PATH       Genome storage directory (default: ./genomes)
@@ -207,6 +212,42 @@ EOF
             TREE_FILE="${1#*=}"
             if [[ -z "$TREE_FILE" ]]; then
                 echo "Error: --tree requires a Newick file path." >&2
+                exit 1
+            fi
+            shift
+            continue
+            ;;
+        --stage0-top-k)
+            if [[ -z "${2:-}" ]] || ! [[ "$2" =~ ^[1-9][0-9]*$ ]]; then
+                echo "Error: --stage0-top-k requires a positive integer argument." >&2
+                exit 1
+            fi
+            STAGE0_TOP_K="$2"
+            shift 2
+            continue
+            ;;
+        --stage0-top-k=*)
+            STAGE0_TOP_K="${1#*=}"
+            if ! [[ "$STAGE0_TOP_K" =~ ^[1-9][0-9]*$ ]]; then
+                echo "Error: --stage0-top-k requires a positive integer argument." >&2
+                exit 1
+            fi
+            shift
+            continue
+            ;;
+        --assembly-qc)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: --assembly-qc requires a TSV file path." >&2
+                exit 1
+            fi
+            ASSEMBLY_QC="$2"
+            shift 2
+            continue
+            ;;
+        --assembly-qc=*)
+            ASSEMBLY_QC="${1#*=}"
+            if [[ -z "$ASSEMBLY_QC" ]]; then
+                echo "Error: --assembly-qc requires a TSV file path." >&2
                 exit 1
             fi
             shift
@@ -332,6 +373,9 @@ fi
 if [ -n "$TRAIN_CACHE_DIR_OVERRIDE" ]; then
     TRAIN_CACHE_DIR_OVERRIDE=$(resolve_path "$TRAIN_CACHE_DIR_OVERRIDE")
 fi
+if [ -n "$ASSEMBLY_QC" ]; then
+    ASSEMBLY_QC=$(resolve_path "$ASSEMBLY_QC")
+fi
 
 # --- Tree mode: select trios from a Newick tree, then run the pipeline per trio ---
 # trio_selection.R downloads genomes and runs last-train itself to score candidates;
@@ -354,6 +398,8 @@ if [ -n "$TREE_FILE" ]; then
     [ -n "$MAX_OUTGROUP_TRIES" ] && r_args+=(--max-outgroup-tries "$MAX_OUTGROUP_TRIES")
     [ -n "$INGROUP_PAIRING" ] && r_args+=(--ingroup-pairing "$INGROUP_PAIRING")
     [ -n "$MIN_REL_CONTIG_N50" ] && r_args+=(--min-rel-contig-n50 "$MIN_REL_CONTIG_N50")
+    [ -n "$STAGE0_TOP_K" ] && r_args+=(--stage0-top-k "$STAGE0_TOP_K")
+    [ -n "$ASSEMBLY_QC" ] && r_args+=(--assembly-qc "$ASSEMBLY_QC")
     [ -n "$TRAIN_CACHE_DIR_OVERRIDE" ] && r_args+=(--train-cache-dir "$TRAIN_CACHE_DIR_OVERRIDE")
 
     echo "--- [tree mode] selecting trios from $TREE_FILE"

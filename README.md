@@ -56,6 +56,58 @@ During execution the wrapper:
 - Detects `genomic.gff` for the outgroup; if missing, downstream steps receive `NO_GFF_FILE`.
 - Resolves FASTA paths and invokes `sbst.sh` with the appropriate arguments.
 
+### Select trios from a Newick tree
+
+```bash
+./src/sbst_fromDwl.sh \
+  --tree path/to/tree.nwk \
+  20260801 \
+  --stage0-top-k 3 \
+  --assembly-qc path/to/external_qc.tsv
+```
+
+Stage 0 discovers all current non-MAG NCBI assemblies for every species on the
+tree and records the versioned `GCA_...version` or `GCF_...version` accession.
+It then uses a two-phase selection:
+
+1. Exclude non-current, NCBI-atypical, ANI-Failed, unsupported hybrid/alternate
+   haplotype/unresolved-diploid, and optional relative-contig-N50 gate failures.
+2. Anchor the eligible NCBI `reference genome` in a per-species shortlist, then
+   re-rank the shortlist with lineage-specific evidence.
+
+Prokaryote candidates are ranked by ANI status, CheckM completeness,
+CheckM contamination, optional Merqury evidence, assembly level, contig count,
+and contig N50. Eukaryote candidates are ranked by comparable external BUSCO
+`genome`-mode and optional Merqury results when supplied. NCBI annotation BUSCO values are retained for
+audit but are not treated as assembly-level BUSCO genome-mode measurements. If
+external genome QC is absent, an eligible eukaryote reference genome remains a
+provisional selection.
+
+The optional external QC TSV is keyed by exact versioned `accession` and may
+contain these columns:
+
+```text
+accession
+qc_busco_mode              # must be "genome"
+qc_busco_lineage
+qc_busco_version
+qc_busco_complete
+qc_busco_fragmented
+qc_busco_missing
+merqury_qv
+merqury_completeness
+```
+
+All BUSCO candidates for one species must use the same lineage and version.
+Stage 0 writes the following audit files under
+`<out-dir>/trio_selection/`:
+
+- `assembly_metadata.tsv`: raw NCBI candidate metadata.
+- `assembly_candidates_audit.tsv`: every candidate plus exclusion reason,
+  profile, ranks, and selection basis.
+- `assembly_shortlist.tsv`: up to `--stage0-top-k` candidates per species.
+- `selected_assemblies.tsv`: the one assembly passed to Stage 1 for each species.
+
 ### Use FASTA files of your choice
 
 ```bash

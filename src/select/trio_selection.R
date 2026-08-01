@@ -32,6 +32,10 @@ suppressPackageStartupMessages({
 })
 
 SCRIPT_DIR <- local({
+  sourced_file <- tryCatch(sys.frame(1)$ofile, error = function(...) NULL)
+  if (!is.null(sourced_file) && nzchar(sourced_file)) {
+    return(dirname(normalizePath(sourced_file)))
+  }
   args <- commandArgs(trailingOnly = FALSE)
   file_arg <- grep("^--file=", args, value = TRUE)
   if (length(file_arg)) {
@@ -46,19 +50,10 @@ FETCH_METADATA <- file.path(SCRIPT_DIR, "fetch_assembly_metadata.py")
 TRIO_FILTER <- file.path(SCRIPT_DIR, "trio_filter.py")
 DWL_ORGANISM <- file.path(SRC_DIR, "dwl_organism.sh")
 LAST_TRAIN <- file.path(SRC_DIR, "align", "last_train.sh")
+ASSEMBLY_SELECTION <- file.path(SCRIPT_DIR, "assembly_selection.R")
+source(ASSEMBLY_SELECTION)
 
 IDENTITY_PREFIX <- "# substitution percent identity:"
-
-# Best assembly per species: prefer the designated reference, then the most
-# contiguous assembly.  A strict reference-only filter would drop whole species
-# from the tree (11 of 37 primates), which is worse than keeping a good
-# non-reference assembly.
-ASSEMBLY_LEVEL_RANK <- c(
-  "Complete Genome" = 1,
-  "Chromosome" = 2,
-  "Scaffold" = 3,
-  "Contig" = 4
-)
 
 # --- options ----------------------------------------------------------------
 
@@ -68,6 +63,8 @@ defaults <- list(
   max_outgroup_tries = 5,
   ingroup_pairing = "matching",
   min_rel_contig_n50 = 0,
+  stage0_top_k = 3L,
+  assembly_qc = NULL,
   genome_dir = "./genomes",
   out_dir = "./results/trio_selection",
   train_cache_dir = NULL,
@@ -97,6 +94,13 @@ usage <- function() {
     "                          meaningless across taxa (a perfect ~12 Mb yeast reference has a",
     "                          0.92 Mb contig N50). Default 0 = off (keep every species);",
     "                          e.g. 0.005 = 0.5%.",
+    "  --stage0-top-k N        Keep the top N metadata candidates per species for the second",
+    "                          Stage-0 evaluation (default: 3). The eligible NCBI reference",
+    "                          genome, when present, is always anchored in this shortlist.",
+    "  --assembly-qc FILE      Optional TSV with accession plus comparable external QC:",
+    "                          BUSCO genome-mode fields (qc_busco_*) and optional Merqury",
+    "                          fields. NCBI annotation BUSCO is recorded but is not treated",
+    "                          as assembly-level BUSCO genome-mode evidence.",
     "  --genome-dir DIR        Genome storage (default: ./genomes).",
     "  --out-dir DIR           Output directory (default: ./results/trio_selection).",
     "  --train-cache-dir DIR   Directory for cached last-train files (default: <out-dir>/train_cache).",
@@ -124,6 +128,8 @@ parse_args <- function(argv) {
       "--max-outgroup-tries" = { opts$max_outgroup_tries <- as.integer(take()); i <- i + 2 },
       "--ingroup-pairing"    = { opts$ingroup_pairing <- take(); i <- i + 2 },
       "--min-rel-contig-n50" = { opts$min_rel_contig_n50 <- as.numeric(take()); i <- i + 2 },
+      "--stage0-top-k"       = { opts$stage0_top_k <- as.integer(take()); i <- i + 2 },
+      "--assembly-qc"        = { opts$assembly_qc <- take(); i <- i + 2 },
       "--genome-dir"         = { opts$genome_dir <- take(); i <- i + 2 },
       "--out-dir"            = { opts$out_dir <- take(); i <- i + 2 },
       "--train-cache-dir"    = { opts$train_cache_dir <- take(); i <- i + 2 },
@@ -147,6 +153,10 @@ parse_args <- function(argv) {
       opts$min_rel_contig_n50 > 1) {
     stop("--min-rel-contig-n50 must be a fraction in [0, 1] (got: ", opts$min_rel_contig_n50,
          "); it is contig_n50 / total_ungapped_length, e.g. 0.005 for 0.5%.", call. = FALSE)
+  }
+  if (is.na(opts$stage0_top_k) || opts$stage0_top_k < 1) {
+    stop("--stage0-top-k must be a positive integer (got: ", opts$stage0_top_k, ")",
+         call. = FALSE)
   }
   opts
 }
@@ -229,57 +239,14 @@ sister_tips <- function(tree, node) {
 
 # --- Stage 0: prune the tree to one best assembly per species ----------------
 
-# Given the metadata table for all fetched assemblies, keep only current ones, apply the
-# size-normalized quality gate, and pick one best assembly per species.  Split out from
-# prune_to_best_assembly() so it can be unit-tested without hitting NCBI.
-#
-# Gate metric = relative contig N50 = contig_n50 / total_ungapped_length.  Absolute contig
-# N50 is meaningless across taxa (a perfect ~12 Mb yeast reference has a 0.92 Mb contig N50,
-# below what a mammal needs), so gate on the fraction of the genome in the median contig; a
-# perfect chromosome-level assembly sits near 1/(chromosome count), orders of magnitude above
-# fragmented junk.  Selection is REFERENCE-FIRST, then most-contiguous: a passing reference
-# genome wins even if a non-reference is more contiguous, and when no reference passes the
-# most contiguous assembly is chosen (contig_n50); annotation only breaks contiguity ties, so
-# un-annotated species are still kept.  contig_n50 is absolute (same species => same size).
-# Full ties keep whichever assembly NCBI's metadata response listed first.
-select_best_assemblies <- function(meta, min_rel_contig_n50 = 0) {
-  meta <- meta[!is.na(meta$assembly_status) & meta$assembly_status == "current", , drop = FALSE]
-  meta$contig_n50 <- suppressWarnings(as.numeric(meta$contig_n50))
-  meta$total_ungapped_length <- suppressWarnings(as.numeric(meta$total_ungapped_length))
-  meta$rel_contig_n50 <- ifelse(
-    is.na(meta$total_ungapped_length) | meta$total_ungapped_length <= 0 | is.na(meta$contig_n50),
-    0, meta$contig_n50 / meta$total_ungapped_length
-  )
-
-  if (min_rel_contig_n50 > 0) {
-    meta <- meta[meta$rel_contig_n50 >= min_rel_contig_n50, , drop = FALSE]
-  }
-  if (!nrow(meta)) return(meta[0, , drop = FALSE])
-
-  meta %>%
-    mutate(
-      is_reference = as.integer(refseq_category == "reference genome"),
-      has_annotation_rank = as.integer(tolower(has_annotation) == "true"),
-      level_rank = ifelse(
-        assembly_level %in% names(ASSEMBLY_LEVEL_RANK),
-        ASSEMBLY_LEVEL_RANK[assembly_level],
-        length(ASSEMBLY_LEVEL_RANK) + 1L
-      ),
-      contig_n50 = ifelse(is.na(contig_n50), 0, contig_n50)
-    ) %>%
-    arrange(species, desc(is_reference), desc(contig_n50), desc(has_annotation_rank),
-            level_rank) %>%
-    group_by(species) %>%
-    slice_head(n = 1) %>%
-    ungroup()
-}
-
 # Fetch every current assembly of each species on the tree (not just the leaf accession),
-# gate + pick the best per species, and prune the tree to the species that keep an assembly.
+# hard-filter unsuitable candidates, shortlist the strongest metadata candidates, re-rank
+# with lineage-specific QC, and prune the tree to species that keep an assembly.
 # The tree is topology only; leaves$accession becomes the chosen accession, which may differ
 # from the leaf label's accession (intentional -- a better off-tree assembly, or recovery of
 # a species whose leaf accession is dead).  Duplicate-species leaves collapse to one tip.
-prune_to_best_assembly <- function(tree, out_dir, min_rel_contig_n50 = 0) {
+prune_to_best_assembly <- function(tree, out_dir, min_rel_contig_n50 = 0,
+                                   stage0_top_k = 3L, assembly_qc = NULL) {
   tip_species <- species_from_label(tree$tip.label)
   invalid_labels <- is.na(tip_species) | !nzchar(tip_species)
   if (any(invalid_labels)) {
@@ -298,7 +265,22 @@ prune_to_best_assembly <- function(tree, out_dir, min_rel_contig_n50 = 0) {
                    "--out", shQuote(meta_file)))
 
   meta <- read_tsv(meta_file)
-  best <- select_best_assemblies(meta, min_rel_contig_n50)
+  external_qc <- NULL
+  if (!is.null(assembly_qc)) {
+    if (!file.exists(assembly_qc)) {
+      stop("External assembly QC file does not exist: ", assembly_qc, call. = FALSE)
+    }
+    external_qc <- read_tsv(assembly_qc)
+  }
+  ranked <- rank_assembly_candidates(
+    meta,
+    min_rel_contig_n50 = min_rel_contig_n50,
+    shortlist_k = stage0_top_k,
+    external_qc = external_qc
+  )
+  best <- ranked$best
+  write_tsv(ranked$audit, file.path(out_dir, "assembly_candidates_audit.tsv"))
+  write_tsv(ranked$shortlist, file.path(out_dir, "assembly_shortlist.tsv"))
 
   # Keep one tip per species (first in tree order); duplicate-species tips are dropped.
   leaves <- tibble::tibble(tip = tree$tip.label, species = tip_species) %>%
@@ -308,20 +290,20 @@ prune_to_best_assembly <- function(tree, out_dir, min_rel_contig_n50 = 0) {
     ungroup()
 
   # Report dropped species, distinguishing a name mismatch (NCBI returned nothing under the
-  # label-parsed name -- e.g. a synonym or reclassification) from a real quality-gate drop.
+  # label-parsed name) from a species whose candidates all failed Stage-0 quality screening.
   fetched_species <- unique(meta$species)
   dropped_species <- setdiff(unique(tip_species), unique(leaves$species))
   no_metadata <- setdiff(dropped_species, fetched_species)
-  gate_dropped <- setdiff(dropped_species, no_metadata)
+  quality_dropped <- setdiff(dropped_species, no_metadata)
   if (length(no_metadata)) {
     log_stage("  dropping", length(no_metadata),
               "species with NO matching NCBI metadata (name mismatch or no assemblies):",
               paste(no_metadata, collapse = ", "))
   }
-  if (length(gate_dropped)) {
-    log_stage("  dropping", length(gate_dropped),
-              "species with no current assembly passing the gate:",
-              paste(gate_dropped, collapse = ", "))
+  if (length(quality_dropped)) {
+    log_stage("  dropping", length(quality_dropped),
+              "species with no assembly passing Stage-0 quality screening:",
+              paste(quality_dropped, collapse = ", "))
   }
 
   # Note collapsed duplicate-species leaves: one tip (first in tree order) is kept, so the
@@ -334,14 +316,20 @@ prune_to_best_assembly <- function(tree, out_dir, min_rel_contig_n50 = 0) {
   }
 
   if (!nrow(leaves)) {
-    stop("Stage 0 kept 0 species: every leaf failed the current-status filter or the ",
-         "--min-rel-contig-n50 gate (", min_rel_contig_n50, "). Lower the gate or check the ",
-         "tree's species names against NCBI.", call. = FALSE)
+    stop("Stage 0 kept 0 species: every leaf lacked matching NCBI metadata or every candidate ",
+         "failed quality screening. Check assembly_candidates_audit.tsv and the tree's species ",
+         "names.", call. = FALSE)
   }
 
   gate_note <- if (min_rel_contig_n50 > 0)
     sprintf("(relative contig-N50 gate >= %.4g)", min_rel_contig_n50) else ""
-  log_stage("  ", nrow(meta), "assembly records ->", nrow(leaves), "species kept", gate_note)
+  provisional <- sum(best$selection_basis == "reference_metadata_provisional")
+  log_stage("  ", nrow(meta), "assembly records ->", nrow(ranked$shortlist),
+            "shortlisted ->", nrow(leaves), "species kept", gate_note)
+  if (provisional > 0) {
+    log_stage("  ", provisional, "eukaryote selection(s) are provisional: provide",
+              "--assembly-qc with comparable BUSCO genome-mode results for final ranking")
+  }
 
   pruned <- drop.tip(tree, setdiff(tree$tip.label, leaves$tip))
   leaves <- leaves[match(pruned$tip.label, leaves$tip), ]
@@ -724,7 +712,13 @@ main <- function() {
   tree <- read.tree(opts$tree)
   log_stage("tree:", opts$tree, "-", Ntip(tree), "leaves")
 
-  pruned <- prune_to_best_assembly(tree, opts$out_dir, opts$min_rel_contig_n50)
+  pruned <- prune_to_best_assembly(
+    tree,
+    opts$out_dir,
+    opts$min_rel_contig_n50,
+    opts$stage0_top_k,
+    opts$assembly_qc
+  )
   write_tsv(pruned$leaves, file.path(opts$out_dir, "selected_assemblies.tsv"))
   tree <- pruned$tree
   leaves <- pruned$leaves

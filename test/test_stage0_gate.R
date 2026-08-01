@@ -8,7 +8,7 @@
 
 this_file <- sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)[1])
 root <- dirname(dirname(normalizePath(this_file)))
-source(file.path(root, "src", "select", "trio_selection.R"))
+source(file.path(root, "src", "select", "assembly_selection.R"))
 
 fail <- 0L
 check <- function(cond, msg) {
@@ -55,8 +55,8 @@ check(identical(pick(b0, "Genus beta"), "B_big"),
       "no reference: beta falls back to the most contiguous (B_big)")
 check(identical(pick(b0, "Genus delta"), "D_alt"),
       "suppressed excluded: delta picks the current D_alt, not the suppressed reference")
-check(identical(pick(b0, "Genus epsilon"), "E_big"),
-      "contiguity fallback: epsilon picks the more contiguous E_big over the annotated E_annot")
+check(identical(pick(b0, "Genus epsilon"), "E_annot"),
+      "general fallback: chromosome-level E_annot beats the more fragmented contig-level E_big")
 
 # Gate on at rel N50 >= 0.005 (= 5e5 bp at 1e8): gamma's only assembly (1e4 -> 1e-4) fails.
 b1 <- select_best_assemblies(meta, 0.005)

@@ -158,6 +158,30 @@ check "custom cache path is passed to the R selector" \
 check "the same custom cache path is passed to sbst.sh" \
     grep -Fq -- "--train-cache-dir $custom_cache" "$custom_sbst_log"
 
+qc_file="$tmp_dir/external-qc.tsv"
+printf 'accession\tqc_busco_mode\nGCA_000000011.1\tgenome\n' > "$qc_file"
+quality_out="$tmp_dir/quality-out"
+quality_r_log="$tmp_dir/quality-r.log"
+quality_sbst_log="$tmp_dir/quality-sbst.log"
+PATH="$stub_bin:$PATH" \
+R_ARGS_LOG="$quality_r_log" \
+SBST_ARGS_LOG="$quality_sbst_log" \
+bash "$fixture_repo/src/sbst_fromDwl.sh" \
+    --tree "$tree_file" 20260723 \
+    --genome-dir "$tmp_dir/quality-genomes" \
+    --out-dir "$quality_out" \
+    --stage0-top-k 4 \
+    --assembly-qc "$qc_file" \
+    --idt-only \
+    > "$tmp_dir/quality-wrapper.log" 2>&1
+quality_exit=$?
+
+check "tree wrapper accepts Stage 0 quality-ranking options" test "$quality_exit" -eq 0
+check "tree wrapper forwards the Stage 0 shortlist size" \
+    sh -c 'grep -Fxq -- "$1" "$2"' sh 4 "$quality_r_log"
+check "tree wrapper forwards the external assembly-QC table" \
+    sh -c 'grep -Fxq -- "$1" "$2"' sh "$qc_file" "$quality_r_log"
+
 unversioned_log="$tmp_dir/unversioned-sbst.log"
 PATH="$stub_bin:$PATH" \
 SBST_ARGS_LOG="$unversioned_log" \

@@ -63,6 +63,28 @@ check(
   "--train-cache-dir help states its default"
 )
 
+stage0_args <- try(
+  parse_args(c(
+    "--tree", "example.nwk",
+    "--stage0-top-k", "4",
+    "--assembly-qc", "external_qc.tsv"
+  )),
+  silent = TRUE
+)
+check(
+  !inherits(stage0_args, "try-error") && identical(stage0_args$stage0_top_k, 4L),
+  "Stage 0 CLI accepts a positive per-species shortlist size"
+)
+check(
+  !inherits(stage0_args, "try-error") &&
+    identical(stage0_args$assembly_qc, "external_qc.tsv"),
+  "Stage 0 CLI accepts an optional external genome-QC table"
+)
+check(
+  grepl("BUSCO genome-mode", help_text, fixed = TRUE),
+  "Stage 0 help distinguishes external BUSCO genome-mode from NCBI annotation BUSCO"
+)
+
 # An interrupted cache file must be removed and trained again instead of being
 # parsed as NA forever. Stub only the external process boundary; exercise the
 # real make_fetchers() cache logic.
