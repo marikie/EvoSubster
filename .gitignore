@@ -5,6 +5,7 @@ genomes/
 log/
 eg_results/Arccen1_Ampcit2_Ampzal3/20260418/intermediateFiles/
 eg_results/Arccen1_Ampcit2_Ampzal3/20260418/metadata/
+.venv
 
 # Large intermediate files
 *.maf
