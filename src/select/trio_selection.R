@@ -26,11 +26,6 @@
 #
 # Depends on: ape, dplyr (R); python3, LAST, curl, jq (external).
 
-suppressPackageStartupMessages({
-  library(ape)
-  library(dplyr)
-})
-
 SCRIPT_DIR <- local({
   args <- commandArgs(trailingOnly = FALSE)
   file_arg <- grep("^--file=", args, value = TRUE)
@@ -107,6 +102,23 @@ usage <- function() {
     "",
     sep = "\n"
   )
+}
+
+load_runtime_dependencies <- function() {
+  packages <- c("ape", "dplyr")
+  missing <- packages[!vapply(packages, requireNamespace, logical(1), quietly = TRUE)]
+  if (length(missing)) {
+    stop(
+      "Missing required R package(s): ", paste(missing, collapse = ", "),
+      ". Install with install.packages(c(",
+      paste(sprintf('"%s"', missing), collapse = ", "), ")).",
+      call. = FALSE
+    )
+  }
+  suppressPackageStartupMessages({
+    library(ape)
+    library(dplyr)
+  })
 }
 
 parse_args <- function(argv) {
@@ -719,6 +731,7 @@ select_trios <- function(tree, leaves, opts, fetch = NULL) {
 
 main <- function() {
   opts <- parse_args(commandArgs(trailingOnly = TRUE))
+  load_runtime_dependencies()
   dir.create(opts$out_dir, recursive = TRUE, showWarnings = FALSE)
 
   tree <- read.tree(opts$tree)

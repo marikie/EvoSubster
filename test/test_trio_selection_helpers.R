@@ -63,6 +63,17 @@ check(
   "--train-cache-dir help states its default"
 )
 
+help_process <- suppressWarnings(system2(
+  file.path(R.home("bin"), "Rscript"),
+  c(file.path(root, "src", "select", "trio_selection.R"), "--help"),
+  stdout = TRUE,
+  stderr = TRUE
+))
+check(
+  is.null(attr(help_process, "status")) && any(grepl("^Usage:", help_process)),
+  "CLI help exits successfully without loading runtime packages"
+)
+
 # An interrupted cache file must be removed and trained again instead of being
 # parsed as NA forever. Stub only the external process boundary; exercise the
 # real make_fetchers() cache logic.
