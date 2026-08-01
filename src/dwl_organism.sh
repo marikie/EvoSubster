@@ -26,6 +26,32 @@ sanitize_for_path() {
     echo "$name"
 }
 
+curl_with_retry() {
+    local attempt=1
+    local max_attempts=4
+    local status
+    local -a retry_options=()
+
+    while true; do
+        if curl "${retry_options[@]}" "$@"; then
+            return 0
+        else
+            status=$?
+        fi
+
+        case "$status" in
+            5|6|7|18|28|35|52|55|56|92) ;;
+            *) return "$status" ;;
+        esac
+        [ "$attempt" -ge "$max_attempts" ] && return "$status"
+
+        echo "Warning: NCBI request failed (curl exit $status); retrying with HTTP/1.1 ($((attempt + 1))/$max_attempts)..." >&2
+        sleep 2
+        retry_options=(--http1.1)
+        attempt=$((attempt + 1))
+    done
+}
+
 # Check whether a usable genomic FASTA already exists in org_dir for given accession
 has_fasta_files() {
     local org_dir="$1"
@@ -82,7 +108,7 @@ get_org_info_from_ncbi() {
         return 1
     }
 
-    if ! curl -sS --fail "https://api.ncbi.nlm.nih.gov/datasets/v2/genome/accession/$accession/dataset_report" > "$tmp_json"; then
+    if ! curl_with_retry -sS --fail "https://api.ncbi.nlm.nih.gov/datasets/v2/genome/accession/$accession/dataset_report" > "$tmp_json"; then
         echo "Error: Failed to fetch genome summary for $accession" >&2
         rm -f "$tmp_json"
         return 1
@@ -142,7 +168,7 @@ get_org_info_from_ncbi() {
 }
 
 # Unzip ncbi_dataset.zip in org_dir and move genome files up
-process_genome_zip() {
+process_genome_zip() (
     # Resolve to absolute path so it stays valid after cd
     local org_dir
     org_dir="$(cd "$1" && pwd)" || {
@@ -186,7 +212,7 @@ process_genome_zip() {
     cd "$org_dir" || return 1
     rm -rf ncbi_dataset || echo "Warning: Could not remove ncbi_dataset directory" >&2
     echo "Successfully processed genome data for accession $accession"
-}
+)
 
 # --- argument parsing ---
 
@@ -317,7 +343,7 @@ if [ "$NO_GENOME" -eq 0 ]; then
         echo "Downloading genome for $dir_name ($ACCESSION)..." >&2
         (
             cd "$org_dir"
-            if ! curl -sS --fail -o ncbi_dataset.zip \
+            if ! curl_with_retry -sS --fail -o ncbi_dataset.zip \
                 "https://api.ncbi.nlm.nih.gov/datasets/v2/genome/accession/$ACCESSION/download?${DWL_QUERY_PARAMS}"; then
                 echo "Error: Failed to download genome for $ACCESSION" >&2
                 exit 1
@@ -354,7 +380,7 @@ if [ "$NO_TAXONOMY" -eq 0 ]; then
         echo "Downloading taxonomy for tax_id=$tax_id..." >&2
         tmp_tax=$(mktemp) || { echo "Warning: Cannot create tmpfile for taxonomy." >&2; tax_json_path=""; }
         if [ -n "$tmp_tax" ]; then
-            if curl -sS --fail "https://api.ncbi.nlm.nih.gov/datasets/v2/taxonomy/taxon/$tax_id/dataset_report" > "$tmp_tax" && [ -s "$tmp_tax" ]; then
+            if curl_with_retry -sS --fail "https://api.ncbi.nlm.nih.gov/datasets/v2/taxonomy/taxon/$tax_id/dataset_report" > "$tmp_tax" && [ -s "$tmp_tax" ]; then
                 mv "$tmp_tax" "$tax_json_path" 2>/dev/null || {
                     cp "$tmp_tax" "$tax_json_path"
                     rm -f "$tmp_tax"
