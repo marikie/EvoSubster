@@ -44,9 +44,9 @@ Existing hard exclusions remain: non-current, atypical, ANI Failed, unsupported 
 For eligible eukaryotic candidates, the baseline order becomes:
 
 1. annotated NCBI Reference;
-2. annotated RefSeq assembly;
-3. other annotated assembly;
-4. unannotated NCBI Reference;
+2. unannotated NCBI Reference;
+3. annotated RefSeq assembly;
+4. other annotated assembly;
 5. existing assembly-level, contiguity, gap, primary/haploid, and accession fallback.
 
 Within one tier, existing metadata quality fields break ties.
