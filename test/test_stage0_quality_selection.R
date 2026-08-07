@@ -354,7 +354,7 @@ larimichthys_meta <- strict_pair(
 )
 larimichthys_qc <- rbind(
   strict_qc_row("LAR_ref", 95, 94, 1, 2, 3),
-  strict_qc_row("LAR_alt", 97, 93, 4, 1, 2)
+  strict_qc_row("LAR_alt", 97, 95, 2, 1, 2)
 )
 larimichthys <- rank_assembly_candidates(
   larimichthys_meta, external_qc = larimichthys_qc,
