@@ -7,6 +7,44 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "select"
 import fetch_assembly_metadata as f
 
 
+LEGACY_COLUMNS = (
+    "accession",
+    "current_accession",
+    "organism_name",
+    "organism_tax_id",
+    "species",
+    "genus",
+    "source_database",
+    "refseq_category",
+    "assembly_level",
+    "assembly_type",
+    "release_date",
+    "sequencing_tech",
+    "assembly_method",
+    "is_atypical",
+    "atypical_warnings",
+    "ani_check_status",
+    "checkm_completeness",
+    "checkm_contamination",
+    "busco_lineage",
+    "busco_version",
+    "busco_complete",
+    "busco_duplicated",
+    "busco_fragmented",
+    "busco_missing",
+    "total_sequence_length",
+    "total_ungapped_length",
+    "number_of_contigs",
+    "contig_n50",
+    "number_of_scaffolds",
+    "scaffold_n50",
+    "has_annotation",
+    "annotation_provider",
+    "annotation_release_date",
+    "assembly_status",
+)
+
+
 class ReportToRowTest(unittest.TestCase):
     def test_extracts_quality_fields_for_stage0_ranking(self):
         report = {
@@ -82,7 +120,11 @@ class ReportToRowTest(unittest.TestCase):
         }
         row = f.report_to_row(report)
         self.assertEqual(row["paired_accession"], "GCA_901000725.3")
-        self.assertEqual(set(row.keys()), set(f.COLUMNS))
+        self.assertEqual(tuple(row.keys()), f.COLUMNS)
+
+    def test_appends_paired_accession_without_moving_public_columns(self):
+        self.assertEqual(f.COLUMNS[:-1], LEGACY_COLUMNS)
+        self.assertEqual(f.COLUMNS[-1], "paired_accession")
 
     def test_preserves_atypical_warning_for_local_audit(self):
         report = {
@@ -104,7 +146,7 @@ class ReportToRowTest(unittest.TestCase):
         # Every key report_to_row emits must be a declared column, and vice versa.
         report = {"accession": "GCA_1", "organism": {"organism_name": "Genus gamma"},
                   "assembly_info": {}, "assembly_stats": {}}
-        self.assertEqual(set(f.report_to_row(report).keys()), set(f.COLUMNS))
+        self.assertEqual(tuple(f.report_to_row(report).keys()), f.COLUMNS)
 
 
 class TaxonRequestTest(unittest.TestCase):

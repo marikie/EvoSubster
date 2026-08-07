@@ -95,7 +95,7 @@ Tree mode:
   --min-rel-contig-n50 F  Drop a species unless some current assembly has relative contig
                        N50 (contig_n50/total_ungapped_length) >= F. Size-normalized so one
                        value works across lineages; default: 0 = off, e.g. 0.005.
-  --stage0-top-k N     Keep N assembly candidates per species for second-pass quality ranking
+  --stage0-top-k N     Keep N candidates per species in the metadata shortlist for QC audit and optional explicit strict override
                        (default: 3; the eligible NCBI reference is anchored in the shortlist).
   --assembly-qc FILE   Optional external QC TSV with BUSCO genome-mode and/or Merqury results.
   --allow-qc-override  Explicitly allow a strict BUSCO-based override of the metadata baseline.

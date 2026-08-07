@@ -55,7 +55,12 @@ The baseline is computed before external QC ranking. Supplying `--assembly-qc` t
 
 ## External QC Schema
 
-The external TSV continues to require exact versioned `accession` values. BUSCO rows use the same genome mode, lineage, and version within a species.
+The external TSV requires exact versioned GCA/GCF `accession` values and BUSCO
+or Merqury evidence on every row. Unmatched rows produce a diagnostic, and an
+explicit override fails when the input is absent or empty or when no row
+matches the fetched metadata. BUSCO rows use the same genome mode, lineage,
+and version within a species. Any row containing a BUSCO-specific value must
+set `qc_busco_mode=genome`; Merqury-only rows may leave the mode empty.
 
 Add these optional columns:
 
@@ -85,11 +90,14 @@ When paired metadata is unavailable, Stage 0 does not guess equivalence from acc
 
 Every candidate receives audit fields:
 
+- `baseline_rank`
+- `final_rank`
 - `baseline_selected`
 - `qc_preferred`
 - `review_required`
 - `review_reason`
 - `override_applied`
+- `override_block_reason`
 - `assembly_equivalence_key`
 
 Among candidates with complete comparable BUSCO components, `qc_preferred` is determined by Single-copy descending, Duplicated ascending, Missing ascending, Fragmented ascending, followed by the existing assembly metadata order. This comparator proposes a review candidate; it does not change `selected` under the default policy.
@@ -126,7 +134,9 @@ Annotation status is not an override precondition; an unannotated alternative ma
 
 Merqury values remain supporting audit evidence and are never treated as comparable unless provided for both candidates. They do not rescue a candidate that fails the strict BUSCO dominance conditions. A BUSCO override does not imply verified base-level QV.
 
-If any condition fails, the baseline remains selected and the audit records why the proposed override was not applied.
+If any condition fails, the baseline remains selected and
+`override_block_reason` records stable codes for why the proposed override was
+not applied, including higher Duplicated, Fragmented, or Missing components.
 
 ## Logging and Documentation
 
@@ -135,6 +145,7 @@ Replace the current message that asks users to provide BUSCO for final ranking. 
 ## Error Handling
 
 - Reject non-genome BUSCO mode.
+- Reject unversioned external assembly accessions and diagnose unmatched rows.
 - Reject mixed BUSCO lineage or version within a species comparison.
 - Reject impossible numeric BUSCO values, including negative values, Complete below Duplicated, or components whose scale is internally inconsistent.
 - Accept absent optional QC columns by filling them with missing values and recording incomplete comparison status.

@@ -92,12 +92,15 @@ Annotation is not required for the alternative. Merqury remains audit-only for
 this decision. A BUSCO override measures gene-content completeness under that
 BUSCO run; it does not establish base-level consensus accuracy or Merqury QV.
 
-The optional external QC TSV is keyed by exact versioned `accession` and may
-contain these columns:
+The optional external QC TSV is keyed by an exact versioned GCA/GCF
+`accession`. Unmatched accessions produce a diagnostic; when an explicit
+override is requested with no input rows or no row matching the fetched
+metadata, Stage 0 stops. Every row must contain BUSCO or Merqury evidence. The
+TSV may contain these columns:
 
 ```text
 accession
-qc_busco_mode              # must be "genome"
+qc_busco_mode              # required as "genome" when any BUSCO field is set
 qc_busco_lineage
 qc_busco_version
 qc_busco_complete
@@ -110,7 +113,8 @@ merqury_qv
 merqury_completeness
 ```
 
-All BUSCO percentage components must be in `[0, 100]`. Complete must equal
+Merqury-only rows may leave `qc_busco_mode` empty. All BUSCO percentage
+components must be in `[0, 100]`. Complete must equal
 Single-copy plus Duplicated within 0.2 percentage points, and Complete plus
 Fragmented plus Missing must equal 100 within 0.2 percentage points. If
 Single-copy is omitted but Complete and Duplicated are present, it is derived as
@@ -127,7 +131,8 @@ Stage 0 writes the following audit files under
 
 - `assembly_metadata.tsv`: raw NCBI candidate metadata.
 - `assembly_candidates_audit.tsv`: every candidate plus exclusion reason,
-  profile, ranks, baseline/QC preferences, review reasons, and selection basis.
+  profile, baseline and final ranks, baseline/QC preferences, review reasons,
+  override blocker codes, and selection basis.
 - `assembly_shortlist.tsv`: up to `--stage0-top-k` candidates per species.
 - `assembly_review.tsv`: every candidate for species requiring QC review; this
   file always contains headers, including when no species requires review.

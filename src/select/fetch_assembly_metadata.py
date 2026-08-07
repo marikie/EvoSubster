@@ -34,7 +34,6 @@ PAGE_SIZE = 1000
 COLUMNS = (
     "accession",
     "current_accession",
-    "paired_accession",
     "organism_name",
     "organism_tax_id",
     "species",
@@ -67,6 +66,7 @@ COLUMNS = (
     "annotation_provider",
     "annotation_release_date",
     "assembly_status",
+    "paired_accession",
 )
 
 
@@ -159,7 +159,6 @@ def report_to_row(report: dict) -> Dict[str, str]:
     return {
         "accession": report.get("accession") or "",
         "current_accession": report.get("current_accession") or "",
-        "paired_accession": report.get("paired_accession") or "",
         "organism_name": organism_name,
         "organism_tax_id": stringify(organism.get("tax_id")),
         "species": names["species"],
@@ -192,6 +191,7 @@ def report_to_row(report: dict) -> Dict[str, str]:
         "annotation_provider": annotation.get("provider") or "",
         "annotation_release_date": annotation.get("release_date") or "",
         "assembly_status": assembly_info.get("assembly_status") or "",
+        "paired_accession": report.get("paired_accession") or "",
     }
 
 

@@ -95,8 +95,8 @@ usage <- function() {
     "                          meaningless across taxa (a perfect ~12 Mb yeast reference has a",
     "                          0.92 Mb contig N50). Default 0 = off (keep every species);",
     "                          e.g. 0.005 = 0.5%.",
-    "  --stage0-top-k N        Keep the top N metadata candidates per species for the second",
-    "                          Stage-0 evaluation (default: 3). The eligible NCBI reference",
+    "  --stage0-top-k N        Keep N candidates per species in the metadata shortlist for QC audit and optional explicit strict override (default: 3).",
+    "                          The eligible NCBI reference",
     "                          genome, when present, is always anchored in this shortlist.",
     "  --assembly-qc FILE      Optional TSV with accession plus comparable external QC:",
     "                          BUSCO genome-mode fields (qc_busco_*) and optional Merqury",
@@ -244,8 +244,8 @@ sister_tips <- function(tree, node) {
 # --- Stage 0: prune the tree to one best assembly per species ----------------
 
 # Fetch every current assembly of each species on the tree (not just the leaf accession),
-# hard-filter unsuitable candidates, shortlist the strongest metadata candidates, re-rank
-# with lineage-specific QC, and prune the tree to species that keep an assembly.
+# hard-filter unsuitable candidates, build a metadata baseline, attach QC for audit and an
+# optional explicit strict override, and prune the tree to species that keep an assembly.
 # The tree is topology only; leaves$accession becomes the chosen accession, which may differ
 # from the leaf label's accession (intentional -- a better off-tree assembly, or recovery of
 # a species whose leaf accession is dead).  Duplicate-species leaves collapse to one tip.
