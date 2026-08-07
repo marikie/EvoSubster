@@ -65,6 +65,7 @@ defaults <- list(
   min_rel_contig_n50 = 0,
   stage0_top_k = 3L,
   assembly_qc = NULL,
+  allow_qc_override = FALSE,
   genome_dir = "./genomes",
   out_dir = "./results/trio_selection",
   train_cache_dir = NULL,
@@ -101,6 +102,8 @@ usage <- function() {
     "                          BUSCO genome-mode fields (qc_busco_*) and optional Merqury",
     "                          fields. NCBI annotation BUSCO is recorded but is not treated",
     "                          as assembly-level BUSCO genome-mode evidence.",
+    "  --allow-qc-override    Explicitly allow a strict BUSCO-based override of the metadata",
+    "                          baseline. Off by default; external QC is otherwise audit-only.",
     "  --genome-dir DIR        Genome storage (default: ./genomes).",
     "  --out-dir DIR           Output directory (default: ./results/trio_selection).",
     "  --train-cache-dir DIR   Directory for cached last-train files (default: <out-dir>/train_cache).",
@@ -130,6 +133,7 @@ parse_args <- function(argv) {
       "--min-rel-contig-n50" = { opts$min_rel_contig_n50 <- as.numeric(take()); i <- i + 2 },
       "--stage0-top-k"       = { opts$stage0_top_k <- as.integer(take()); i <- i + 2 },
       "--assembly-qc"        = { opts$assembly_qc <- take(); i <- i + 2 },
+      "--allow-qc-override"  = { opts$allow_qc_override <- TRUE; i <- i + 1 },
       "--genome-dir"         = { opts$genome_dir <- take(); i <- i + 2 },
       "--out-dir"            = { opts$out_dir <- take(); i <- i + 2 },
       "--train-cache-dir"    = { opts$train_cache_dir <- take(); i <- i + 2 },
@@ -246,7 +250,8 @@ sister_tips <- function(tree, node) {
 # from the leaf label's accession (intentional -- a better off-tree assembly, or recovery of
 # a species whose leaf accession is dead).  Duplicate-species leaves collapse to one tip.
 prune_to_best_assembly <- function(tree, out_dir, min_rel_contig_n50 = 0,
-                                   stage0_top_k = 3L, assembly_qc = NULL) {
+                                   stage0_top_k = 3L, assembly_qc = NULL,
+                                   allow_qc_override = FALSE) {
   tip_species <- species_from_label(tree$tip.label)
   invalid_labels <- is.na(tip_species) | !nzchar(tip_species)
   if (any(invalid_labels)) {
@@ -276,11 +281,16 @@ prune_to_best_assembly <- function(tree, out_dir, min_rel_contig_n50 = 0,
     meta,
     min_rel_contig_n50 = min_rel_contig_n50,
     shortlist_k = stage0_top_k,
-    external_qc = external_qc
+    external_qc = external_qc,
+    allow_qc_override = allow_qc_override
   )
   best <- ranked$best
   write_tsv(ranked$audit, file.path(out_dir, "assembly_candidates_audit.tsv"))
   write_tsv(ranked$shortlist, file.path(out_dir, "assembly_shortlist.tsv"))
+  review_file <- file.path(out_dir, "assembly_review.tsv")
+  write_tsv(ranked$review, review_file)
+  review_species <- length(unique(ranked$review$species))
+  log_stage("  ", review_species, "species require assembly review ->", review_file)
 
   # Keep one tip per species (first in tree order); duplicate-species tips are dropped.
   leaves <- tibble::tibble(tip = tree$tip.label, species = tip_species) %>%
@@ -323,13 +333,8 @@ prune_to_best_assembly <- function(tree, out_dir, min_rel_contig_n50 = 0,
 
   gate_note <- if (min_rel_contig_n50 > 0)
     sprintf("(relative contig-N50 gate >= %.4g)", min_rel_contig_n50) else ""
-  provisional <- sum(best$selection_basis == "reference_metadata_provisional")
   log_stage("  ", nrow(meta), "assembly records ->", nrow(ranked$shortlist),
             "shortlisted ->", nrow(leaves), "species kept", gate_note)
-  if (provisional > 0) {
-    log_stage("  ", provisional, "eukaryote selection(s) are provisional: provide",
-              "--assembly-qc with comparable BUSCO genome-mode results for final ranking")
-  }
 
   pruned <- drop.tip(tree, setdiff(tree$tip.label, leaves$tip))
   leaves <- leaves[match(pruned$tip.label, leaves$tip), ]
@@ -717,7 +722,8 @@ main <- function() {
     opts$out_dir,
     opts$min_rel_contig_n50,
     opts$stage0_top_k,
-    opts$assembly_qc
+    opts$assembly_qc,
+    opts$allow_qc_override
   )
   write_tsv(pruned$leaves, file.path(opts$out_dir, "selected_assemblies.tsv"))
   tree <- pruned$tree

@@ -64,6 +64,7 @@ INGROUP_PAIRING=""
 MIN_REL_CONTIG_N50=""
 STAGE0_TOP_K=""
 ASSEMBLY_QC=""
+ALLOW_QC_OVERRIDE=0
 POSITIONAL_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -97,6 +98,8 @@ Tree mode:
   --stage0-top-k N     Keep N assembly candidates per species for second-pass quality ranking
                        (default: 3; the eligible NCBI reference is anchored in the shortlist).
   --assembly-qc FILE   Optional external QC TSV with BUSCO genome-mode and/or Merqury results.
+  --allow-qc-override  Explicitly allow a strict BUSCO-based override of the metadata baseline.
+                       Off by default; external QC is otherwise audit-only.
 
 Options:
   --genome-dir PATH       Genome storage directory (default: ./genomes)
@@ -253,6 +256,11 @@ EOF
             shift
             continue
             ;;
+        --allow-qc-override)
+            ALLOW_QC_OVERRIDE=1
+            shift
+            continue
+            ;;
         --idt-threshold|--max-outgroup-tries|--min-rel-contig-n50)
             if [[ -z "${2:-}" ]]; then
                 echo "Error: $1 requires a non-negative number argument." >&2
@@ -400,6 +408,7 @@ if [ -n "$TREE_FILE" ]; then
     [ -n "$MIN_REL_CONTIG_N50" ] && r_args+=(--min-rel-contig-n50 "$MIN_REL_CONTIG_N50")
     [ -n "$STAGE0_TOP_K" ] && r_args+=(--stage0-top-k "$STAGE0_TOP_K")
     [ -n "$ASSEMBLY_QC" ] && r_args+=(--assembly-qc "$ASSEMBLY_QC")
+    [ "$ALLOW_QC_OVERRIDE" -eq 1 ] && r_args+=(--allow-qc-override)
     [ -n "$TRAIN_CACHE_DIR_OVERRIDE" ] && r_args+=(--train-cache-dir "$TRAIN_CACHE_DIR_OVERRIDE")
 
     echo "--- [tree mode] selecting trios from $TREE_FILE"

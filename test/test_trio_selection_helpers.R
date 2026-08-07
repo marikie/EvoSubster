@@ -84,6 +84,81 @@ check(
   grepl("BUSCO genome-mode", help_text, fixed = TRUE),
   "Stage 0 help distinguishes external BUSCO genome-mode from NCBI annotation BUSCO"
 )
+check(
+  grepl("--allow-qc-override", help_text, fixed = TRUE),
+  "Stage 0 help documents the explicit strict QC override flag"
+)
+check(
+  identical(defaults$allow_qc_override, FALSE),
+  "Stage 0 QC override is disabled by default"
+)
+
+override_args <- try(
+  parse_args(c("--tree", "example.nwk", "--allow-qc-override")),
+  silent = TRUE
+)
+check(
+  !inherits(override_args, "try-error") &&
+    identical(override_args$allow_qc_override, TRUE),
+  "Stage 0 CLI accepts the explicit strict QC override flag"
+)
+
+# Exercise the prune-to-ranker integration boundary without loading phylogeny
+# packages or contacting NCBI. The ranker sentinel distinguishes a forwarded
+# TRUE value from an omitted/default FALSE value.
+stage0_out <- tempfile("trio-stage0-forwarding-")
+dir.create(stage0_out, recursive = TRUE)
+write.table(
+  data.frame(species = "Homo sapiens", accession = "GCF_000001405.40"),
+  file.path(stage0_out, "assembly_metadata.tsv"),
+  sep = "\t", quote = FALSE, row.names = FALSE
+)
+fake_tree <- list(tip.label = "Homo_sapiens")
+real_run <- run
+real_rank_assembly_candidates <- rank_assembly_candidates
+run <- function(...) character()
+rank_assembly_candidates <- function(..., allow_qc_override = FALSE) {
+  stop(
+    paste0("ranker_allow_qc_override=", allow_qc_override),
+    call. = FALSE
+  )
+}
+forwarding_err <- try(
+  prune_to_best_assembly(
+    fake_tree,
+    stage0_out,
+    allow_qc_override = TRUE
+  ),
+  silent = TRUE
+)
+check(
+  inherits(forwarding_err, "try-error") &&
+    grepl("ranker_allow_qc_override=TRUE", as.character(forwarding_err), fixed = TRUE),
+  "Stage 0 pruning forwards the explicit QC override to assembly ranking"
+)
+
+# A zero-row review still needs a schema-bearing file so automated review
+# consumers can distinguish "nothing to review" from missing output.
+rank_assembly_candidates <- function(..., allow_qc_override = FALSE) {
+  empty <- data.frame(accession = character(), species = character())
+  list(audit = empty, shortlist = empty, best = empty, review = empty)
+}
+review_out <- tempfile("trio-stage0-empty-review-")
+dir.create(review_out, recursive = TRUE)
+write.table(
+  data.frame(species = "Homo sapiens", accession = "GCF_000001405.40"),
+  file.path(review_out, "assembly_metadata.tsv"),
+  sep = "\t", quote = FALSE, row.names = FALSE
+)
+invisible(try(prune_to_best_assembly(fake_tree, review_out), silent = TRUE))
+review_file <- file.path(review_out, "assembly_review.tsv")
+check(
+  file.exists(review_file) &&
+    identical(readLines(review_file, n = 1L), "accession\tspecies"),
+  "Stage 0 writes a header-bearing assembly review table when review has zero rows"
+)
+rank_assembly_candidates <- real_rank_assembly_candidates
+run <- real_run
 
 # An interrupted cache file must be removed and trained again instead of being
 # parsed as NA forever. Stub only the external process boundary; exercise the

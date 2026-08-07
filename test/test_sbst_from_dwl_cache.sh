@@ -172,6 +172,7 @@ bash "$fixture_repo/src/sbst_fromDwl.sh" \
     --out-dir "$quality_out" \
     --stage0-top-k 4 \
     --assembly-qc "$qc_file" \
+    --allow-qc-override \
     --idt-only \
     > "$tmp_dir/quality-wrapper.log" 2>&1
 quality_exit=$?
@@ -181,6 +182,8 @@ check "tree wrapper forwards the Stage 0 shortlist size" \
     sh -c 'grep -Fxq -- "$1" "$2"' sh 4 "$quality_r_log"
 check "tree wrapper forwards the external assembly-QC table" \
     sh -c 'grep -Fxq -- "$1" "$2"' sh "$qc_file" "$quality_r_log"
+check "tree wrapper forwards the explicit strict QC override flag" \
+    grep -Fxq -- "--allow-qc-override" "$quality_r_log"
 
 unversioned_log="$tmp_dir/unversioned-sbst.log"
 PATH="$stub_bin:$PATH" \

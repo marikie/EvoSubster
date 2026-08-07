@@ -72,16 +72,25 @@ It then uses a two-phase selection:
 
 1. Exclude non-current, NCBI-atypical, ANI-Failed, unsupported hybrid/alternate
    haplotype/unresolved-diploid, and optional relative-contig-N50 gate failures.
-2. Anchor the eligible NCBI `reference genome` in a per-species shortlist, then
-   re-rank the shortlist with lineage-specific evidence.
+2. Build a per-species shortlist and choose a metadata baseline. The exact
+   eukaryote baseline order is: annotated NCBI Reference; unannotated NCBI
+   Reference; annotated RefSeq; other annotated; existing metadata fallback.
 
 Prokaryote candidates are ranked by ANI status, CheckM completeness,
 CheckM contamination, optional Merqury evidence, assembly level, contig count,
-and contig N50. Eukaryote candidates are ranked by comparable external BUSCO
-`genome`-mode and optional Merqury results when supplied. NCBI annotation BUSCO values are retained for
-audit but are not treated as assembly-level BUSCO genome-mode measurements. If
-external genome QC is absent, an eligible eukaryote reference genome remains a
-provisional selection.
+and contig N50. This prokaryote ranking is unchanged. For eukaryotes, comparable
+external BUSCO `genome`-mode and optional Merqury results are attached for audit
+and review but do not change the metadata baseline by default. NCBI annotation
+BUSCO values are retained for audit but are not treated as assembly-level BUSCO
+genome-mode measurements.
+
+Pass `--allow-qc-override` only when an automatic replacement is intended. An
+override requires complete BUSCO components for both distinct assemblies from
+the same genome mode, lineage, and BUSCO version. The alternative must have
+higher Single-copy BUSCO and no worse Duplicated, Fragmented, or Missing BUSCO.
+Annotation is not required for the alternative. Merqury remains audit-only for
+this decision. A BUSCO override measures gene-content completeness under that
+BUSCO run; it does not establish base-level consensus accuracy or Merqury QV.
 
 The optional external QC TSV is keyed by exact versioned `accession` and may
 contain these columns:
@@ -92,20 +101,36 @@ qc_busco_mode              # must be "genome"
 qc_busco_lineage
 qc_busco_version
 qc_busco_complete
+qc_busco_single
+qc_busco_duplicated
 qc_busco_fragmented
 qc_busco_missing
+qc_busco_internal_stop
 merqury_qv
 merqury_completeness
 ```
 
-All BUSCO candidates for one species must use the same lineage and version.
+All BUSCO percentage components must be in `[0, 100]`. Complete must equal
+Single-copy plus Duplicated within 0.2 percentage points, and Complete plus
+Fragmented plus Missing must equal 100 within 0.2 percentage points. If
+Single-copy is omitted but Complete and Duplicated are present, it is derived as
+their difference. All comparable BUSCO candidates for one species must use the
+same lineage and version. Incomplete legacy rows remain auditable but cannot
+trigger an override.
+
+NCBI `paired_accession` metadata is used to treat paired GCA/GCF accessions as
+one assembly. A paired record cannot create a review or override merely by
+appearing under the other accession namespace.
+
 Stage 0 writes the following audit files under
 `<out-dir>/trio_selection/`:
 
 - `assembly_metadata.tsv`: raw NCBI candidate metadata.
 - `assembly_candidates_audit.tsv`: every candidate plus exclusion reason,
-  profile, ranks, and selection basis.
+  profile, ranks, baseline/QC preferences, review reasons, and selection basis.
 - `assembly_shortlist.tsv`: up to `--stage0-top-k` candidates per species.
+- `assembly_review.tsv`: every candidate for species requiring QC review; this
+  file always contains headers, including when no species requires review.
 - `selected_assemblies.tsv`: the one assembly passed to Stage 1 for each species.
 
 ### Use FASTA files of your choice
