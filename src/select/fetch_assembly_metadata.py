@@ -34,6 +34,7 @@ PAGE_SIZE = 1000
 COLUMNS = (
     "accession",
     "current_accession",
+    "paired_accession",
     "organism_name",
     "organism_tax_id",
     "species",
@@ -158,6 +159,7 @@ def report_to_row(report: dict) -> Dict[str, str]:
     return {
         "accession": report.get("accession") or "",
         "current_accession": report.get("current_accession") or "",
+        "paired_accession": report.get("paired_accession") or "",
         "organism_name": organism_name,
         "organism_tax_id": stringify(organism.get("tax_id")),
         "species": names["species"],

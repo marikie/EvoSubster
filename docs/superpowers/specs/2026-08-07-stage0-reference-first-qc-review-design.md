@@ -49,7 +49,7 @@ For eligible eukaryotic candidates, the baseline order becomes:
 4. unannotated NCBI Reference;
 5. existing assembly-level, contiguity, gap, primary/haploid, and accession fallback.
 
-Within one tier, existing metadata quality fields break ties. A species with no annotated candidate remains usable for whole-genome analysis but is marked for review with `no_annotated_candidate`; Stage 0 does not silently claim that coding-region analysis is available.
+Within one tier, existing metadata quality fields break ties.
 
 The baseline is computed before external QC ranking. Supplying `--assembly-qc` therefore does not change the default selection.
 
@@ -117,10 +117,9 @@ With the flag on, a distinct alternative may replace the baseline only when all 
 
 1. both candidates have comparable BUSCO genome-mode lineage and version;
 2. both have Complete, Single-copy or derivable Single-copy, Duplicated, Fragmented, and Missing values;
-3. the alternative has annotation;
-4. the alternative has strictly higher Single-copy completeness;
-5. Duplicated, Fragmented, and Missing are each no worse than the baseline;
-6. the candidates do not share an assembly-equivalence key.
+3. the alternative has strictly higher Single-copy completeness;
+4. Duplicated, Fragmented, and Missing are each no worse than the baseline;
+5. the candidates do not share an assembly-equivalence key.
 
 Merqury values remain supporting audit evidence and are never treated as comparable unless provided for both candidates. They do not rescue a candidate that fails the strict BUSCO dominance conditions. A BUSCO override does not imply verified base-level QV.
 

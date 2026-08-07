@@ -72,6 +72,17 @@ class ReportToRowTest(unittest.TestCase):
         row = f.report_to_row(report)
         self.assertEqual(row["has_annotation"], "false")
         self.assertEqual(row["total_ungapped_length"], "")
+        self.assertEqual(row["paired_accession"], "")
+
+    def test_records_paired_accession_from_dataset_report(self):
+        report = {
+            "accession": "GCF_901000725.3",
+            "paired_accession": "GCA_901000725.3",
+            "organism": {"organism_name": "Genus paired"},
+        }
+        row = f.report_to_row(report)
+        self.assertEqual(row["paired_accession"], "GCA_901000725.3")
+        self.assertEqual(set(row.keys()), set(f.COLUMNS))
 
     def test_preserves_atypical_warning_for_local_audit(self):
         report = {
