@@ -2,7 +2,7 @@
 
 # Behavior tests for the two-phase Stage 0 assembly selection:
 #   1. hard quality exclusions and reference-anchored shortlisting;
-#   2. prokaryote CheckM/ANI ranking or eukaryote external BUSCO-genome ranking.
+#   2. prokaryote CheckM/ANI ranking or eukaryote reference-first baseline ranking.
 # Runs entirely on synthetic metadata and never contacts NCBI.
 
 this_file <- sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)[1])
@@ -129,8 +129,14 @@ ranked <- rank_assembly_candidates(meta, min_rel_contig_n50 = 0,
 best <- ranked$best
 pick <- function(sp) best$accession[best$species == sp]
 
+ranked_k1 <- rank_assembly_candidates(meta, min_rel_contig_n50 = 0,
+                                      shortlist_k = 1, external_qc = external_qc)
+best_k1 <- ranked_k1$best
+
 check(identical(pick("Prok alpha"), "P_best"),
       "prokaryote: higher CheckM completeness and lower contamination can beat reference")
+check(identical(best_k1$accession[best_k1$species == "Prok alpha"], "P_ref"),
+      "prokaryote: shortlist_k=1 selects the phase-1 reference, not an outside candidate")
 check(identical(pick("Prok delta"), "P2_Z_high_qv"),
       "prokaryote: Merqury breaks a tie between otherwise equivalent final candidates")
 check(identical(pick("Euk beta"), "E_ref"),

@@ -219,8 +219,6 @@ stage0_baseline_order <- function(df) {
 stage0_phase1_order <- function(df) {
   profile <- df$selection_profile[1]
   ani_ok <- toupper(trimws(as.character(df$ani_check_status))) == "OK"
-  qc_available <- tolower(df$qc_busco_mode) == "genome" &
-    !is.na(df$qc_busco_complete)
   common <- list(
     -as.integer(df$is_reference),
     df$assembly_level_rank,
@@ -238,12 +236,7 @@ stage0_phase1_order <- function(df) {
     ))
   }
   if (profile == "eukaryote") {
-    return(order(
-      -as.integer(df$is_reference), -as.integer(qc_available),
-      -df$qc_busco_complete, df$qc_busco_missing, df$qc_busco_fragmented,
-      df$assembly_level_rank, -df$contig_n50, df$gap_fraction,
-      df$primary_type_rank, df$accession, na.last = TRUE
-    ))
+    return(stage0_baseline_order(df)$order)
   }
   do.call(order, c(common, list(na.last = TRUE)))
 }
@@ -341,10 +334,12 @@ rank_assembly_candidates <- function(meta, min_rel_contig_n50 = 0,
     shortlist_index <- ordered_index[seq_len(keep_n)]
     candidates$shortlisted[shortlist_index] <- TRUE
 
-    baseline <- stage0_baseline_order(eligible)
-    final_index <- eligible_index[baseline$order]
+    baseline <- stage0_baseline_order(
+      candidates[shortlist_index, , drop = FALSE]
+    )
+    final_index <- shortlist_index[baseline$order]
     candidates$final_rank[final_index] <- seq_along(final_index)
-    candidates$selection_basis[eligible_index] <- baseline$basis
+    candidates$selection_basis[shortlist_index] <- baseline$basis
     candidates$baseline_selected[final_index[1]] <- TRUE
     candidates$selected[final_index[1]] <- TRUE
   }
