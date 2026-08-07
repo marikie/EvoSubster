@@ -56,7 +56,7 @@ check(identical(pick(b0, "Genus beta"), "B_big"),
 check(identical(pick(b0, "Genus delta"), "D_alt"),
       "suppressed excluded: delta picks the current D_alt, not the suppressed reference")
 check(identical(pick(b0, "Genus epsilon"), "E_annot"),
-      "general fallback: chromosome-level E_annot beats the more fragmented contig-level E_big")
+      "eukaryote metadata fallback: chromosome-level E_annot beats the more fragmented contig-level E_big")
 
 # Gate on at rel N50 >= 0.005 (= 5e5 bp at 1e8): gamma's only assembly (1e4 -> 1e-4) fails.
 b1 <- select_best_assemblies(meta, 0.005)

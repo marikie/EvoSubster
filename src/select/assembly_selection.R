@@ -26,6 +26,13 @@ STAGE0_EXTERNAL_QC_COLUMNS <- c(
   "merqury_qv", "merqury_completeness"
 )
 
+STAGE0_BUSCO_QC_COLUMNS <- setdiff(
+  STAGE0_EXTERNAL_QC_COLUMNS,
+  c("merqury_qv", "merqury_completeness")
+)
+
+STAGE0_VERSIONED_ASSEMBLY_ACCESSION_RE <- "^GC[AF]_[0-9]+\\.[0-9]+$"
+
 STAGE0_BUSCO_COMPONENT_COLUMNS <- c(
   "qc_busco_complete", "qc_busco_single", "qc_busco_duplicated",
   "qc_busco_fragmented", "qc_busco_missing"
@@ -58,24 +65,90 @@ stage0_primary_type_rank <- function(assembly_type) {
   rank
 }
 
-stage0_attach_external_qc <- function(meta, external_qc = NULL) {
+stage0_attach_external_qc <- function(meta, external_qc = NULL,
+                                      allow_qc_override = FALSE) {
   meta <- stage0_add_missing_columns(meta, STAGE0_EXTERNAL_QC_COLUMNS)
-  if (is.null(external_qc) || !nrow(external_qc)) return(meta)
+  if (is.null(external_qc) || !nrow(external_qc)) {
+    if (isTRUE(allow_qc_override)) {
+      stop(
+        "Explicit QC override requires a non-empty external QC table.",
+        call. = FALSE
+      )
+    }
+    return(meta)
+  }
   if (!"accession" %in% names(external_qc)) {
     stop("External assembly QC must contain an accession column.", call. = FALSE)
+  }
+  external_qc$accession <- as.character(external_qc$accession)
+  invalid_accession <- is.na(external_qc$accession) |
+    !grepl(STAGE0_VERSIONED_ASSEMBLY_ACCESSION_RE, external_qc$accession)
+  if (any(invalid_accession)) {
+    stop(
+      "External assembly QC requires exact versioned GCA/GCF accessions; invalid: ",
+      paste(unique(external_qc$accession[invalid_accession]), collapse = ", "),
+      ".",
+      call. = FALSE
+    )
   }
   if (anyDuplicated(external_qc$accession)) {
     stop("External assembly QC contains duplicate accessions.", call. = FALSE)
   }
 
   external_qc <- stage0_add_missing_columns(external_qc, STAGE0_EXTERNAL_QC_COLUMNS)
-  invalid_mode <- stage0_nonempty(external_qc$qc_busco_mode) &
-    tolower(external_qc$qc_busco_mode) != "genome"
+  has_busco_value <- Reduce(
+    `|`, lapply(STAGE0_BUSCO_QC_COLUMNS, function(field) {
+      stage0_nonempty(external_qc[[field]])
+    })
+  )
+  has_merqury_value <- Reduce(
+    `|`, lapply(c("merqury_qv", "merqury_completeness"), function(field) {
+      stage0_nonempty(external_qc[[field]])
+    })
+  )
+  empty_evidence <- !has_busco_value & !has_merqury_value
+  if (any(empty_evidence)) {
+    stop(
+      "External QC row for accession ",
+      external_qc$accession[which(empty_evidence)[1]],
+      " must contain BUSCO or Merqury evidence.",
+      call. = FALSE
+    )
+  }
+  genome_mode <- tolower(trimws(as.character(external_qc$qc_busco_mode))) ==
+    "genome"
+  genome_mode[is.na(genome_mode)] <- FALSE
+  invalid_mode <- has_busco_value & !genome_mode
   if (any(invalid_mode)) {
-    stop("External BUSCO results must use qc_busco_mode=genome.", call. = FALSE)
+    stop(
+      "External BUSCO values for accession ",
+      external_qc$accession[which(invalid_mode)[1]],
+      " require qc_busco_mode=genome.",
+      call. = FALSE
+    )
   }
 
-  match_index <- match(meta$accession, external_qc$accession)
+  metadata_accessions <- as.character(meta$accession)
+  matched_external <- external_qc$accession %in% metadata_accessions
+  unmatched_accessions <- external_qc$accession[!matched_external]
+  if (!any(matched_external) && isTRUE(allow_qc_override)) {
+    stop(
+      "Explicit QC override requested, but no accession matched assembly metadata: ",
+      paste(unmatched_accessions, collapse = ", "),
+      ".",
+      call. = FALSE
+    )
+  }
+  if (length(unmatched_accessions)) {
+    warning(
+      "External assembly QC accession(s) not found in metadata: ",
+      paste(unmatched_accessions, collapse = ", "),
+      ".",
+      call. = FALSE
+    )
+  }
+
+  match_index <- match(metadata_accessions, external_qc$accession)
   for (column in STAGE0_EXTERNAL_QC_COLUMNS) {
     meta[[column]] <- external_qc[[column]][match_index]
   }
@@ -176,6 +249,18 @@ stage0_complete_busco <- function(df) {
     stage0_nonempty(df$qc_busco_version) & components_complete
 }
 
+stage0_has_external_evidence <- function(df) {
+  has_busco <- Reduce(
+    `|`, lapply(STAGE0_BUSCO_QC_COLUMNS, function(field) {
+      stage0_nonempty(df[[field]])
+    })
+  )
+  has_merqury <- !is.na(df$merqury_qv) | !is.na(df$merqury_completeness)
+  has_evidence <- has_busco | has_merqury
+  has_evidence[is.na(has_evidence)] <- FALSE
+  has_evidence
+}
+
 stage0_same_busco_run <- function(df, left, right) {
   all(tolower(trimws(as.character(df$qc_busco_mode[c(left, right)]))) ==
         "genome") &&
@@ -210,7 +295,9 @@ stage0_add_review_reason <- function(candidates, row, reason) {
   candidates
 }
 
-stage0_prepare_candidates <- function(meta, min_rel_contig_n50 = 0, external_qc = NULL) {
+stage0_prepare_candidates <- function(meta, min_rel_contig_n50 = 0,
+                                      external_qc = NULL,
+                                      allow_qc_override = FALSE) {
   if (!all(c("accession", "species") %in% names(meta))) {
     stop("Assembly metadata must contain accession and species columns.", call. = FALSE)
   }
@@ -220,7 +307,11 @@ stage0_prepare_candidates <- function(meta, min_rel_contig_n50 = 0, external_qc 
   }
 
   meta <- stage0_add_missing_columns(meta, STAGE0_METADATA_COLUMNS)
-  meta <- stage0_attach_external_qc(meta, external_qc)
+  meta <- stage0_attach_external_qc(
+    meta,
+    external_qc,
+    allow_qc_override = allow_qc_override
+  )
   stage0_validate_comparable_busco(meta)
 
   numeric_columns <- c(
@@ -299,16 +390,12 @@ stage0_prepare_candidates <- function(meta, min_rel_contig_n50 = 0, external_qc 
   )
   set_reason(below_gate, rep("below_relative_contig_n50_gate", nrow(meta)))
 
-  meta$selection_profile <- "general"
+  meta$selection_profile <- "eukaryote"
   for (species in unique(meta$species)) {
     rows <- meta$species == species
     has_prokaryote_qc <- any(!is.na(meta$checkm_completeness[rows])) ||
       any(stage0_nonempty(meta$ani_check_status[rows]))
-    has_eukaryote_qc <- any(!is.na(meta$busco_complete[rows])) ||
-      any(stage0_nonempty(meta$busco_lineage[rows])) ||
-      any(tolower(meta$qc_busco_mode[rows]) == "genome", na.rm = TRUE)
     if (has_prokaryote_qc) meta$selection_profile[rows] <- "prokaryote"
-    else if (has_eukaryote_qc) meta$selection_profile[rows] <- "eukaryote"
   }
 
   meta
@@ -362,17 +449,12 @@ stage0_phase1_order <- function(df) {
       df$accession, na.last = TRUE
     ))
   }
-  if (profile == "eukaryote") {
-    return(stage0_baseline_order(df)$order)
-  }
   do.call(order, c(common, list(na.last = TRUE)))
 }
 
 stage0_final_order <- function(df) {
   profile <- df$selection_profile[1]
   ani_ok <- toupper(trimws(as.character(df$ani_check_status))) == "OK"
-  qc_available <- tolower(df$qc_busco_mode) == "genome" &
-    !is.na(df$qc_busco_complete)
 
   if (profile == "prokaryote") {
     has_merqury <- any(!is.na(df$merqury_qv) | !is.na(df$merqury_completeness))
@@ -386,32 +468,6 @@ stage0_final_order <- function(df) {
       ),
       basis = if (has_merqury) "ani_checkm_merqury_assembly_quality" else
         "ani_checkm_assembly_quality"
-    ))
-  }
-
-  if (profile == "eukaryote" && any(qc_available)) {
-    return(list(
-      order = order(
-        -as.integer(qc_available), -df$qc_busco_complete,
-        df$qc_busco_missing, df$qc_busco_fragmented,
-        -df$merqury_completeness, -df$merqury_qv,
-        df$assembly_level_rank, -df$contig_n50, df$gap_fraction,
-        df$primary_type_rank, -as.integer(df$is_reference), df$accession,
-        na.last = TRUE
-      ),
-      basis = "external_busco_genome_merqury"
-    ))
-  }
-
-  if (profile == "eukaryote") {
-    return(list(
-      order = order(
-        -as.integer(df$is_reference), df$assembly_level_rank,
-        -df$contig_n50, df$gap_fraction, df$primary_type_rank,
-        -as.integer(stage0_true(df$has_annotation)), df$accession,
-        na.last = TRUE
-      ),
-      basis = "reference_metadata_provisional"
     ))
   }
 
@@ -432,9 +488,15 @@ rank_assembly_candidates <- function(meta, min_rel_contig_n50 = 0,
   if (length(shortlist_k) != 1L || is.na(shortlist_k) || shortlist_k < 1) {
     stop("shortlist_k must be a positive integer or Inf.", call. = FALSE)
   }
-  candidates <- stage0_prepare_candidates(meta, min_rel_contig_n50, external_qc)
+  candidates <- stage0_prepare_candidates(
+    meta,
+    min_rel_contig_n50,
+    external_qc,
+    allow_qc_override = allow_qc_override
+  )
   candidates$shortlist_rank <- NA_integer_
   candidates$shortlisted <- FALSE
+  candidates$baseline_rank <- NA_integer_
   candidates$final_rank <- NA_integer_
   candidates$selected <- FALSE
   candidates$selection_basis <- ""
@@ -443,6 +505,7 @@ rank_assembly_candidates <- function(meta, min_rel_contig_n50 = 0,
   candidates$review_required <- FALSE
   candidates$review_reason <- ""
   candidates$override_applied <- FALSE
+  candidates$override_block_reason <- ""
   candidates$assembly_equivalence_key <- stage0_assembly_equivalence_key(
     candidates$accession, candidates$paired_accession
   )
@@ -452,7 +515,11 @@ rank_assembly_candidates <- function(meta, min_rel_contig_n50 = 0,
     if (!length(eligible_index)) next
 
     eligible <- candidates[eligible_index, , drop = FALSE]
-    phase1 <- stage0_phase1_order(eligible)
+    phase1 <- if (eligible$selection_profile[1] == "eukaryote") {
+      stage0_baseline_order(eligible)$order
+    } else {
+      stage0_phase1_order(eligible)
+    }
     ordered_index <- eligible_index[phase1]
     candidates$shortlist_rank[ordered_index] <- seq_along(ordered_index)
 
@@ -465,13 +532,14 @@ rank_assembly_candidates <- function(meta, min_rel_contig_n50 = 0,
       candidates[shortlist_index, , drop = FALSE]
     )
     final_index <- shortlist_index[baseline$order]
-    candidates$final_rank[final_index] <- seq_along(final_index)
+    candidates$baseline_rank[final_index] <- seq_along(final_index)
     candidates$selection_basis[shortlist_index] <- baseline$basis
-    candidates$baseline_selected[final_index[1]] <- TRUE
-    candidates$selected[final_index[1]] <- TRUE
+    baseline_index <- final_index[1]
+    selected_index <- baseline_index
+    candidates$baseline_selected[baseline_index] <- TRUE
+    candidates$selected[baseline_index] <- TRUE
 
     if (eligible$selection_profile[1] == "eukaryote") {
-      baseline_index <- final_index[1]
       complete_index <- shortlist_index[
         stage0_complete_busco(candidates[shortlist_index, , drop = FALSE])
       ]
@@ -479,7 +547,12 @@ rank_assembly_candidates <- function(meta, min_rel_contig_n50 = 0,
         qc_order <- stage0_qc_order(
           candidates[complete_index, , drop = FALSE]
         )
-        candidates$qc_preferred[complete_index[qc_order[1]]] <- TRUE
+        ordered_qc_index <- complete_index[qc_order]
+        preferred_key <- candidates$assembly_equivalence_key[ordered_qc_index[1]]
+        preferred_representative <- final_index[
+          candidates$assembly_equivalence_key[final_index] == preferred_key
+        ][1]
+        candidates$qc_preferred[preferred_representative] <- TRUE
       }
 
       distinct_alternatives <- setdiff(
@@ -493,6 +566,9 @@ rank_assembly_candidates <- function(meta, min_rel_contig_n50 = 0,
         tolower(trimws(as.character(candidates$qc_busco_mode[baseline_index]))),
         "genome"
       )
+      baseline_has_external_evidence <- stage0_has_external_evidence(
+        candidates[baseline_index, , drop = FALSE]
+      )[1]
       baseline_complete <- baseline_index %in% complete_index
 
       if (baseline_has_qc &&
@@ -518,12 +594,20 @@ rank_assembly_candidates <- function(meta, min_rel_contig_n50 = 0,
             ))),
             "genome"
           )
+          alternative_has_external_evidence <- stage0_has_external_evidence(
+            candidates[alternative_index, , drop = FALSE]
+          )[1]
           alternative_complete <- alternative_index %in% complete_index
 
-          if (xor(baseline_has_qc, alternative_has_qc)) {
+          if (xor(
+            baseline_has_external_evidence,
+            alternative_has_external_evidence
+          )) {
             candidates <- stage0_add_review_reason(
               candidates, alternative_index, "one_sided_external_qc"
             )
+          }
+          if (xor(baseline_has_qc, alternative_has_qc)) {
             candidates <- stage0_add_review_reason(
               candidates, alternative_index, "incomplete_busco_comparison"
             )
@@ -556,26 +640,49 @@ rank_assembly_candidates <- function(meta, min_rel_contig_n50 = 0,
         }
       }
 
-      if (isTRUE(allow_qc_override) && baseline_complete &&
-          length(distinct_alternatives)) {
-        override_candidates <- distinct_alternatives[vapply(
-          distinct_alternatives,
-          function(alternative_index) {
-            alternative_index %in% complete_index &&
-              stage0_same_busco_run(
-                candidates, baseline_index, alternative_index
-              ) &&
-              candidates$qc_busco_single[alternative_index] >
-                candidates$qc_busco_single[baseline_index] &&
-              candidates$qc_busco_duplicated[alternative_index] <=
-                candidates$qc_busco_duplicated[baseline_index] &&
-              candidates$qc_busco_fragmented[alternative_index] <=
-                candidates$qc_busco_fragmented[baseline_index] &&
-              candidates$qc_busco_missing[alternative_index] <=
-                candidates$qc_busco_missing[baseline_index]
-          },
-          logical(1)
-        )]
+      if (isTRUE(allow_qc_override) && length(distinct_alternatives)) {
+        override_candidates <- integer()
+        for (alternative_index in distinct_alternatives) {
+          alternative_complete <- alternative_index %in% complete_index
+          blockers <- character()
+          if (!baseline_complete) {
+            blockers <- c(blockers, "baseline_incomplete_busco")
+          }
+          if (!alternative_complete) {
+            blockers <- c(blockers, "incomplete_busco_components")
+          }
+          if (baseline_complete && alternative_complete) {
+            if (!stage0_same_busco_run(
+              candidates, baseline_index, alternative_index
+            )) {
+              blockers <- c(blockers, "incomparable_busco_run")
+            } else {
+              if (candidates$qc_busco_single[alternative_index] <=
+                  candidates$qc_busco_single[baseline_index]) {
+                blockers <- c(blockers, "not_higher_single_copy")
+              }
+              if (candidates$qc_busco_duplicated[alternative_index] >
+                  candidates$qc_busco_duplicated[baseline_index]) {
+                blockers <- c(blockers, "higher_duplicated")
+              }
+              if (candidates$qc_busco_fragmented[alternative_index] >
+                  candidates$qc_busco_fragmented[baseline_index]) {
+                blockers <- c(blockers, "higher_fragmented")
+              }
+              if (candidates$qc_busco_missing[alternative_index] >
+                  candidates$qc_busco_missing[baseline_index]) {
+                blockers <- c(blockers, "higher_missing")
+              }
+            }
+          }
+          if (length(blockers)) {
+            candidates$override_block_reason[alternative_index] <- paste(
+              unique(blockers), collapse = ";"
+            )
+          } else {
+            override_candidates <- c(override_candidates, alternative_index)
+          }
+        }
         if (length(override_candidates)) {
           override_order <- stage0_qc_order(
             candidates[override_candidates, , drop = FALSE]
@@ -586,9 +693,17 @@ rank_assembly_candidates <- function(meta, min_rel_contig_n50 = 0,
           candidates$selection_basis[override_index] <-
             "explicit_busco_override"
           candidates$override_applied[override_index] <- TRUE
+          selected_index <- override_index
+          other_override_candidates <- setdiff(
+            override_candidates, override_index
+          )
+          candidates$override_block_reason[other_override_candidates] <-
+            "not_top_override_candidate"
         }
       }
     }
+    final_order <- c(selected_index, final_index[final_index != selected_index])
+    candidates$final_rank[final_order] <- seq_along(final_order)
   }
 
   shortlist <- candidates[candidates$eligible & candidates$shortlisted, , drop = FALSE]
