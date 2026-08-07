@@ -5,7 +5,7 @@ Status: Approved in conversation; awaiting review of this written specification
 
 ## Purpose
 
-Change eukaryotic Stage 0 from automatic BUSCO-based replacement to a reference-first, audit-first policy. EvoSubster should select an annotated RefSeq Reference by default, retain external BUSCO and Merqury evidence for review, and only replace the baseline assembly when the user explicitly enables a strict QC override.
+Change eukaryotic Stage 0 from automatic BUSCO-based replacement to a reference-first, audit-first policy. EvoSubster should select an NCBI Reference by default, preferring an annotated Reference when available, retain external BUSCO and Merqury evidence for review, and only replace the baseline assembly when the user explicitly enables a strict QC override.
 
 This policy does not claim that an NCBI Reference is the assembly with the highest base accuracy. It provides a reproducible default suited to coding-sequence analysis and separates assembly selection from quality warnings.
 
@@ -27,7 +27,7 @@ Raw BUSCO runs, Merqury execution, and downstream assembly-sensitivity experimen
 
 ### 1. Audit-first default with explicit strict override — selected
 
-Select the annotated Reference independently of external BUSCO. Attach QC evidence, identify review cases, and keep the baseline unless the user supplies `--allow-qc-override`. This preserves reproducibility and still supports a deliberate, evidence-bounded replacement.
+Select the highest-priority Reference independently of external BUSCO. Attach QC evidence, identify review cases, and keep the baseline unless the user supplies `--allow-qc-override`. This preserves reproducibility and still supports a deliberate, evidence-bounded replacement.
 
 ### 2. Remove BUSCO ranking entirely
 
@@ -96,12 +96,13 @@ Among candidates with complete comparable BUSCO components, `qc_preferred` is de
 
 A species is marked for review when any of these conditions holds:
 
-- no eligible annotated candidate exists;
 - external BUSCO was supplied for the species but the proposed comparison has incomplete BUSCO fields;
 - a distinct alternative has stronger comparable single-copy BUSCO evidence;
 - the baseline crosses advisory BUSCO warnings: Complete below 90% or Duplicated above 5%;
 - an alternative appears better by Complete but is duplication-confounded;
 - only one side of a proposed comparison has external QC.
+
+Missing annotation is neither an eligibility exclusion nor a review trigger. The pipeline continues whole-genome analysis, and GFF-dependent non-coding analysis occurs only when a GFF is available.
 
 The 90% and 5% values are review triggers, not exclusion or high-quality guarantees. Absence of external QC alone does not trigger review. Review reasons are semicolon-separated stable codes, with human-readable details retained in the audit columns. The pipeline continues with the baseline selection while review is pending.
 
@@ -120,6 +121,8 @@ With the flag on, a distinct alternative may replace the baseline only when all 
 3. the alternative has strictly higher Single-copy completeness;
 4. Duplicated, Fragmented, and Missing are each no worse than the baseline;
 5. the candidates do not share an assembly-equivalence key.
+
+Annotation status is not an override precondition; an unannotated alternative may replace the baseline when all conditions above hold.
 
 Merqury values remain supporting audit evidence and are never treated as comparable unless provided for both candidates. They do not rescue a candidate that fails the strict BUSCO dominance conditions. A BUSCO override does not imply verified base-level QV.
 
@@ -143,12 +146,12 @@ Tests will be written before production changes and must demonstrate:
 
 1. external BUSCO does not replace an annotated Reference by default;
 2. a stronger distinct candidate creates review output;
-3. an unannotated Reference loses the baseline to an annotated RefSeq candidate;
+3. an unannotated Reference remains ahead of an annotated RefSeq assembly;
 4. Larimichthys-like increased duplication blocks explicit override;
 5. Takifugu-like paired GCA/GCF accessions do not count as an override;
 6. Plectropomus-like strict dominance can override when explicitly enabled;
 7. incomplete legacy BUSCO fields never override;
-8. no annotated candidate creates a review warning;
+8. a species with no annotated candidate remains eligible and creates no annotation-only review warning;
 9. the new CLI flag parses and is forwarded by the shell wrapper;
 10. existing Stage 0 gate and trio-selection tests remain green.
 
