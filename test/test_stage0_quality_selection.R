@@ -24,7 +24,9 @@ row <- function(accession, species, reference = FALSE, level = "Chromosome",
                 atypical_warning = "",
                 ani = "", checkm_complete = NA_real_, checkm_contam = NA_real_,
                 ncbi_busco_complete = NA_real_, contigs = 10, contig_n50 = 1e6,
-                total_length = 1e8, ungapped_length = 0.99e8) {
+                total_length = 1e8, ungapped_length = 0.99e8,
+                source_database = if (reference) "SOURCE_DATABASE_REFSEQ" else "SOURCE_DATABASE_GENBANK",
+                annotated = reference, paired_accession = "") {
   data.frame(
     accession = accession,
     current_accession = accession,
@@ -32,7 +34,7 @@ row <- function(accession, species, reference = FALSE, level = "Chromosome",
     organism_tax_id = if (grepl("^Prok", species)) "100" else "200",
     species = species,
     genus = sub(" .*", "", species),
-    source_database = if (reference) "SOURCE_DATABASE_REFSEQ" else "SOURCE_DATABASE_GENBANK",
+    source_database = source_database,
     refseq_category = if (reference) "reference genome" else "",
     assembly_level = level,
     assembly_type = assembly_type,
@@ -57,9 +59,10 @@ row <- function(accession, species, reference = FALSE, level = "Chromosome",
     contig_n50 = contig_n50,
     number_of_scaffolds = contigs,
     scaffold_n50 = contig_n50,
-    has_annotation = if (reference) "true" else "false",
-    annotation_provider = if (reference) "NCBI RefSeq" else "",
-    annotation_release_date = if (reference) "2025-02-01" else "",
+    has_annotation = if (annotated) "true" else "false",
+    annotation_provider = if (annotated) "NCBI RefSeq" else "",
+    annotation_release_date = if (annotated) "2025-02-01" else "",
+    paired_accession = paired_accession,
     assembly_status = status,
     stringsAsFactors = FALSE
   )
@@ -91,8 +94,22 @@ meta <- do.call(rbind, list(
       ncbi_busco_complete = 1.0, contig_n50 = 10e6),
   row("E2_ref", "Euk gamma", reference = TRUE, ncbi_busco_complete = 0.90,
       contig_n50 = 1e6),
-  row("E2_long", "Euk gamma", ncbi_busco_complete = 0.99, contig_n50 = 8e6)
+  row("E2_long", "Euk gamma", ncbi_busco_complete = 0.99, contig_n50 = 8e6),
+  row("E3_reference", "Euk delta", reference = TRUE, annotated = FALSE,
+      ncbi_busco_complete = 0.80, contig_n50 = 1e6),
+  row("GCF_003_refseq", "Euk delta", annotated = TRUE,
+      source_database = "SOURCE_DATABASE_GENBANK", ncbi_busco_complete = 0.99,
+      contig_n50 = 8e6),
+  row("RS_004_refseq", "Euk epsilon", annotated = TRUE,
+      source_database = "SOURCE_DATABASE_REFSEQ", ncbi_busco_complete = 0.85,
+      contig_n50 = 1e6),
+  row("GCA_004_other", "Euk epsilon", annotated = TRUE,
+      ncbi_busco_complete = 0.99, contig_n50 = 8e6),
+  row("E6_unannotated", "Euk zeta", annotated = FALSE,
+      ncbi_busco_complete = 0.95, contig_n50 = 8e6,
+      paired_accession = "GCF_006_paired")
 ))
+meta$source_database[meta$accession == "GCA_004_other"] <- NA_character_
 
 external_qc <- data.frame(
   accession = c("E_ref", "E_qc", "P2_A_low_qv", "P2_Z_high_qv"),
@@ -116,10 +133,14 @@ check(identical(pick("Prok alpha"), "P_best"),
       "prokaryote: higher CheckM completeness and lower contamination can beat reference")
 check(identical(pick("Prok delta"), "P2_Z_high_qv"),
       "prokaryote: Merqury breaks a tie between otherwise equivalent final candidates")
-check(identical(pick("Euk beta"), "E_qc"),
-      "eukaryote: external BUSCO genome-mode and Merqury evidence can beat reference")
+check(identical(pick("Euk beta"), "E_ref"),
+      "eukaryote: external QC does not replace an annotated Reference by default")
 check(identical(pick("Euk gamma"), "E2_ref"),
       "eukaryote without external genome QC: reference remains the provisional choice")
+check(identical(pick("Euk delta"), "E3_reference"),
+      "eukaryote tier: unannotated Reference beats annotated non-reference RefSeq")
+check(identical(pick("Euk epsilon"), "RS_004_refseq"),
+      "eukaryote tier: annotated RefSeq beats another annotated assembly")
 
 audit <- ranked$audit
 reason <- function(acc) audit$exclusion_reason[audit$accession == acc]
@@ -141,11 +162,27 @@ check(nrow(short_prok) <= 3,
       "phase 1: shortlist is capped at the requested top-k per species")
 
 euk_basis <- best$selection_basis[best$species == "Euk beta"]
-check(identical(euk_basis, "external_busco_genome_merqury"),
-      "audit: eukaryote selection records the external QC basis")
-euk2_basis <- best$selection_basis[best$species == "Euk gamma"]
-check(identical(euk2_basis, "reference_metadata_provisional"),
-      "audit: eukaryote without comparable genome QC is marked provisional")
+check(identical(euk_basis, "reference_metadata_baseline"),
+      "audit: eukaryote selection records the metadata baseline basis")
+
+required_audit_fields <- c(
+  "baseline_selected", "qc_preferred", "review_required", "review_reason",
+  "override_applied", "assembly_equivalence_key"
+)
+check(all(required_audit_fields %in% names(audit)),
+      "audit: reference-first selection initializes all review-state fields")
+check(isTRUE(audit$is_refseq[audit$accession == "GCF_003_refseq"]) &&
+        isTRUE(audit$is_refseq[audit$accession == "RS_004_refseq"]) &&
+        identical(audit$is_refseq[audit$accession == "GCA_004_other"], FALSE),
+      "audit: RefSeq detection accepts GCF accessions and source metadata without NA values")
+check(identical(
+  audit$assembly_equivalence_key[audit$accession == "E6_unannotated"],
+  "E6_unannotated|GCF_006_paired"
+), "audit: paired accessions use a stable lexical equivalence key")
+check(identical(audit$selected, audit$baseline_selected),
+      "audit: default selection remains identical to the metadata baseline")
+check(is.data.frame(ranked$review) && nrow(ranked$review) == 0L,
+      "review: missing annotation alone does not create a review record")
 
 bad_qc <- external_qc
 bad_qc$qc_busco_lineage[2] <- "metazoa_odb10"

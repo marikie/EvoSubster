@@ -10,7 +10,8 @@ STAGE0_ASSEMBLY_LEVEL_RANK <- c(
 )
 
 STAGE0_METADATA_COLUMNS <- c(
-  "assembly_status", "is_atypical", "atypical_warnings", "ani_check_status",
+  "source_database", "paired_accession", "assembly_status", "is_atypical",
+  "atypical_warnings", "ani_check_status",
   "assembly_type", "refseq_category", "assembly_level", "contig_n50",
   "total_sequence_length", "total_ungapped_length", "number_of_contigs",
   "number_of_scaffolds", "scaffold_n50", "checkm_completeness",
@@ -132,6 +133,10 @@ stage0_prepare_candidates <- function(meta, min_rel_contig_n50 = 0, external_qc 
   )
   meta$is_reference <- tolower(trimws(as.character(meta$refseq_category))) ==
     "reference genome"
+  source_is_refseq <- toupper(trimws(as.character(meta$source_database))) ==
+    "SOURCE_DATABASE_REFSEQ"
+  source_is_refseq[is.na(source_is_refseq)] <- FALSE
+  meta$is_refseq <- source_is_refseq | grepl("^GCF_", meta$accession)
   meta$assembly_level_rank <- stage0_level_rank(meta$assembly_level)
   meta$primary_type_rank <- stage0_primary_type_rank(meta$assembly_type)
 
@@ -180,6 +185,35 @@ stage0_prepare_candidates <- function(meta, min_rel_contig_n50 = 0, external_qc 
   }
 
   meta
+}
+
+stage0_assembly_equivalence_key <- function(accession, paired_accession) {
+  vapply(seq_along(accession), function(i) {
+    accession_value <- trimws(as.character(accession[i]))
+    paired_value <- trimws(as.character(paired_accession[i]))
+    if (!stage0_nonempty(paired_value)) return(accession_value)
+    paste(sort(c(accession_value, paired_value)), collapse = "|")
+  }, character(1))
+}
+
+stage0_baseline_order <- function(df) {
+  if (df$selection_profile[1] == "eukaryote") {
+    annotated <- stage0_true(df$has_annotation)
+    tier <- rep(5L, nrow(df))
+    tier[annotated] <- 4L
+    tier[annotated & df$is_refseq] <- 3L
+    tier[df$is_reference] <- 2L
+    tier[df$is_reference & annotated] <- 1L
+    return(list(
+      order = order(
+        tier, df$assembly_level_rank, -df$contig_n50, df$gap_fraction,
+        df$primary_type_rank, df$accession, na.last = TRUE
+      ),
+      basis = "reference_metadata_baseline"
+    ))
+  }
+
+  stage0_final_order(df)
 }
 
 stage0_phase1_order <- function(df) {
@@ -273,7 +307,8 @@ stage0_final_order <- function(df) {
 }
 
 rank_assembly_candidates <- function(meta, min_rel_contig_n50 = 0,
-                                     shortlist_k = 3, external_qc = NULL) {
+                                     shortlist_k = 3, external_qc = NULL,
+                                     allow_qc_override = FALSE) {
   if (length(shortlist_k) != 1L || is.na(shortlist_k) || shortlist_k < 1) {
     stop("shortlist_k must be a positive integer or Inf.", call. = FALSE)
   }
@@ -283,6 +318,14 @@ rank_assembly_candidates <- function(meta, min_rel_contig_n50 = 0,
   candidates$final_rank <- NA_integer_
   candidates$selected <- FALSE
   candidates$selection_basis <- ""
+  candidates$baseline_selected <- FALSE
+  candidates$qc_preferred <- FALSE
+  candidates$review_required <- FALSE
+  candidates$review_reason <- ""
+  candidates$override_applied <- FALSE
+  candidates$assembly_equivalence_key <- stage0_assembly_equivalence_key(
+    candidates$accession, candidates$paired_accession
+  )
 
   for (species in unique(candidates$species)) {
     eligible_index <- which(candidates$species == species & candidates$eligible)
@@ -298,10 +341,11 @@ rank_assembly_candidates <- function(meta, min_rel_contig_n50 = 0,
     shortlist_index <- ordered_index[seq_len(keep_n)]
     candidates$shortlisted[shortlist_index] <- TRUE
 
-    final <- stage0_final_order(candidates[shortlist_index, , drop = FALSE])
-    final_index <- shortlist_index[final$order]
+    baseline <- stage0_baseline_order(eligible)
+    final_index <- eligible_index[baseline$order]
     candidates$final_rank[final_index] <- seq_along(final_index)
-    candidates$selection_basis[shortlist_index] <- final$basis
+    candidates$selection_basis[eligible_index] <- baseline$basis
+    candidates$baseline_selected[final_index[1]] <- TRUE
     candidates$selected[final_index[1]] <- TRUE
   }
 
@@ -309,17 +353,22 @@ rank_assembly_candidates <- function(meta, min_rel_contig_n50 = 0,
   shortlist <- shortlist[order(shortlist$species, shortlist$shortlist_rank), , drop = FALSE]
   best <- candidates[candidates$eligible & candidates$selected, , drop = FALSE]
   best <- best[order(best$species), , drop = FALSE]
-  rownames(candidates) <- rownames(shortlist) <- rownames(best) <- NULL
+  review_species <- unique(candidates$species[candidates$review_required])
+  review <- candidates[candidates$species %in% review_species, , drop = FALSE]
+  review <- review[order(review$species, review$final_rank), , drop = FALSE]
+  rownames(candidates) <- rownames(shortlist) <- rownames(best) <- rownames(review) <- NULL
 
-  list(audit = candidates, shortlist = shortlist, best = best)
+  list(audit = candidates, shortlist = shortlist, best = best, review = review)
 }
 
 select_best_assemblies <- function(meta, min_rel_contig_n50 = 0,
-                                   shortlist_k = 3, external_qc = NULL) {
+                                   shortlist_k = 3, external_qc = NULL,
+                                   allow_qc_override = FALSE) {
   rank_assembly_candidates(
     meta,
     min_rel_contig_n50 = min_rel_contig_n50,
     shortlist_k = shortlist_k,
-    external_qc = external_qc
+    external_qc = external_qc,
+    allow_qc_override = allow_qc_override
   )$best
 }
