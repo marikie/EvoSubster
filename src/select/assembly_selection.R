@@ -21,9 +21,17 @@ STAGE0_METADATA_COLUMNS <- c(
 
 STAGE0_EXTERNAL_QC_COLUMNS <- c(
   "qc_busco_mode", "qc_busco_lineage", "qc_busco_version",
-  "qc_busco_complete", "qc_busco_fragmented", "qc_busco_missing",
+  "qc_busco_complete", "qc_busco_single", "qc_busco_duplicated",
+  "qc_busco_fragmented", "qc_busco_missing", "qc_busco_internal_stop",
   "merqury_qv", "merqury_completeness"
 )
+
+STAGE0_BUSCO_COMPONENT_COLUMNS <- c(
+  "qc_busco_complete", "qc_busco_single", "qc_busco_duplicated",
+  "qc_busco_fragmented", "qc_busco_missing"
+)
+
+STAGE0_BUSCO_ROUNDING_TOLERANCE <- 0.2 + sqrt(.Machine$double.eps)
 
 stage0_add_missing_columns <- function(df, columns, value = NA) {
   for (column in setdiff(columns, names(df))) df[[column]] <- value
@@ -96,6 +104,112 @@ stage0_validate_comparable_busco <- function(meta) {
   invisible(TRUE)
 }
 
+stage0_busco_error <- function(meta, row, field, detail) {
+  stop(
+    "Invalid external BUSCO value for accession ", meta$accession[row],
+    " field ", field, ": ", detail, ".",
+    call. = FALSE
+  )
+}
+
+stage0_validate_and_derive_busco <- function(meta) {
+  percentage_columns <- c(
+    STAGE0_BUSCO_COMPONENT_COLUMNS, "qc_busco_internal_stop"
+  )
+  for (field in percentage_columns) {
+    invalid <- !is.na(meta[[field]]) &
+      (!is.finite(meta[[field]]) | meta[[field]] < 0 | meta[[field]] > 100)
+    if (any(invalid)) {
+      stage0_busco_error(
+        meta, which(invalid)[1], field, "percentage must be in [0, 100]"
+      )
+    }
+  }
+
+  complete_below_duplicated <- !is.na(meta$qc_busco_complete) &
+    !is.na(meta$qc_busco_duplicated) &
+    meta$qc_busco_complete < meta$qc_busco_duplicated
+  if (any(complete_below_duplicated)) {
+    stage0_busco_error(
+      meta, which(complete_below_duplicated)[1], "qc_busco_complete",
+      "Complete must be at least Duplicated"
+    )
+  }
+
+  single_inconsistent <- !is.na(meta$qc_busco_complete) &
+    !is.na(meta$qc_busco_single) & !is.na(meta$qc_busco_duplicated) &
+    abs(meta$qc_busco_complete - meta$qc_busco_single -
+          meta$qc_busco_duplicated) > STAGE0_BUSCO_ROUNDING_TOLERANCE
+  if (any(single_inconsistent)) {
+    stage0_busco_error(
+      meta, which(single_inconsistent)[1], "qc_busco_single",
+      "Complete must equal Single-copy plus Duplicated within 0.2"
+    )
+  }
+
+  total_inconsistent <- !is.na(meta$qc_busco_complete) &
+    !is.na(meta$qc_busco_fragmented) & !is.na(meta$qc_busco_missing) &
+    abs(meta$qc_busco_complete + meta$qc_busco_fragmented +
+          meta$qc_busco_missing - 100) > STAGE0_BUSCO_ROUNDING_TOLERANCE
+  if (any(total_inconsistent)) {
+    stage0_busco_error(
+      meta, which(total_inconsistent)[1], "qc_busco_complete",
+      "Complete plus Fragmented plus Missing must equal 100 within 0.2"
+    )
+  }
+
+  derive_single <- is.na(meta$qc_busco_single) &
+    !is.na(meta$qc_busco_complete) & !is.na(meta$qc_busco_duplicated)
+  meta$qc_busco_single[derive_single] <-
+    meta$qc_busco_complete[derive_single] - meta$qc_busco_duplicated[derive_single]
+  meta
+}
+
+stage0_complete_busco <- function(df) {
+  components_complete <- Reduce(
+    `&`, lapply(STAGE0_BUSCO_COMPONENT_COLUMNS, function(field) {
+      !is.na(df[[field]])
+    })
+  )
+  tolower(trimws(as.character(df$qc_busco_mode))) == "genome" &
+    stage0_nonempty(df$qc_busco_lineage) &
+    stage0_nonempty(df$qc_busco_version) & components_complete
+}
+
+stage0_same_busco_run <- function(df, left, right) {
+  all(tolower(trimws(as.character(df$qc_busco_mode[c(left, right)]))) ==
+        "genome") &&
+    identical(
+      as.character(df$qc_busco_lineage[left]),
+      as.character(df$qc_busco_lineage[right])
+    ) &&
+    identical(
+      as.character(df$qc_busco_version[left]),
+      as.character(df$qc_busco_version[right])
+    )
+}
+
+stage0_qc_order <- function(df) {
+  metadata_order <- stage0_baseline_order(df)$order
+  metadata_rank <- integer(nrow(df))
+  metadata_rank[metadata_order] <- seq_along(metadata_order)
+  order(
+    -df$qc_busco_single, df$qc_busco_duplicated, df$qc_busco_missing,
+    df$qc_busco_fragmented, metadata_rank, na.last = TRUE
+  )
+}
+
+stage0_add_review_reason <- function(candidates, row, reason) {
+  existing <- candidates$review_reason[row]
+  reasons <- if (nzchar(existing)) strsplit(existing, ";", fixed = TRUE)[[1]] else
+    character()
+  if (!reason %in% reasons) {
+    candidates$review_reason[row] <- paste(c(reasons, reason), collapse = ";")
+  }
+  candidates$review_required[row] <- TRUE
+  candidates
+}
+
 stage0_prepare_candidates <- function(meta, min_rel_contig_n50 = 0, external_qc = NULL) {
   if (!all(c("accession", "species") %in% names(meta))) {
     stop("Assembly metadata must contain accession and species columns.", call. = FALSE)
@@ -113,11 +227,24 @@ stage0_prepare_candidates <- function(meta, min_rel_contig_n50 = 0, external_qc 
     "contig_n50", "total_sequence_length", "total_ungapped_length",
     "number_of_contigs", "number_of_scaffolds", "scaffold_n50",
     "checkm_completeness", "checkm_contamination", "busco_complete",
-    "busco_fragmented", "busco_missing", "qc_busco_complete",
-    "qc_busco_fragmented", "qc_busco_missing", "merqury_qv",
-    "merqury_completeness"
+    "busco_fragmented", "busco_missing", STAGE0_BUSCO_COMPONENT_COLUMNS,
+    "qc_busco_internal_stop", "merqury_qv", "merqury_completeness"
   )
-  for (column in numeric_columns) meta[[column]] <- stage0_numeric(meta[[column]])
+  for (column in numeric_columns) {
+    raw_value <- meta[[column]]
+    numeric_value <- stage0_numeric(raw_value)
+    if (column %in% c(STAGE0_BUSCO_COMPONENT_COLUMNS,
+                      "qc_busco_internal_stop")) {
+      invalid_numeric <- stage0_nonempty(raw_value) & is.na(numeric_value)
+      if (any(invalid_numeric)) {
+        stage0_busco_error(
+          meta, which(invalid_numeric)[1], column, "value must be numeric"
+        )
+      }
+    }
+    meta[[column]] <- numeric_value
+  }
+  meta <- stage0_validate_and_derive_busco(meta)
 
   meta$rel_contig_n50 <- ifelse(
     is.na(meta$total_ungapped_length) | meta$total_ungapped_length <= 0 |
@@ -342,6 +469,126 @@ rank_assembly_candidates <- function(meta, min_rel_contig_n50 = 0,
     candidates$selection_basis[shortlist_index] <- baseline$basis
     candidates$baseline_selected[final_index[1]] <- TRUE
     candidates$selected[final_index[1]] <- TRUE
+
+    if (eligible$selection_profile[1] == "eukaryote") {
+      baseline_index <- final_index[1]
+      complete_index <- shortlist_index[
+        stage0_complete_busco(candidates[shortlist_index, , drop = FALSE])
+      ]
+      if (length(complete_index)) {
+        qc_order <- stage0_qc_order(
+          candidates[complete_index, , drop = FALSE]
+        )
+        candidates$qc_preferred[complete_index[qc_order[1]]] <- TRUE
+      }
+
+      distinct_alternatives <- setdiff(
+        shortlist_index[
+          candidates$assembly_equivalence_key[shortlist_index] !=
+            candidates$assembly_equivalence_key[baseline_index]
+        ],
+        baseline_index
+      )
+      baseline_has_qc <- identical(
+        tolower(trimws(as.character(candidates$qc_busco_mode[baseline_index]))),
+        "genome"
+      )
+      baseline_complete <- baseline_index %in% complete_index
+
+      if (baseline_has_qc &&
+          !is.na(candidates$qc_busco_complete[baseline_index]) &&
+          candidates$qc_busco_complete[baseline_index] < 90) {
+        candidates <- stage0_add_review_reason(
+          candidates, baseline_index, "baseline_busco_complete_below_90"
+        )
+      }
+      if (baseline_has_qc &&
+          !is.na(candidates$qc_busco_duplicated[baseline_index]) &&
+          candidates$qc_busco_duplicated[baseline_index] > 5) {
+        candidates <- stage0_add_review_reason(
+          candidates, baseline_index, "baseline_busco_duplicated_above_5"
+        )
+      }
+
+      if (length(distinct_alternatives)) {
+        for (alternative_index in distinct_alternatives) {
+          alternative_has_qc <- identical(
+            tolower(trimws(as.character(
+              candidates$qc_busco_mode[alternative_index]
+            ))),
+            "genome"
+          )
+          alternative_complete <- alternative_index %in% complete_index
+
+          if (xor(baseline_has_qc, alternative_has_qc)) {
+            candidates <- stage0_add_review_reason(
+              candidates, alternative_index, "one_sided_external_qc"
+            )
+            candidates <- stage0_add_review_reason(
+              candidates, alternative_index, "incomplete_busco_comparison"
+            )
+          } else if (baseline_has_qc && alternative_has_qc &&
+                     (!baseline_complete || !alternative_complete)) {
+            candidates <- stage0_add_review_reason(
+              candidates, alternative_index, "incomplete_busco_comparison"
+            )
+          } else if (baseline_complete && alternative_complete &&
+                     stage0_same_busco_run(
+                       candidates, baseline_index, alternative_index
+                     )) {
+            if (candidates$qc_busco_single[alternative_index] >
+                candidates$qc_busco_single[baseline_index]) {
+              candidates <- stage0_add_review_reason(
+                candidates, alternative_index,
+                "alternative_higher_single_copy"
+              )
+            }
+            if (candidates$qc_busco_complete[alternative_index] >
+                  candidates$qc_busco_complete[baseline_index] &&
+                candidates$qc_busco_duplicated[alternative_index] >
+                  candidates$qc_busco_duplicated[baseline_index]) {
+              candidates <- stage0_add_review_reason(
+                candidates, alternative_index,
+                "complete_gain_duplication_confounded"
+              )
+            }
+          }
+        }
+      }
+
+      if (isTRUE(allow_qc_override) && baseline_complete &&
+          length(distinct_alternatives)) {
+        override_candidates <- distinct_alternatives[vapply(
+          distinct_alternatives,
+          function(alternative_index) {
+            alternative_index %in% complete_index &&
+              stage0_same_busco_run(
+                candidates, baseline_index, alternative_index
+              ) &&
+              candidates$qc_busco_single[alternative_index] >
+                candidates$qc_busco_single[baseline_index] &&
+              candidates$qc_busco_duplicated[alternative_index] <=
+                candidates$qc_busco_duplicated[baseline_index] &&
+              candidates$qc_busco_fragmented[alternative_index] <=
+                candidates$qc_busco_fragmented[baseline_index] &&
+              candidates$qc_busco_missing[alternative_index] <=
+                candidates$qc_busco_missing[baseline_index]
+          },
+          logical(1)
+        )]
+        if (length(override_candidates)) {
+          override_order <- stage0_qc_order(
+            candidates[override_candidates, , drop = FALSE]
+          )
+          override_index <- override_candidates[override_order[1]]
+          candidates$selected[baseline_index] <- FALSE
+          candidates$selected[override_index] <- TRUE
+          candidates$selection_basis[override_index] <-
+            "explicit_busco_override"
+          candidates$override_applied[override_index] <- TRUE
+        }
+      }
+    }
   }
 
   shortlist <- candidates[candidates$eligible & candidates$shortlisted, , drop = FALSE]
