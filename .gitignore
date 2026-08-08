@@ -39,6 +39,7 @@ doc/*.log
 tasks/
 
 # Temporary
+.worktrees/
 test_genomes/
 test_results/
 bench_genomes/
