@@ -23,21 +23,38 @@ check <- function(cond, msg) {
 
 labels <- c(
   "Homo_sapiens",
-  "Mus_musculus_GCF_000001635.27",
-  "Drosophila_melanogaster_strain_A_GCA_000001215.4"
+  "Chaunax_sp._Z400",
+  "'Chaunax_sp._Z400'",
+  "Pseudoliparis_sp._2_HX-2024",
+  "Gasterosteus_aculeatus_aculeatus",
+  "Drosophila_melanogaster_strain_A"
 )
 check(
   identical(
     unname(species_from_label(labels)),
-    c("Homo sapiens", "Mus musculus", "Drosophila melanogaster")
+    c(
+      "Homo sapiens",
+      "Chaunax sp. Z400",
+      "Chaunax sp. Z400",
+      "Pseudoliparis sp. 2 HX-2024",
+      "Gasterosteus aculeatus aculeatus",
+      "Drosophila melanogaster strain A"
+    )
   ),
-  "species parser accepts accession-less and accession-suffixed genus_species labels"
+  "species parser preserves every component of accession-free taxon labels"
 )
 
-malformed <- species_from_label(c("Homo", "_", "GCA_000001405.40"))
+malformed <- species_from_label(c(
+  "Homo",
+  "_",
+  "Homo sapiens",
+  "Mus_musculus_GCF_000001635.27",
+  "Mus_musculus_GCA_000001635",
+  "GCA_000001405.40"
+))
 check(
   all(is.na(malformed)),
-  "species parser rejects labels without both genus and species tokens"
+  "species parser rejects malformed, space-containing, and accession-suffixed labels"
 )
 
 check(
@@ -54,6 +71,11 @@ check(
 )
 
 help_text <- paste(capture.output(usage()), collapse = "\n")
+check(
+  grepl("accession-free complete taxon names", help_text, fixed = TRUE) &&
+    grepl("strip_newick_accessions.py", help_text, fixed = TRUE),
+  "tree help documents the canonical complete taxon labels and legacy converter"
+)
 check(
   grepl("--out-dir DIR[[:space:]]+Output directory", help_text),
   "--out-dir help does not imply that every cache must live there"
@@ -99,6 +121,27 @@ check(
 check(
   identical(defaults$allow_qc_override, FALSE),
   "Stage 0 QC override is disabled by default"
+)
+
+legacy_tree_errors <- lapply(
+  c(
+    "Chaunax_sp._Z400_GCA_037577475.1",
+    "Chaunax_sp._Z400_GCA_037577475"
+  ),
+  function(label) try(
+    prune_to_best_assembly(
+      list(tip.label = label),
+      tempfile("trio-stage0-invalid-label-")
+    ),
+    silent = TRUE
+  )
+)
+check(
+  all(vapply(legacy_tree_errors, function(error) {
+    inherits(error, "try-error") &&
+      grepl("strip_newick_accessions.py", as.character(error), fixed = TRUE)
+  }, logical(1))),
+  "Stage 0 rejects versioned and versionless accession suffixes with converter guidance"
 )
 
 override_args <- try(

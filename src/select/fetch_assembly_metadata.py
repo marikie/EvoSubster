@@ -102,6 +102,7 @@ def build_taxon_payload(taxons: List[str], page_token: str = "") -> dict:
         "taxons": taxons,
         "filters": {"assembly_version": "current", "mag": "exclude"},
         "page_size": PAGE_SIZE,
+        "tax_exact_match": True,
     }
     if page_token:
         payload["page_token"] = page_token
@@ -132,9 +133,7 @@ def read_lines(path: str) -> List[str]:
 def split_organism_name(organism_name: str) -> Dict[str, str]:
     tokens = organism_name.split()
     genus = tokens[0] if tokens else ""
-    # Subspecies and strain suffixes are dropped: two assemblies of the same
-    # species must collapse to the same key even when one is named to subspecies.
-    species = " ".join(tokens[:2]) if len(tokens) >= 2 else genus
+    species = " ".join(tokens)
     return {"genus": genus, "species": species}
 
 

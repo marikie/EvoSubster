@@ -79,7 +79,10 @@ usage <- function() {
     "Usage: Rscript src/select/trio_selection.R --tree <file.nwk> [options]",
     "",
     "Options:",
-    "  --tree FILE             Newick tree; leaf labels are genus_species (a trailing NCBI accession, if present, is ignored).",
+    "  --tree FILE             Newick tree; leaf labels are accession-free complete taxon names",
+    "                          with spaces encoded as underscores (for example,",
+    "                          Chaunax_sp._Z400). Legacy accession-suffixed trees must first",
+    "                          be converted with src/select/strip_newick_accessions.py.",
     "  --idt-threshold N       Every pairwise identity must exceed this (default: 80).",
     "  --max-outgroup-tries N  Give up on an ingroup pair after training this many outgroup",
     "                          candidates without a thesis-rule pass (default: 5). Caps the",
@@ -189,18 +192,23 @@ read_tsv <- function(path) {
              colClasses = "character")
 }
 
-# Leaf labels are Genus_species; a trailing NCBI accession is optional and ignored.
-ACCESSION_RE <- "GC[AF]_[0-9]+\\.[0-9]+$"
+# Leaf labels are complete NCBI taxon names with spaces encoded as underscores.
+# Legacy labels ending in an assembly accession, including a missing version, are rejected.
+ACCESSION_RE <- "(^|_)GC[AF]_[0-9]+(\\.[0-9]+)?$"
 
-# "Genus_species_...GCA_000000000.1" -> "Genus species": strip the trailing accession, then
-# take the first two tokens.  Matches split_organism_name() in fetch_assembly_metadata.py so
-# the parsed name joins cleanly to the NCBI organism species (both drop subspecies/strain).
+# "Chaunax_sp._Z400" -> "Chaunax sp. Z400". Preserve all taxon-name components so
+# strains, subspecies, and informal species identifiers remain distinct Stage-0 taxa.
 species_from_label <- function(labels) {
-  base <- sub(paste0("_?", ACCESSION_RE), "", labels)
-  vapply(base, function(name) {
-    tokens <- strsplit(name, "[ _]+")[[1]]
-    tokens <- tokens[nzchar(tokens)]
-    if (length(tokens) >= 2) paste(tokens[1], tokens[2])
+  vapply(labels, function(name) {
+    if (!is.na(name) && grepl("^'.*'$", name)) {
+      name <- substr(name, 2, nchar(name) - 1)
+      name <- gsub("''", "'", name, fixed = TRUE)
+    }
+    if (is.na(name) || grepl("[[:space:]]", name) || grepl(ACCESSION_RE, name)) {
+      return(NA_character_)
+    }
+    tokens <- strsplit(name, "_", fixed = TRUE)[[1]]
+    if (length(tokens) >= 2 && all(nzchar(tokens))) paste(tokens, collapse = " ")
     else NA_character_
   }, character(1), USE.NAMES = FALSE)
 }
@@ -255,8 +263,13 @@ prune_to_best_assembly <- function(tree, out_dir, min_rel_contig_n50 = 0,
   tip_species <- species_from_label(tree$tip.label)
   invalid_labels <- is.na(tip_species) | !nzchar(tip_species)
   if (any(invalid_labels)) {
-    stop("Leaf label(s) could not be parsed into a genus_species name: ",
-         paste(head(tree$tip.label[invalid_labels], 5), collapse = ", "), call. = FALSE)
+    stop(
+      "Stage 0 requires accession-free complete taxon names with spaces encoded as underscores. ",
+      "Remove trailing NCBI accessions with src/select/strip_newick_accessions.py. ",
+      "Invalid label(s): ",
+      paste(head(tree$tip.label[invalid_labels], 5), collapse = ", "),
+      call. = FALSE
+    )
   }
   taxa <- unique(tip_species)
 

@@ -58,16 +58,38 @@ During execution the wrapper:
 
 ### Select trios from a Newick tree
 
+Tree leaves must contain accession-free complete NCBI taxon names, with spaces
+encoded as underscores. Keep subspecies, strain, and informal identifiers; for example,
+`Chaunax_sp._Z400` is read as `Chaunax sp. Z400`. A terminal assembly accession
+is not accepted by Stage 0.
+
+Convert a legacy tree whose leaves end in a versioned GCA/GCF accession before
+running the pipeline:
+
+```bash
+python3 src/select/strip_newick_accessions.py \
+  --input path/to/legacy-tree.nwk \
+  --output path/to/accession-free-tree.nwk
+```
+
+The converter removes only a terminal `_GCA_...version` or
+`_GCF_...version` suffix from leaf labels. Leaves that are already
+accession-free are retained and reported as warnings. Existing output files are
+not overwritten unless `--force` is supplied, and the input file itself is
+never overwritten.
+
 ```bash
 ./src/sbst_fromDwl.sh \
-  --tree path/to/tree.nwk \
+  --tree path/to/accession-free-tree.nwk \
   20260801 \
   --stage0-top-k 3 \
   --assembly-qc path/to/external_qc.tsv
 ```
 
-Stage 0 discovers all current non-MAG NCBI assemblies for every species on the
-tree and records the versioned `GCA_...version` or `GCF_...version` accession.
+Stage 0 queries each complete leaf taxon with exact NCBI taxon matching, so a
+subspecies or strain is not silently merged into its parent species. It
+discovers all current non-MAG NCBI assemblies for every taxon on the tree and
+records the versioned `GCA_...version` or `GCF_...version` accession.
 It then uses a two-phase selection:
 
 1. Exclude non-current, NCBI-atypical, ANI-Failed, unsupported hybrid/alternate

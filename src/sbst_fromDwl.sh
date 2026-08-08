@@ -86,6 +86,9 @@ Tree mode:
   --tree FILE.nwk      Select trios from a Newick tree (src/select/trio_selection.R),
                        then run the pipeline for each selected trio. The four positional
                        accessions are unused here; DATE is optional (defaults to today).
+                       Leaf labels must be accession-free complete taxon names with spaces
+                       encoded as underscores (for example, Chaunax_sp._Z400). Convert
+                       legacy accession-suffixed trees with strip_newick_accessions.py.
   --idt-threshold N    Minimum pairwise percent identity for trio selection (default: 80).
   --max-outgroup-tries N  Give up on an ingroup pair after training this many outgroup
                        candidates without a thesis-rule pass (default: 5). Per-pair cost cap.

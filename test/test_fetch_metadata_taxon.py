@@ -87,7 +87,7 @@ class ReportToRowTest(unittest.TestCase):
             },
         }
         row = f.report_to_row(report)
-        self.assertEqual(row["species"], "Genus alpha")
+        self.assertEqual(row["species"], "Genus alpha strain-X")
         self.assertEqual(row["organism_tax_id"], "1234")
         self.assertEqual(row["source_database"], "SOURCE_DATABASE_REFSEQ")
         self.assertEqual(row["contig_n50"], "924431")
@@ -158,6 +158,7 @@ class TaxonRequestTest(unittest.TestCase):
                 "taxons": ["9606", "562"],
                 "filters": {"assembly_version": "current", "mag": "exclude"},
                 "page_size": f.PAGE_SIZE,
+                "tax_exact_match": True,
             },
         )
 
