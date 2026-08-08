@@ -68,7 +68,8 @@ defaults <- list(
   train_cache_dir = NULL,
   date = format(Sys.Date(), "%Y%m%d"),
   threads = 8,
-  dry_run = FALSE
+  dry_run = FALSE,
+  keep_unused_species_data = FALSE
 )
 
 usage <- function() {
@@ -99,6 +100,9 @@ usage <- function() {
     "  --threads N             Threads for lastdb/last-train (default: 8).",
     "  --dry-run               Enumerate ingroup pairs + candidate-outgroup order only;",
     "                          download nothing and run no last-train.",
+    "  --keep-unused-species-data",
+    "                          Keep genome and train artifacts created for candidates that are",
+    "                          absent from every selected trio (default: remove them).",
     "",
     sep = "\n"
   )
@@ -142,6 +146,7 @@ parse_args <- function(argv) {
       "--date"               = { opts$date <- take(); i <- i + 2 },
       "--threads"            = { opts$threads <- as.integer(take()); i <- i + 2 },
       "--dry-run"            = { opts$dry_run <- TRUE; i <- i + 1 },
+      "--keep-unused-species-data" = { opts$keep_unused_species_data <- TRUE; i <- i + 1 },
       "-h"                   = { usage(); quit(status = 0) },
       "--help"               = { usage(); quit(status = 0) },
       stop("Unknown option: ", key, call. = FALSE)
@@ -182,9 +187,256 @@ write_tsv <- function(df, path) {
   write.table(df, path, sep = "\t", quote = FALSE, row.names = FALSE, na = "NA")
 }
 
+write_tsv_atomic <- function(df, path) {
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  tmp <- tempfile(pattern = paste0(".", basename(path), "."), tmpdir = dirname(path))
+  on.exit({
+    if (path_exists_without_following(tmp)) unlink(tmp)
+  }, add = TRUE)
+  write_tsv(df, tmp)
+  if (!file.rename(tmp, path)) {
+    stop("Could not atomically replace TSV file: ", path, call. = FALSE)
+  }
+}
+
 read_tsv <- function(path) {
   read.delim(path, sep = "\t", stringsAsFactors = FALSE, check.names = FALSE,
              colClasses = "character")
+}
+
+empty_owned_artifacts <- function() {
+  data.frame(
+    accession_1 = character(),
+    accession_2 = character(),
+    storage = character(),
+    artifact_type = character(),
+    relative_path = character(),
+    stringsAsFactors = FALSE
+  )
+}
+
+read_artifact_manifest <- function(path, requested_accession) {
+  if (!file.exists(path)) {
+    stop("dwl_organism.sh did not create its artifact manifest for ", requested_accession,
+         call. = FALSE)
+  }
+  manifest <- read_tsv(path)
+  expected <- c("accession", "artifact_type", "relative_path")
+  if (!identical(names(manifest), expected)) {
+    stop("Invalid downloader artifact manifest header: ", path, call. = FALSE)
+  }
+  if (!nrow(manifest)) return(empty_owned_artifacts())
+
+  allowed_types <- c("directory_tree", "directory", "file", "symlink")
+  invalid <- is.na(manifest$accession) | !nzchar(manifest$accession) |
+    manifest$accession != requested_accession |
+    is.na(manifest$artifact_type) | !manifest$artifact_type %in% allowed_types |
+    is.na(manifest$relative_path) | !nzchar(manifest$relative_path)
+  if (any(invalid)) {
+    stop("Invalid row in downloader artifact manifest: ", path, call. = FALSE)
+  }
+
+  data.frame(
+    accession_1 = manifest$accession,
+    accession_2 = "",
+    storage = "genome",
+    artifact_type = manifest$artifact_type,
+    relative_path = manifest$relative_path,
+    stringsAsFactors = FALSE
+  )
+}
+
+path_exists_without_following <- function(path) {
+  link_target <- Sys.readlink(path)
+  file.exists(path) || dir.exists(path) || (!is.na(link_target) && nzchar(link_target))
+}
+
+prepare_cleanup_target <- function(relative_path, root) {
+  if (is.na(relative_path) || !nzchar(relative_path) ||
+      startsWith(relative_path, "/") ||
+      grepl("^[A-Za-z]:[/\\\\]", relative_path)) {
+    stop("Unsafe cleanup path: ", relative_path, call. = FALSE)
+  }
+  components <- strsplit(relative_path, "/", fixed = TRUE)[[1]]
+  if (any(!nzchar(components)) || any(components %in% c(".", ".."))) {
+    stop("Unsafe cleanup path: ", relative_path, call. = FALSE)
+  }
+
+  normalized_root <- normalizePath(root, mustWork = TRUE)
+  normalized_parent <- normalizePath(
+    file.path(normalized_root, dirname(relative_path)), mustWork = TRUE
+  )
+  root_prefix <- paste0(normalized_root, .Platform$file.sep)
+  if (normalized_parent != normalized_root && !startsWith(normalized_parent, root_prefix)) {
+    stop("Cleanup path escapes configured root: ", relative_path, call. = FALSE)
+  }
+
+  target <- file.path(normalized_parent, basename(relative_path))
+  if (identical(target, normalized_root)) {
+    stop("Refusing to delete a cleanup root", call. = FALSE)
+  }
+  target
+}
+
+cleanup_owned_artifacts <- function(artifacts, selected, genome_root, train_cache_root,
+                                    audit_path) {
+  required_columns <- c(
+    "accession_1", "accession_2", "storage", "artifact_type", "relative_path"
+  )
+  if (!all(required_columns %in% names(artifacts))) {
+    stop("Owned artifact table is missing required columns", call. = FALSE)
+  }
+
+  selected_accessions <- character()
+  if (nrow(selected)) {
+    selected_columns <- c("out_acc", "in1_acc", "in2_acc")
+    if (!all(selected_columns %in% names(selected))) {
+      stop("Selected trio table is missing accession columns", call. = FALSE)
+    }
+    selected_accessions <- unique(unname(unlist(selected[selected_columns], use.names = FALSE)))
+    selected_accessions <- selected_accessions[!is.na(selected_accessions) &
+                                                 nzchar(selected_accessions)]
+  }
+
+  audit <- data.frame(
+    accessions = character(), artifact_type = character(), path = character(),
+    action = character(), reason = character(), stringsAsFactors = FALSE
+  )
+  dir.create(dirname(audit_path), recursive = TRUE, showWarnings = FALSE)
+  if (!nrow(artifacts)) {
+    write_tsv_atomic(audit, audit_path)
+    return(invisible(audit))
+  }
+
+  accessions <- vapply(seq_len(nrow(artifacts)), function(i) {
+    values <- c(artifacts$accession_1[i], artifacts$accession_2[i])
+    paste(values[!is.na(values) & nzchar(values)], collapse = ",")
+  }, character(1))
+  pair_artifact <- !is.na(artifacts$accession_2) & nzchar(artifacts$accession_2)
+  retained <- artifacts$accession_1 %in% selected_accessions &
+    (artifacts$storage == "genome" | !pair_artifact |
+       artifacts$accession_2 %in% selected_accessions)
+  selected_reason <- ifelse(
+    artifacts$storage == "genome" | !pair_artifact,
+    "selected_accession", "selected_accession_pair"
+  )
+  unused_reason <- ifelse(
+    artifacts$storage == "genome" | !pair_artifact,
+    "unused_accession", "unused_accession_pair"
+  )
+  audit <- data.frame(
+    accessions = accessions,
+    artifact_type = artifacts$artifact_type,
+    path = artifacts$relative_path,
+    action = ifelse(retained, "retained", "pending"),
+    reason = ifelse(retained, selected_reason, unused_reason),
+    stringsAsFactors = FALSE
+  )
+  # Replace a previous run's report before any destructive preflight begins.
+  write_tsv_atomic(audit, audit_path)
+
+  active_index <- NA_integer_
+  tryCatch({
+    allowed_types <- c("directory_tree", "directory", "file", "symlink")
+    invalid_train_type <- artifacts$storage == "train_cache" &
+      !artifacts$artifact_type %in% c("file", "directory_tree")
+    if (any(!artifacts$storage %in% c("genome", "train_cache")) ||
+        any(!artifacts$artifact_type %in% allowed_types) || any(invalid_train_type)) {
+      stop("Owned artifact table contains an invalid storage or artifact type", call. = FALSE)
+    }
+
+    roots <- c(genome = genome_root, train_cache = train_cache_root)
+    targets <- character(nrow(artifacts))
+    for (i in seq_len(nrow(artifacts))) {
+      active_index <- i
+      targets[i] <- prepare_cleanup_target(
+        artifacts$relative_path[i], roots[[artifacts$storage[i]]]
+      )
+    }
+    active_index <- NA_integer_
+    audit$path <- targets
+    write_tsv_atomic(audit, audit_path)
+
+    delete_indices <- which(!retained)
+    if (length(delete_indices)) {
+      duplicate_targets <- targets[duplicated(targets) | duplicated(targets, fromLast = TRUE)]
+      if (length(duplicate_targets)) {
+        duplicate_targets <- unique(duplicate_targets)
+        conflict <- any(vapply(duplicate_targets, function(target) {
+          states <- retained[targets == target]
+          any(states) && any(!states)
+        }, logical(1)))
+        if (conflict) {
+          stop("Cleanup target is both retained and scheduled for deletion", call. = FALSE)
+        }
+        stop("Owned artifact table contains a duplicate cleanup target", call. = FALSE)
+      }
+
+      recursive_targets <- targets[
+        !retained & artifacts$artifact_type == "directory_tree"
+      ]
+      retained_targets <- targets[retained]
+      for (target in recursive_targets) {
+        prefix <- paste0(target, .Platform$file.sep)
+        if (any(retained_targets == target | startsWith(retained_targets, prefix))) {
+          stop("Recursive cleanup target contains a retained artifact: ", target,
+               call. = FALSE)
+        }
+      }
+
+      # Validate every target before deleting any of them.
+      for (i in delete_indices) {
+        active_index <- i
+        target <- targets[i]
+        link_target <- Sys.readlink(target)
+        is_link <- !is.na(link_target) && nzchar(link_target)
+        valid_type <- switch(
+          artifacts$artifact_type[i],
+          symlink = is_link,
+          file = !is_link && file.exists(target) && !dir.exists(target),
+          directory = !is_link && dir.exists(target),
+          directory_tree = !is_link && dir.exists(target),
+          FALSE
+        )
+        if (!valid_type) {
+          stop("Cleanup target is missing or has an unexpected type: ", target,
+               call. = FALSE)
+        }
+      }
+      active_index <- NA_integer_
+
+      depth <- lengths(strsplit(artifacts$relative_path, "/", fixed = TRUE))
+      type_order <- match(
+        artifacts$artifact_type,
+        c("file", "symlink", "directory", "directory_tree")
+      )
+      delete_indices <- delete_indices[order(type_order[delete_indices],
+                                             -depth[delete_indices])]
+      for (i in delete_indices) {
+        active_index <- i
+        recursive <- artifacts$artifact_type[i] == "directory_tree"
+        status <- unlink(targets[i], recursive = recursive, force = FALSE)
+        if (status != 0 || path_exists_without_following(targets[i])) {
+          stop("Failed to delete current-run artifact: ", targets[i], call. = FALSE)
+        }
+        audit$action[i] <- "deleted"
+      }
+      active_index <- NA_integer_
+    }
+
+    write_tsv_atomic(audit, audit_path)
+    invisible(audit)
+  }, error = function(error) {
+    failed_rows <- audit$action == "pending"
+    if (!is.na(active_index)) failed_rows[active_index] <- TRUE
+    if (!any(failed_rows)) failed_rows <- audit$action != "deleted"
+    audit$action[failed_rows] <- "failed"
+    audit$reason[failed_rows] <- paste0(
+      audit$reason[failed_rows], "; ", conditionMessage(error)
+    )
+    write_tsv_atomic(audit, audit_path)
+    stop(error)
+  })
 }
 
 # Leaf labels are Genus_species; a trailing NCBI accession is optional and ignored.
@@ -548,6 +800,8 @@ parse_train_identity <- function(path) {
 make_fetchers <- function(leaves, opts) {
   fasta_cache <- new.env(parent = emptyenv())
   idt_cache <- new.env(parent = emptyenv())
+  owned_artifacts <- new.env(parent = emptyenv())
+  owned_artifacts$records <- empty_owned_artifacts()
   counters <- new.env(parent = emptyenv())
   counters$downloads <- 0L
   counters$trains <- 0L
@@ -560,10 +814,28 @@ make_fetchers <- function(leaves, opts) {
   dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
   Sys.setenv(THREAD_NUM = opts$threads)
 
+  append_owned <- function(records) {
+    if (nrow(records)) {
+      owned_artifacts$records <- rbind(owned_artifacts$records, records)
+    }
+  }
+
   get_fasta <- function(acc) {
     hit <- fasta_cache[[acc]]
     if (!is.null(hit)) return(hit)
-    result <- run("bash", c(shQuote(DWL_ORGANISM), acc, "--out-dir", shQuote(opts$genome_dir)))
+    download_args <- c(shQuote(DWL_ORGANISM), acc, "--out-dir", shQuote(opts$genome_dir))
+    manifest_path <- NULL
+    if (!opts$keep_unused_species_data) {
+      manifest_path <- tempfile(pattern = ".trio-artifacts-", fileext = ".tsv")
+      download_args <- c(
+        download_args, "--artifact-manifest", shQuote(manifest_path)
+      )
+      on.exit(unlink(manifest_path), add = TRUE)
+    }
+    result <- run("bash", download_args)
+    if (!is.null(manifest_path)) {
+      append_owned(read_artifact_manifest(manifest_path, acc))
+    }
     # dwl_organism.sh prints dir_name|fasta_path|summary_json|raw_name|ncbi_full|tax_json
     fields <- strsplit(tail(result, 1), "|", fixed = TRUE)[[1]]
     if (length(fields) < 2 || !nzchar(fields[2])) {
@@ -607,16 +879,49 @@ make_fetchers <- function(leaves, opts) {
         }
       }
       fa1 <- get_fasta(a1); fa2 <- get_fasta(a2)
+      db_relative <- paste0(a1, "db_", opts$date)
+      db_path <- file.path(cache_dir, db_relative)
+      db_preexisting <- path_exists_without_following(db_path)
       run("bash", c(shQuote(LAST_TRAIN), opts$date, shQuote(fa1), shQuote(fa2),
                     a1, a2, shQuote(cache_dir)))
       counters$trains <- counters$trains + 1L
       val <- parse_train_identity(train)
+      if (!opts$keep_unused_species_data) {
+        train_link <- Sys.readlink(train)
+        train_is_link <- !is.na(train_link) && nzchar(train_link)
+        if (file.exists(train) && !dir.exists(train) && !train_is_link) {
+          append_owned(data.frame(
+            accession_1 = a1,
+            accession_2 = a2,
+            storage = "train_cache",
+            artifact_type = "file",
+            relative_path = basename(train),
+            stringsAsFactors = FALSE
+          ))
+        }
+        db_link <- Sys.readlink(db_path)
+        db_is_link <- !is.na(db_link) && nzchar(db_link)
+        if (!db_preexisting && dir.exists(db_path) && !db_is_link) {
+          append_owned(data.frame(
+            accession_1 = a1,
+            accession_2 = "",
+            storage = "train_cache",
+            artifact_type = "directory_tree",
+            relative_path = db_relative,
+            stringsAsFactors = FALSE
+          ))
+        }
+      }
     }
     idt_cache[[key]] <- val
     val
   }
 
-  list(get_identity = get_identity, counters = counters)
+  list(
+    get_identity = get_identity,
+    counters = counters,
+    get_owned_artifacts = function() owned_artifacts$records
+  )
 }
 
 # --- the thesis rule, judged one candidate at a time ------------------------
@@ -751,10 +1056,24 @@ main <- function() {
     return(invisible(NULL))
   }
 
-  selected <- select_trios(tree, leaves, opts)
+  fetch <- make_fetchers(leaves, opts)
+  selected <- select_trios(tree, leaves, opts, fetch)
   selected_file <- file.path(opts$out_dir, "selected_trios.tsv")
   write_tsv(selected, selected_file)
   log_stage("Selected", nrow(selected), "trios (one per ingroup pair) ->", selected_file)
+
+  if (!opts$keep_unused_species_data) {
+    cache_dir <- if (!is.null(opts$train_cache_dir) && nzchar(opts$train_cache_dir)) {
+      opts$train_cache_dir
+    } else {
+      file.path(opts$out_dir, "train_cache")
+    }
+    cleanup_file <- file.path(opts$out_dir, "cleanup_unused_species.tsv")
+    cleanup_owned_artifacts(
+      fetch$get_owned_artifacts(), selected, opts$genome_dir, cache_dir, cleanup_file
+    )
+    log_stage("Current-run unused-species cleanup audit ->", cleanup_file)
+  }
 }
 
 if (sys.nframe() == 0) {

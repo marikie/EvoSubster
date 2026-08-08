@@ -8,6 +8,7 @@
 
 this_file <- sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)[1])
 root <- dirname(dirname(normalizePath(this_file)))
+suppressPackageStartupMessages(library(dplyr))
 source(file.path(root, "src", "select", "trio_selection.R"))
 
 fail <- 0L

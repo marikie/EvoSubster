@@ -56,6 +56,26 @@ During execution the wrapper:
 - Detects `genomic.gff` for the outgroup; if missing, downstream steps receive `NO_GFF_FILE`.
 - Resolves FASTA paths and invokes `sbst.sh` with the appropriate arguments.
 
+### Select trios from a Newick tree
+
+```bash
+./src/sbst_fromDwl.sh --tree <FILE.nwk> [DATE] [--genome-dir PATH] [--out-dir PATH] [--train-cache-dir PATH] [--keep-unused-species-data]
+```
+
+Tree mode selects assemblies and candidate outgroups, downloads genomes and
+builds `last-train` caches on demand, then runs the pipeline for each selected
+trio. After `selected_trios.tsv` is finalized, it removes only genome artifacts,
+train files, and LAST database directories that were created by the current
+selection run and belong to accessions absent from every selected trio.
+Pre-existing data, selected-accession data, and
+selection audit tables are retained. Cleanup decisions are recorded in
+`<out-dir>/trio_selection/cleanup_unused_species.tsv`.
+
+Use `--keep-unused-species-data` to disable current-run artifact tracking and
+cleanup for debugging. Cleanup is enabled by default in both direct
+`trio_selection.R` runs and wrapper tree mode. Any unsafe path or incomplete
+deletion makes trio selection fail before downstream `sbst.sh` runs begin.
+
 ### Use FASTA files of your choice
 
 ```bash

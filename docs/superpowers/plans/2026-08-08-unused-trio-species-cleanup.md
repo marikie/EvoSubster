@@ -29,11 +29,11 @@
 - Produces: `--artifact-manifest PATH` with columns `accession`, `artifact_type`, `relative_path`.
 - `artifact_type` is `directory_tree`, `directory`, `file`, or `symlink`.
 
-- [ ] Add failing tests for a fresh organism directory, a pre-existing directory, unchanged stdout, and empty-array retry behavior on Bash 3.2.
-- [ ] Run `bash test/test_dwl_organism.sh` and confirm the new assertions fail.
-- [ ] Implement portable before/after artifact tracking and atomic manifest output.
-- [ ] Run the test and `bash -n src/dwl_organism.sh` until both pass.
-- [ ] Write `.conductor/handoffs/T001-handoff.md` without committing.
+- [x] Add failing tests for a fresh organism directory, a pre-existing directory, unchanged stdout, and empty-array retry behavior on Bash 3.2.
+- [x] Run `bash test/test_dwl_organism.sh` and confirm the new assertions fail.
+- [x] Implement portable before/after artifact tracking and atomic manifest output.
+- [x] Run the test and `bash -n src/dwl_organism.sh` until both pass.
+- [x] Write `.conductor/handoffs/T001-handoff.md` without committing.
 
 ### Task 2: Selector and wrapper cleanup policy
 
@@ -49,13 +49,13 @@
 - Consumes: the Task 1 artifact manifest contract.
 - Produces: `cleanup_unused_species.tsv` and `--keep-unused-species-data` in selector and wrapper tree mode.
 
-- [ ] Add failing unit tests covering selected retention, unused deletion, pre-existing retention, generated-cache cleanup, zero trios, unsafe paths, and cleanup failure.
-- [ ] Add failing wrapper tests for opt-out forwarding and selector-failure propagation.
-- [ ] Run the focused tests and confirm the new assertions fail.
-- [ ] Implement artifact/cache tracking, safe deletion, audit output, fatal failure propagation, and CLI help.
-- [ ] Fix the fetched baseline Stage 0 test so deferred `dplyr` loading is explicit.
-- [ ] Run focused R/shell tests until they pass.
-- [ ] Write `.conductor/handoffs/T002-handoff.md` without committing.
+- [x] Add failing unit tests covering selected retention, unused deletion, pre-existing retention, generated-cache cleanup, zero trios, unsafe paths, and cleanup failure.
+- [x] Add failing wrapper tests for opt-out forwarding and selector-failure propagation.
+- [x] Run the focused tests and confirm the new assertions fail.
+- [x] Implement artifact/cache tracking, safe deletion, audit output, fatal failure propagation, and CLI help.
+- [x] Fix the fetched baseline Stage 0 test so deferred `dplyr` loading is explicit.
+- [x] Run focused R/shell tests until they pass.
+- [x] Write `.conductor/handoffs/T002-handoff.md` without committing.
 
 ### Task 3: Adversarial verification and integration
 
@@ -63,10 +63,9 @@
 - Read all Task 1 and Task 2 diffs.
 - Write: `.conductor/handoffs/T003-handoff.md`
 
-- [ ] Try to construct path traversal, root deletion, symlink-following, shared-data deletion, and zero-trio counterexamples.
-- [ ] Check that cleanup failure prevents every downstream `sbst.sh` call.
-- [ ] Run focused tests and report pass/fail only.
-- [ ] Main conductor independently fixes verified findings and reruns all load-bearing checks.
-- [ ] Record the destructive-default release decision and delegation effect.
-- [ ] Commit documentation, implementation, tests, and the decision record locally; do not push.
-
+- [x] Try to construct path traversal, root deletion, symlink-following, shared-data deletion, and zero-trio counterexamples.
+- [x] Check that cleanup failure prevents every downstream `sbst.sh` call.
+- [x] Run focused tests and report pass/fail only.
+- [x] Main conductor independently fixes verified findings and reruns all load-bearing checks.
+- [x] Record the destructive-default release decision and delegation effect.
+- [x] Commit documentation, implementation, tests, and the decision record locally; do not push.

@@ -102,14 +102,17 @@ chmod +x "$stub_bin/curl" "$stub_bin/jq" "$stub_bin/sleep" "$stub_bin/yq"
 work_dir="$tmp_dir/work"
 curl_state_dir="$tmp_dir/curl-state"
 mkdir -p "$work_dir" "$curl_state_dir"
+fresh_manifest="$tmp_dir/fresh-artifacts.tsv"
 result=$(
     cd "$work_dir" || exit 1
     PATH="$stub_bin:$PATH" FIXTURE_ZIP="$fixture_zip" CURL_STATE_DIR="$curl_state_dir" \
-        bash "$ROOT_DIR/src/dwl_organism.sh" GCA_000000001.1 --out-dir ./genomes
+        bash "$ROOT_DIR/src/dwl_organism.sh" GCA_000000001.1 --out-dir ./genomes \
+        --artifact-manifest "$fresh_manifest"
 ) || exit 1
 
 IFS='|' read -r dir_name fasta_path summary_path raw_name full_name taxonomy_path <<< "$result"
 
+test "$(printf '%s\n' "$result" | awk -F '|' '{print NF}')" -eq 6
 test "$dir_name" = "Test_species"
 test "$fasta_path" = "./genomes/Test_species/GCA_000000001.1_genomic.fna"
 test -s "$work_dir/$fasta_path"
@@ -123,6 +126,38 @@ test "$(cat "$curl_state_dir/taxonomy")" -eq 2
 test "$(cat "$curl_state_dir/summary.http1")" -eq 2
 test "$(cat "$curl_state_dir/genome.http1")" -eq 2
 test "$(cat "$curl_state_dir/taxonomy.http1")" -eq 2
+printf 'accession\tartifact_type\trelative_path\nGCA_000000001.1\tdirectory_tree\tTest_species\n' \
+    | cmp -s - "$fresh_manifest"
+
+preexisting_work_dir="$tmp_dir/preexisting-work"
+preexisting_state_dir="$tmp_dir/preexisting-state"
+preexisting_manifest="$tmp_dir/preexisting-artifacts.tsv"
+mkdir -p "$preexisting_work_dir/genomes/Test_species" "$preexisting_state_dir"
+printf 'keep\n' > "$preexisting_work_dir/genomes/Test_species/preexisting.txt"
+printf '{"preexisting":true}\n' \
+    > "$preexisting_work_dir/genomes/Test_species/GCA_000000001.1.json"
+preexisting_result=$(
+    cd "$preexisting_work_dir" || exit 1
+    PATH="$stub_bin:$PATH" FIXTURE_ZIP="$fixture_zip" CURL_STATE_DIR="$preexisting_state_dir" \
+        bash "$ROOT_DIR/src/dwl_organism.sh" GCA_000000001.1 --out-dir ./genomes \
+        --artifact-manifest "$preexisting_manifest"
+) || exit 1
+
+test "$(printf '%s\n' "$preexisting_result" | awk -F '|' '{print NF}')" -eq 6
+test "$(sed -n '1p' "$preexisting_manifest")" = $'accession\tartifact_type\trelative_path'
+test "$(wc -l < "$preexisting_manifest" | tr -d ' ')" -eq 4
+grep -Fqx $'GCA_000000001.1\tfile\tTest_species/GCA_000000001.1_genomic.fna' \
+    "$preexisting_manifest"
+grep -Fqx $'GCA_000000001.1\tfile\tTest_species/ncbi_dataset.zip' \
+    "$preexisting_manifest"
+grep -Fqx $'GCA_000000001.1\tfile\tTest_species/taxonomy_GCA_000000001.1.json' \
+    "$preexisting_manifest"
+if grep -Fq 'preexisting.txt' "$preexisting_manifest" \
+    || grep -Fq $'Test_species/GCA_000000001.1.json' "$preexisting_manifest"; then
+    echo "FAIL: manifest claimed a pre-existing path" >&2
+    exit 1
+fi
+test -s "$preexisting_work_dir/genomes/Test_species/preexisting.txt"
 
 failure_state_dir="$tmp_dir/failure-state"
 mkdir -p "$failure_state_dir"
@@ -141,4 +176,5 @@ grep -Fq "Error: Failed to fetch genome summary for GCF_000000002.1" \
     "$tmp_dir/failure.stderr"
 
 echo "ok: fresh download retries HTTP/2 failures over HTTP/1.1 and preserves relative output paths"
+echo "ok: artifact manifests distinguish fresh directory trees from files added to pre-existing directories"
 echo "ok: sustained DNS failure stops after four attempts"

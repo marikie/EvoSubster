@@ -62,6 +62,7 @@ IDT_THRESHOLD=""
 MAX_OUTGROUP_TRIES=""
 INGROUP_PAIRING=""
 MIN_REL_CONTIG_N50=""
+KEEP_UNUSED_SPECIES_DATA=0
 POSITIONAL_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -92,6 +93,9 @@ Tree mode:
   --min-rel-contig-n50 F  Drop a species unless some current assembly has relative contig
                        N50 (contig_n50/total_ungapped_length) >= F. Size-normalized so one
                        value works across lineages; default: 0 = off, e.g. 0.005.
+  --keep-unused-species-data
+                       Keep current-run genome and train artifacts for candidates absent
+                       from every selected trio (tree mode only; default: remove them).
 
 Options:
   --genome-dir PATH       Genome storage directory (default: ./genomes)
@@ -111,6 +115,11 @@ EOF
             ;;
         --force)
             FORCE_DOWNLOAD=1
+            shift
+            continue
+            ;;
+        --keep-unused-species-data)
+            KEEP_UNUSED_SPECIES_DATA=1
             shift
             continue
             ;;
@@ -355,6 +364,7 @@ if [ -n "$TREE_FILE" ]; then
     [ -n "$INGROUP_PAIRING" ] && r_args+=(--ingroup-pairing "$INGROUP_PAIRING")
     [ -n "$MIN_REL_CONTIG_N50" ] && r_args+=(--min-rel-contig-n50 "$MIN_REL_CONTIG_N50")
     [ -n "$TRAIN_CACHE_DIR_OVERRIDE" ] && r_args+=(--train-cache-dir "$TRAIN_CACHE_DIR_OVERRIDE")
+    [ "$KEEP_UNUSED_SPECIES_DATA" -eq 1 ] && r_args+=(--keep-unused-species-data)
 
     echo "--- [tree mode] selecting trios from $TREE_FILE"
     if ! Rscript "$SCRIPT_DIR/select/trio_selection.R" "${r_args[@]}"; then
@@ -363,13 +373,16 @@ if [ -n "$TREE_FILE" ]; then
     fi
 
     selected_file="$rt_out_dir/selected_trios.tsv"
-    if [ ! -s "$selected_file" ]; then
+    _hdr=""
+    if [ -s "$selected_file" ]; then
+        IFS= read -r _hdr < "$selected_file" || true
+    fi
+    if [ -z "$_hdr" ]; then
         echo "[tree mode] trio_selection.R selected no trios; nothing to run."
         exit 0
     fi
 
     # Locate the accession columns by name so the table layout can change freely.
-    IFS= read -r _hdr < "$selected_file"
     col_index() {
         local target="$1" n=0 field
         local IFS=$'\t'

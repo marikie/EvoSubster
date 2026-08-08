@@ -32,6 +32,9 @@ cat > "$stub_bin/Rscript" <<'EOF'
 script="$1"
 shift
 printf '%s\n' "$script" "$@" > "$R_ARGS_LOG"
+if [ "${SELECTOR_FAIL:-0}" -eq 1 ]; then
+    exit 42
+fi
 out_dir=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -45,8 +48,12 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 mkdir -p "$out_dir"
-printf 'out_acc\tin1_acc\tin2_acc\nGCA_000000011.1\tGCA_000000022.1\tGCA_000000033.1\n' \
-    > "$out_dir/selected_trios.tsv"
+if [ "${SELECTOR_EMPTY:-0}" -eq 1 ]; then
+    printf '\n' > "$out_dir/selected_trios.tsv"
+else
+    printf 'out_acc\tin1_acc\tin2_acc\nGCA_000000011.1\tGCA_000000022.1\tGCA_000000033.1\n' \
+        > "$out_dir/selected_trios.tsv"
+fi
 EOF
 
 cat > "$stub_bin/python" <<'EOF'
@@ -104,7 +111,7 @@ printf '((A,B),C);\n' > "$tree_file"
 
 run_tree_mode() {
     local output_dir="$1" custom_cache="${2:-}"
-    local r_log="$3" sbst_log="$4"
+    local r_log="$3" sbst_log="$4" keep_unused="${5:-0}"
     local args=(
         --tree "$tree_file"
         20260723
@@ -114,6 +121,9 @@ run_tree_mode() {
     )
     if [ -n "$custom_cache" ]; then
         args+=(--train-cache-dir "$custom_cache")
+    fi
+    if [ "$keep_unused" -eq 1 ]; then
+        args+=(--keep-unused-species-data)
     fi
 
     PATH="$stub_bin:$PATH" \
@@ -157,6 +167,50 @@ check "custom cache path is passed to the R selector" \
     sh -c 'grep -Fxq -- "$1" "$2"' sh "$custom_cache" "$custom_r_log"
 check "the same custom cache path is passed to sbst.sh" \
     grep -Fq -- "--train-cache-dir $custom_cache" "$custom_sbst_log"
+
+keep_out="$tmp_dir/keep-out"
+keep_r_log="$tmp_dir/keep-r.log"
+keep_sbst_log="$tmp_dir/keep-sbst.log"
+run_tree_mode "$keep_out" "" "$keep_r_log" "$keep_sbst_log" 1
+keep_exit=$?
+check "tree mode accepts the unused-species cleanup opt-out" test "$keep_exit" -eq 0
+check "tree mode forwards the cleanup opt-out to the R selector" \
+    grep -Fxq -- "--keep-unused-species-data" "$keep_r_log"
+
+failure_r_log="$tmp_dir/failure-r.log"
+failure_sbst_log="$tmp_dir/failure-sbst.log"
+PATH="$stub_bin:$PATH" \
+R_ARGS_LOG="$failure_r_log" \
+SBST_ARGS_LOG="$failure_sbst_log" \
+SELECTOR_FAIL=1 \
+bash "$fixture_repo/src/sbst_fromDwl.sh" \
+    --tree "$tree_file" 20260723 \
+    --genome-dir "$tmp_dir/failure-genomes" \
+    --out-dir "$tmp_dir/failure-out" \
+    --idt-only \
+    > "$tmp_dir/failure-wrapper.log" 2>&1
+failure_exit=$?
+check "selector cleanup failure makes tree mode fail" test "$failure_exit" -ne 0
+check "selector cleanup failure blocks every downstream sbst.sh call" \
+    test ! -s "$failure_sbst_log"
+
+empty_r_log="$tmp_dir/empty-r.log"
+empty_sbst_log="$tmp_dir/empty-sbst.log"
+PATH="$stub_bin:$PATH" \
+R_ARGS_LOG="$empty_r_log" \
+SBST_ARGS_LOG="$empty_sbst_log" \
+SELECTOR_EMPTY=1 \
+bash "$fixture_repo/src/sbst_fromDwl.sh" \
+    --tree "$tree_file" 20260723 \
+    --genome-dir "$tmp_dir/empty-genomes" \
+    --out-dir "$tmp_dir/empty-out" \
+    --idt-only \
+    > "$tmp_dir/empty-wrapper.log" 2>&1
+empty_exit=$?
+check "zero selected trios finish successfully after selector cleanup" test "$empty_exit" -eq 0
+check "zero selected trios do not start downstream sbst.sh" test ! -s "$empty_sbst_log"
+check "zero selected trios report that there is nothing to run" \
+    grep -Fq "selected no trios; nothing to run" "$tmp_dir/empty-wrapper.log"
 
 unversioned_log="$tmp_dir/unversioned-sbst.log"
 PATH="$stub_bin:$PATH" \

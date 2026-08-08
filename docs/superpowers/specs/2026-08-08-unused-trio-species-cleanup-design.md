@@ -24,9 +24,9 @@ that directory. If it already existed, the manifest contains only newly created
 owned by the run and are never cleanup targets.
 
 `trio_selection.R` aggregates these manifests by accession. It also records a
-LAST train file only when the current run had to create or replace it and the
-result passes the existing complete-train validator. A valid cache hit is not
-owned by the run.
+LAST train file when the current run had to create or replace it, and records a
+LAST database directory when that directory did not exist before training. A
+valid cache hit and a pre-existing database directory are not owned by the run.
 
 ## Cleanup decision
 
@@ -35,8 +35,9 @@ accession set from `out_acc`, `in1_acc`, and `in2_acc`.
 
 - A newly created genome artifact is retained when its accession is selected;
   otherwise it is deleted.
-- A newly generated train cache is retained when both accessions are selected;
-  otherwise it is deleted.
+- A newly generated train file is retained when both accessions are selected;
+  otherwise it is deleted. A newly generated LAST database is retained when its
+  reference accession is selected; otherwise it is deleted.
 - With zero selected trios, every artifact owned by the run is deleted.
 - `selected_assemblies.tsv`, `selected_trios.tsv`, train-selection metadata, and
   all pre-existing genome/cache data are retained.
@@ -55,9 +56,10 @@ the normalized parent before deleting. Symlinks are unlinked without following
 their targets. Files and symlinks are removed before directories; newly owned
 directory trees may be removed recursively only after the same root checks.
 
-Any unsafe path, deletion failure, or incomplete cleanup is fatal. The selector
-returns non-zero and `sbst_fromDwl.sh` does not start downstream trio analysis.
+Any unsafe path, deletion failure, or incomplete cleanup is fatal. The cleanup
+audit is atomically replaced with the current attempt and records preflight as
+well as deletion failures. The selector returns non-zero and `sbst_fromDwl.sh`
+does not start downstream trio analysis.
 Selection failure before `selected_trios.tsv` is finalized is outside this
 cleanup contract. Concurrent processes must not mutate the same genome
 directory during selection.
-

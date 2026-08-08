@@ -9,6 +9,8 @@
 #   --no-genome      Skip genome download
 #   --no-taxonomy    Skip taxonomy download
 #   --tax-out FILE   Taxonomy JSON output path (default: <out-dir>/<dir_name>/taxonomy_<accession>.json)
+#   --artifact-manifest FILE
+#                    Write newly created artifacts as an atomic TSV manifest
 #
 # Stdout on success (pipe-separated):
 #   dir_name|fasta_path|summary_json_path|raw_organism_name|ncbi_full_name|taxonomy_json_path
@@ -30,10 +32,13 @@ curl_with_retry() {
     local attempt=1
     local max_attempts=4
     local status
-    local -a retry_options=()
+    local retry_option=""
 
     while true; do
-        if curl "${retry_options[@]}" "$@"; then
+        if [ -n "$retry_option" ]; then
+            curl "$retry_option" "$@" && return 0
+            status=$?
+        elif curl "$@"; then
             return 0
         else
             status=$?
@@ -47,9 +52,108 @@ curl_with_retry() {
 
         echo "Warning: NCBI request failed (curl exit $status); retrying with HTTP/1.1 ($((attempt + 1))/$max_attempts)..." >&2
         sleep 2
-        retry_options=(--http1.1)
+        retry_option="--http1.1"
         attempt=$((attempt + 1))
     done
+}
+
+snapshot_relative_paths() {
+    local root="$1"
+    local output="$2"
+
+    : > "$output" || return 1
+    if [ -d "$root" ]; then
+        (
+            cd "$root" || exit 1
+            find . -mindepth 1 -print | LC_ALL=C sort
+        ) > "$output"
+    fi
+}
+
+write_artifact_manifest() {
+    local manifest_path="$1"
+    local org_dir="$2"
+    local dir_name="$3"
+    local org_dir_preexisting="$4"
+    local before_snapshot="$5"
+    local manifest_dir
+    local path
+    local relative_path
+    local artifact_type
+
+    ARTIFACT_AFTER_SNAPSHOT=$(mktemp) || {
+        echo "Error: Unable to create artifact snapshot." >&2
+        return 1
+    }
+    snapshot_relative_paths "$org_dir" "$ARTIFACT_AFTER_SNAPSHOT" || {
+        echo "Error: Unable to snapshot artifacts in $org_dir" >&2
+        return 1
+    }
+
+    manifest_dir=$(dirname "$manifest_path")
+    mkdir -p "$manifest_dir" || {
+        echo "Error: Unable to create artifact manifest directory $manifest_dir" >&2
+        return 1
+    }
+    ARTIFACT_TMP_MANIFEST=$(mktemp "${manifest_path}.tmp.XXXXXX") || {
+        echo "Error: Unable to create temporary artifact manifest for $manifest_path" >&2
+        return 1
+    }
+
+    printf 'accession\tartifact_type\trelative_path\n' > "$ARTIFACT_TMP_MANIFEST" || {
+        echo "Error: Unable to write artifact manifest $manifest_path" >&2
+        return 1
+    }
+    if [ "$org_dir_preexisting" -eq 0 ]; then
+        printf '%s\tdirectory_tree\t%s\n' "$ACCESSION" "$dir_name" \
+            >> "$ARTIFACT_TMP_MANIFEST" || {
+            echo "Error: Unable to write artifact manifest $manifest_path" >&2
+            return 1
+        }
+    else
+        while IFS= read -r path; do
+            [ -n "$path" ] || continue
+            if grep -Fqx -- "$path" "$before_snapshot"; then
+                continue
+            fi
+
+            relative_path=${path#./}
+            if [ -L "$org_dir/$relative_path" ]; then
+                artifact_type="symlink"
+            elif [ -d "$org_dir/$relative_path" ]; then
+                artifact_type="directory"
+            elif [ -f "$org_dir/$relative_path" ]; then
+                artifact_type="file"
+            else
+                echo "Error: Unsupported artifact type at $org_dir/$relative_path" >&2
+                return 1
+            fi
+            printf '%s\t%s\t%s/%s\n' \
+                "$ACCESSION" "$artifact_type" "$dir_name" "$relative_path" \
+                >> "$ARTIFACT_TMP_MANIFEST" || {
+                echo "Error: Unable to write artifact manifest $manifest_path" >&2
+                return 1
+            }
+        done < "$ARTIFACT_AFTER_SNAPSHOT"
+    fi
+
+    mv "$ARTIFACT_TMP_MANIFEST" "$manifest_path" || {
+        echo "Error: Unable to finalize artifact manifest $manifest_path" >&2
+        return 1
+    }
+    ARTIFACT_TMP_MANIFEST=""
+}
+
+cleanup_artifact_tracking() {
+    if [ -n "${ARTIFACT_BEFORE_SNAPSHOT:-}" ]; then
+        rm -f "$ARTIFACT_BEFORE_SNAPSHOT"
+    fi
+    if [ -n "${ARTIFACT_AFTER_SNAPSHOT:-}" ]; then
+        rm -f "$ARTIFACT_AFTER_SNAPSHOT"
+    fi
+    if [ -n "${ARTIFACT_TMP_MANIFEST:-}" ]; then
+        rm -f "$ARTIFACT_TMP_MANIFEST"
+    fi
 }
 
 # Check whether a usable genomic FASTA already exists in org_dir for given accession
@@ -222,7 +326,13 @@ OVERRIDE_NAME=""
 NO_GENOME=0
 NO_TAXONOMY=0
 TAX_OUT_OVERRIDE=""
+ARTIFACT_MANIFEST=""
+ARTIFACT_BEFORE_SNAPSHOT=""
+ARTIFACT_AFTER_SNAPSHOT=""
+ARTIFACT_TMP_MANIFEST=""
 FORCE=0
+
+trap cleanup_artifact_tracking EXIT
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -263,6 +373,18 @@ while [[ $# -gt 0 ]]; do
             TAX_OUT_OVERRIDE="${1#*=}"
             shift
             ;;
+        --artifact-manifest)
+            ARTIFACT_MANIFEST="${2:?--artifact-manifest requires a path}"
+            shift 2
+            ;;
+        --artifact-manifest=*)
+            ARTIFACT_MANIFEST="${1#*=}"
+            if [ -z "$ARTIFACT_MANIFEST" ]; then
+                echo "Error: --artifact-manifest requires a path" >&2
+                exit 1
+            fi
+            shift
+            ;;
         -*)
             echo "Error: Unknown option $1" >&2
             exit 1
@@ -280,7 +402,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [ -z "$ACCESSION" ]; then
-    echo "Usage: $(basename "$0") <ACCESSION> [--out-dir DIR] [--name NAME] [--no-genome] [--no-taxonomy] [--tax-out FILE] [--force]" >&2
+    echo "Usage: $(basename "$0") <ACCESSION> [--out-dir DIR] [--name NAME] [--no-genome] [--no-taxonomy] [--tax-out FILE] [--artifact-manifest FILE] [--force]" >&2
     exit 1
 fi
 
@@ -315,6 +437,18 @@ IFS='|' read -r dir_name summary_json_path raw_organism_name ncbi_full_name tax_
 
 # Move summary JSON to final org dir
 org_dir="$OUT_DIR/$dir_name"
+org_dir_preexisting=0
+if [ -n "$ARTIFACT_MANIFEST" ] && { [ -e "$org_dir" ] || [ -L "$org_dir" ]; }; then
+    org_dir_preexisting=1
+    ARTIFACT_BEFORE_SNAPSHOT=$(mktemp) || {
+        echo "Error: Unable to create artifact snapshot." >&2
+        exit 1
+    }
+    snapshot_relative_paths "$org_dir" "$ARTIFACT_BEFORE_SNAPSHOT" || {
+        echo "Error: Unable to snapshot existing artifacts in $org_dir" >&2
+        exit 1
+    }
+fi
 mkdir -p "$org_dir"
 final_summary_json="$org_dir/${ACCESSION}.json"
 if [ "$summary_json_path" != "$final_summary_json" ]; then
@@ -393,6 +527,14 @@ if [ "$NO_TAXONOMY" -eq 0 ]; then
             fi
         fi
     fi
+fi
+
+# --- optional artifact manifest ---
+
+if [ -n "$ARTIFACT_MANIFEST" ]; then
+    write_artifact_manifest \
+        "$ARTIFACT_MANIFEST" "$org_dir" "$dir_name" "$org_dir_preexisting" \
+        "$ARTIFACT_BEFORE_SNAPSHOT" || exit 1
 fi
 
 # --- stdout: pipe-separated result ---
