@@ -738,5 +738,55 @@ check(identical(
   "higher_missing"
 ), "override: worse Missing records a stable blocker code")
 
+multi_override_meta <- rbind(
+  strict_pair(
+    "Euk multiple overrides", "GCF_910000100.1", "GCA_910000101.1"
+  ),
+  row(
+    "GCA_910000102.1", "Euk multiple overrides", annotated = FALSE,
+    ncbi_busco_complete = 0.97, contig_n50 = 4e6
+  )
+)
+multi_override_qc <- rbind(
+  strict_qc_row("GCF_910000100.1", 95, 94, 1, 2, 3),
+  strict_qc_row("GCA_910000101.1", 96, 95, 1, 1.5, 2.5),
+  strict_qc_row("GCA_910000102.1", 97, 96, 1, 1, 2)
+)
+multi_override <- rank_assembly_candidates(
+  multi_override_meta, external_qc = multi_override_qc,
+  allow_qc_override = TRUE
+)
+check(
+  identical(multi_override$best$accession, "GCA_910000102.1") &&
+    identical(
+      multi_override$audit$override_block_reason[
+        multi_override$audit$accession == "GCA_910000101.1"
+      ],
+      "not_top_override_candidate"
+    ),
+  "override: the strongest valid candidate wins and other valid candidates are recorded"
+)
+
+multi_blocker_meta <- strict_pair(
+  "Euk multiple blockers", "GCF_910000110.1", "GCA_910000111.1"
+)
+multi_blocker_qc <- rbind(
+  strict_qc_row("GCF_910000110.1", 95, 94, 1, 2, 3),
+  strict_qc_row("GCA_910000111.1", 96, 93, 3, 3, 1)
+)
+multi_blocker <- rank_assembly_candidates(
+  multi_blocker_meta, external_qc = multi_blocker_qc,
+  allow_qc_override = TRUE
+)
+check(
+  identical(
+    multi_blocker$audit$override_block_reason[
+      multi_blocker$audit$accession == "GCA_910000111.1"
+    ],
+    "not_higher_single_copy;higher_duplicated;higher_fragmented"
+  ),
+  "override: multiple blocker codes retain their stable evaluation order"
+)
+
 if (fail > 0L) { cat("\n", fail, " test(s) FAILED\n", sep = ""); quit(status = 1) }
 cat("\nAll Stage 0 quality-selection tests passed.\n")

@@ -482,18 +482,7 @@ stage0_final_order <- function(df) {
   )
 }
 
-rank_assembly_candidates <- function(meta, min_rel_contig_n50 = 0,
-                                     shortlist_k = 3, external_qc = NULL,
-                                     allow_qc_override = FALSE) {
-  if (length(shortlist_k) != 1L || is.na(shortlist_k) || shortlist_k < 1) {
-    stop("shortlist_k must be a positive integer or Inf.", call. = FALSE)
-  }
-  candidates <- stage0_prepare_candidates(
-    meta,
-    min_rel_contig_n50,
-    external_qc,
-    allow_qc_override = allow_qc_override
-  )
+stage0_initialize_ranking_state <- function(candidates) {
   candidates$shortlist_rank <- NA_integer_
   candidates$shortlisted <- FALSE
   candidates$baseline_rank <- NA_integer_
@@ -509,6 +498,229 @@ rank_assembly_candidates <- function(meta, min_rel_contig_n50 = 0,
   candidates$assembly_equivalence_key <- stage0_assembly_equivalence_key(
     candidates$accession, candidates$paired_accession
   )
+  candidates
+}
+
+stage0_is_genome_busco_row <- function(candidates, row) {
+  identical(
+    tolower(trimws(as.character(candidates$qc_busco_mode[row]))),
+    "genome"
+  )
+}
+
+stage0_mark_qc_preferred <- function(candidates, complete_index, final_index) {
+  if (!length(complete_index)) return(candidates)
+
+  qc_order <- stage0_qc_order(
+    candidates[complete_index, , drop = FALSE]
+  )
+  ordered_qc_index <- complete_index[qc_order]
+  preferred_key <- candidates$assembly_equivalence_key[ordered_qc_index[1]]
+  preferred_representative <- final_index[
+    candidates$assembly_equivalence_key[final_index] == preferred_key
+  ][1]
+  candidates$qc_preferred[preferred_representative] <- TRUE
+  candidates
+}
+
+stage0_distinct_alternatives <- function(candidates, shortlist_index,
+                                         baseline_index) {
+  setdiff(
+    shortlist_index[
+      candidates$assembly_equivalence_key[shortlist_index] !=
+        candidates$assembly_equivalence_key[baseline_index]
+    ],
+    baseline_index
+  )
+}
+
+stage0_audit_eukaryote_qc <- function(candidates, baseline_index,
+                                      distinct_alternatives, complete_index) {
+  baseline_has_qc <- stage0_is_genome_busco_row(candidates, baseline_index)
+  baseline_has_external_evidence <- stage0_has_external_evidence(
+    candidates[baseline_index, , drop = FALSE]
+  )[1]
+  baseline_complete <- baseline_index %in% complete_index
+
+  if (baseline_has_qc &&
+      !is.na(candidates$qc_busco_complete[baseline_index]) &&
+      candidates$qc_busco_complete[baseline_index] < 90) {
+    candidates <- stage0_add_review_reason(
+      candidates, baseline_index, "baseline_busco_complete_below_90"
+    )
+  }
+  if (baseline_has_qc &&
+      !is.na(candidates$qc_busco_duplicated[baseline_index]) &&
+      candidates$qc_busco_duplicated[baseline_index] > 5) {
+    candidates <- stage0_add_review_reason(
+      candidates, baseline_index, "baseline_busco_duplicated_above_5"
+    )
+  }
+
+  for (alternative_index in distinct_alternatives) {
+    alternative_has_qc <- stage0_is_genome_busco_row(
+      candidates, alternative_index
+    )
+    alternative_has_external_evidence <- stage0_has_external_evidence(
+      candidates[alternative_index, , drop = FALSE]
+    )[1]
+    alternative_complete <- alternative_index %in% complete_index
+
+    if (xor(baseline_has_external_evidence, alternative_has_external_evidence)) {
+      candidates <- stage0_add_review_reason(
+        candidates, alternative_index, "one_sided_external_qc"
+      )
+    }
+    if (xor(baseline_has_qc, alternative_has_qc)) {
+      candidates <- stage0_add_review_reason(
+        candidates, alternative_index, "incomplete_busco_comparison"
+      )
+    } else if (baseline_has_qc && alternative_has_qc &&
+               (!baseline_complete || !alternative_complete)) {
+      candidates <- stage0_add_review_reason(
+        candidates, alternative_index, "incomplete_busco_comparison"
+      )
+    } else if (baseline_complete && alternative_complete &&
+               stage0_same_busco_run(
+                 candidates, baseline_index, alternative_index
+               )) {
+      if (candidates$qc_busco_single[alternative_index] >
+          candidates$qc_busco_single[baseline_index]) {
+        candidates <- stage0_add_review_reason(
+          candidates, alternative_index, "alternative_higher_single_copy"
+        )
+      }
+      if (candidates$qc_busco_complete[alternative_index] >
+            candidates$qc_busco_complete[baseline_index] &&
+          candidates$qc_busco_duplicated[alternative_index] >
+            candidates$qc_busco_duplicated[baseline_index]) {
+        candidates <- stage0_add_review_reason(
+          candidates, alternative_index,
+          "complete_gain_duplication_confounded"
+        )
+      }
+    }
+  }
+
+  candidates
+}
+
+stage0_busco_override_blockers <- function(candidates, baseline_index,
+                                           alternative_index,
+                                           complete_index) {
+  baseline_complete <- baseline_index %in% complete_index
+  alternative_complete <- alternative_index %in% complete_index
+  blockers <- character()
+
+  if (!baseline_complete) {
+    blockers <- c(blockers, "baseline_incomplete_busco")
+  }
+  if (!alternative_complete) {
+    blockers <- c(blockers, "incomplete_busco_components")
+  }
+  if (baseline_complete && alternative_complete) {
+    if (!stage0_same_busco_run(candidates, baseline_index, alternative_index)) {
+      blockers <- c(blockers, "incomparable_busco_run")
+    } else {
+      if (candidates$qc_busco_single[alternative_index] <=
+          candidates$qc_busco_single[baseline_index]) {
+        blockers <- c(blockers, "not_higher_single_copy")
+      }
+      if (candidates$qc_busco_duplicated[alternative_index] >
+          candidates$qc_busco_duplicated[baseline_index]) {
+        blockers <- c(blockers, "higher_duplicated")
+      }
+      if (candidates$qc_busco_fragmented[alternative_index] >
+          candidates$qc_busco_fragmented[baseline_index]) {
+        blockers <- c(blockers, "higher_fragmented")
+      }
+      if (candidates$qc_busco_missing[alternative_index] >
+          candidates$qc_busco_missing[baseline_index]) {
+        blockers <- c(blockers, "higher_missing")
+      }
+    }
+  }
+
+  unique(blockers)
+}
+
+stage0_apply_busco_override <- function(candidates, baseline_index,
+                                        distinct_alternatives,
+                                        complete_index) {
+  override_candidates <- integer()
+  for (alternative_index in distinct_alternatives) {
+    blockers <- stage0_busco_override_blockers(
+      candidates, baseline_index, alternative_index, complete_index
+    )
+    if (length(blockers)) {
+      candidates$override_block_reason[alternative_index] <- paste(
+        blockers, collapse = ";"
+      )
+    } else {
+      override_candidates <- c(override_candidates, alternative_index)
+    }
+  }
+
+  selected_index <- baseline_index
+  if (length(override_candidates)) {
+    override_order <- stage0_qc_order(
+      candidates[override_candidates, , drop = FALSE]
+    )
+    override_index <- override_candidates[override_order[1]]
+    candidates$selected[baseline_index] <- FALSE
+    candidates$selected[override_index] <- TRUE
+    candidates$selection_basis[override_index] <- "explicit_busco_override"
+    candidates$override_applied[override_index] <- TRUE
+    selected_index <- override_index
+    other_override_candidates <- setdiff(override_candidates, override_index)
+    candidates$override_block_reason[other_override_candidates] <-
+      "not_top_override_candidate"
+  }
+
+  list(candidates = candidates, selected_index = selected_index)
+}
+
+stage0_process_eukaryote_qc <- function(candidates, shortlist_index,
+                                        final_index, baseline_index,
+                                        allow_qc_override = FALSE) {
+  complete_index <- shortlist_index[
+    stage0_complete_busco(candidates[shortlist_index, , drop = FALSE])
+  ]
+  candidates <- stage0_mark_qc_preferred(
+    candidates, complete_index, final_index
+  )
+  distinct_alternatives <- stage0_distinct_alternatives(
+    candidates, shortlist_index, baseline_index
+  )
+  candidates <- stage0_audit_eukaryote_qc(
+    candidates, baseline_index, distinct_alternatives, complete_index
+  )
+
+  selected_index <- baseline_index
+  if (isTRUE(allow_qc_override) && length(distinct_alternatives)) {
+    override <- stage0_apply_busco_override(
+      candidates, baseline_index, distinct_alternatives, complete_index
+    )
+    candidates <- override$candidates
+    selected_index <- override$selected_index
+  }
+
+  list(candidates = candidates, selected_index = selected_index)
+}
+
+rank_assembly_candidates <- function(meta, min_rel_contig_n50 = 0,
+                                     shortlist_k = 3, external_qc = NULL,
+                                     allow_qc_override = FALSE) {
+  if (length(shortlist_k) != 1L || is.na(shortlist_k) || shortlist_k < 1) {
+    stop("shortlist_k must be a positive integer or Inf.", call. = FALSE)
+  }
+  candidates <- stage0_prepare_candidates(
+    meta,
+    min_rel_contig_n50,
+    external_qc,
+    allow_qc_override = allow_qc_override
+  )
+  candidates <- stage0_initialize_ranking_state(candidates)
 
   for (species in unique(candidates$species)) {
     eligible_index <- which(candidates$species == species & candidates$eligible)
@@ -540,167 +752,12 @@ rank_assembly_candidates <- function(meta, min_rel_contig_n50 = 0,
     candidates$selected[baseline_index] <- TRUE
 
     if (eligible$selection_profile[1] == "eukaryote") {
-      complete_index <- shortlist_index[
-        stage0_complete_busco(candidates[shortlist_index, , drop = FALSE])
-      ]
-      if (length(complete_index)) {
-        qc_order <- stage0_qc_order(
-          candidates[complete_index, , drop = FALSE]
-        )
-        ordered_qc_index <- complete_index[qc_order]
-        preferred_key <- candidates$assembly_equivalence_key[ordered_qc_index[1]]
-        preferred_representative <- final_index[
-          candidates$assembly_equivalence_key[final_index] == preferred_key
-        ][1]
-        candidates$qc_preferred[preferred_representative] <- TRUE
-      }
-
-      distinct_alternatives <- setdiff(
-        shortlist_index[
-          candidates$assembly_equivalence_key[shortlist_index] !=
-            candidates$assembly_equivalence_key[baseline_index]
-        ],
-        baseline_index
+      qc_result <- stage0_process_eukaryote_qc(
+        candidates, shortlist_index, final_index, baseline_index,
+        allow_qc_override = allow_qc_override
       )
-      baseline_has_qc <- identical(
-        tolower(trimws(as.character(candidates$qc_busco_mode[baseline_index]))),
-        "genome"
-      )
-      baseline_has_external_evidence <- stage0_has_external_evidence(
-        candidates[baseline_index, , drop = FALSE]
-      )[1]
-      baseline_complete <- baseline_index %in% complete_index
-
-      if (baseline_has_qc &&
-          !is.na(candidates$qc_busco_complete[baseline_index]) &&
-          candidates$qc_busco_complete[baseline_index] < 90) {
-        candidates <- stage0_add_review_reason(
-          candidates, baseline_index, "baseline_busco_complete_below_90"
-        )
-      }
-      if (baseline_has_qc &&
-          !is.na(candidates$qc_busco_duplicated[baseline_index]) &&
-          candidates$qc_busco_duplicated[baseline_index] > 5) {
-        candidates <- stage0_add_review_reason(
-          candidates, baseline_index, "baseline_busco_duplicated_above_5"
-        )
-      }
-
-      if (length(distinct_alternatives)) {
-        for (alternative_index in distinct_alternatives) {
-          alternative_has_qc <- identical(
-            tolower(trimws(as.character(
-              candidates$qc_busco_mode[alternative_index]
-            ))),
-            "genome"
-          )
-          alternative_has_external_evidence <- stage0_has_external_evidence(
-            candidates[alternative_index, , drop = FALSE]
-          )[1]
-          alternative_complete <- alternative_index %in% complete_index
-
-          if (xor(
-            baseline_has_external_evidence,
-            alternative_has_external_evidence
-          )) {
-            candidates <- stage0_add_review_reason(
-              candidates, alternative_index, "one_sided_external_qc"
-            )
-          }
-          if (xor(baseline_has_qc, alternative_has_qc)) {
-            candidates <- stage0_add_review_reason(
-              candidates, alternative_index, "incomplete_busco_comparison"
-            )
-          } else if (baseline_has_qc && alternative_has_qc &&
-                     (!baseline_complete || !alternative_complete)) {
-            candidates <- stage0_add_review_reason(
-              candidates, alternative_index, "incomplete_busco_comparison"
-            )
-          } else if (baseline_complete && alternative_complete &&
-                     stage0_same_busco_run(
-                       candidates, baseline_index, alternative_index
-                     )) {
-            if (candidates$qc_busco_single[alternative_index] >
-                candidates$qc_busco_single[baseline_index]) {
-              candidates <- stage0_add_review_reason(
-                candidates, alternative_index,
-                "alternative_higher_single_copy"
-              )
-            }
-            if (candidates$qc_busco_complete[alternative_index] >
-                  candidates$qc_busco_complete[baseline_index] &&
-                candidates$qc_busco_duplicated[alternative_index] >
-                  candidates$qc_busco_duplicated[baseline_index]) {
-              candidates <- stage0_add_review_reason(
-                candidates, alternative_index,
-                "complete_gain_duplication_confounded"
-              )
-            }
-          }
-        }
-      }
-
-      if (isTRUE(allow_qc_override) && length(distinct_alternatives)) {
-        override_candidates <- integer()
-        for (alternative_index in distinct_alternatives) {
-          alternative_complete <- alternative_index %in% complete_index
-          blockers <- character()
-          if (!baseline_complete) {
-            blockers <- c(blockers, "baseline_incomplete_busco")
-          }
-          if (!alternative_complete) {
-            blockers <- c(blockers, "incomplete_busco_components")
-          }
-          if (baseline_complete && alternative_complete) {
-            if (!stage0_same_busco_run(
-              candidates, baseline_index, alternative_index
-            )) {
-              blockers <- c(blockers, "incomparable_busco_run")
-            } else {
-              if (candidates$qc_busco_single[alternative_index] <=
-                  candidates$qc_busco_single[baseline_index]) {
-                blockers <- c(blockers, "not_higher_single_copy")
-              }
-              if (candidates$qc_busco_duplicated[alternative_index] >
-                  candidates$qc_busco_duplicated[baseline_index]) {
-                blockers <- c(blockers, "higher_duplicated")
-              }
-              if (candidates$qc_busco_fragmented[alternative_index] >
-                  candidates$qc_busco_fragmented[baseline_index]) {
-                blockers <- c(blockers, "higher_fragmented")
-              }
-              if (candidates$qc_busco_missing[alternative_index] >
-                  candidates$qc_busco_missing[baseline_index]) {
-                blockers <- c(blockers, "higher_missing")
-              }
-            }
-          }
-          if (length(blockers)) {
-            candidates$override_block_reason[alternative_index] <- paste(
-              unique(blockers), collapse = ";"
-            )
-          } else {
-            override_candidates <- c(override_candidates, alternative_index)
-          }
-        }
-        if (length(override_candidates)) {
-          override_order <- stage0_qc_order(
-            candidates[override_candidates, , drop = FALSE]
-          )
-          override_index <- override_candidates[override_order[1]]
-          candidates$selected[baseline_index] <- FALSE
-          candidates$selected[override_index] <- TRUE
-          candidates$selection_basis[override_index] <-
-            "explicit_busco_override"
-          candidates$override_applied[override_index] <- TRUE
-          selected_index <- override_index
-          other_override_candidates <- setdiff(
-            override_candidates, override_index
-          )
-          candidates$override_block_reason[other_override_candidates] <-
-            "not_top_override_candidate"
-        }
-      }
+      candidates <- qc_result$candidates
+      selected_index <- qc_result$selected_index
     }
     final_order <- c(selected_index, final_index[final_index != selected_index])
     candidates$final_rank[final_order] <- seq_along(final_order)
