@@ -130,10 +130,14 @@ def read_lines(path: str) -> List[str]:
     return list(dict.fromkeys(items))
 
 
+def normalize_organism_name(organism_name: str) -> str:
+    return " ".join(organism_name.split())
+
+
 def split_organism_name(organism_name: str) -> Dict[str, str]:
-    tokens = organism_name.split()
+    species = normalize_organism_name(organism_name)
+    tokens = species.split()
     genus = tokens[0] if tokens else ""
-    species = " ".join(tokens)
     return {"genus": genus, "species": species}
 
 

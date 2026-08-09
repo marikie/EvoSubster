@@ -151,5 +151,39 @@ class StripNewickAccessionsCliTest(unittest.TestCase):
         self.assertEqual(tree_path.read_text(encoding="utf-8"), source)
 
 
+class StripNewickAccessionsInterfaceTest(unittest.TestCase):
+    def test_scan_leaf_segment_exposes_logical_label_and_source_positions(self):
+        text = "A_a[inside]_GCA_000000001.1:0.2"
+
+        scan = CONVERTER.scan_leaf_segment(text, 0)
+
+        self.assertEqual(scan.end, text.index(":"))
+        self.assertEqual(scan.logical_label, "A_a_GCA_000000001.1")
+        self.assertTrue(scan.has_label)
+        self.assertEqual(
+            "".join(text[position] for position in scan.source_positions),
+            scan.logical_label,
+        )
+
+    def test_rewrite_newick_returns_named_counts(self):
+        result = CONVERTER.rewrite_newick("(A_a_GCA_000000001.1:1,B_b:2);\n")
+
+        self.assertIsInstance(result, CONVERTER.ConversionResult)
+        self.assertEqual(result.text, "(A_a:1,B_b:2);\n")
+        self.assertEqual((result.converted, result.leaf_count), (1, 2))
+
+    def test_convert_file_owns_path_validation(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        tree_path = Path(temp_dir.name) / "tree.nwk"
+        tree_path.write_text("(A_a_GCA_000000001.1:1,B_b:2);\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(
+            CONVERTER.CliUsageError,
+            "--input and --output must be different paths",
+        ):
+            CONVERTER.convert_file(tree_path, tree_path, overwrite=True)
+
+
 if __name__ == "__main__":
     unittest.main()

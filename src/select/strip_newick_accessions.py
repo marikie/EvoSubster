@@ -7,12 +7,32 @@ import os
 import re
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Tuple
 
 
 ACCESSION_SUFFIX_RE = re.compile(r"_(?:GCA|GCF)_[0-9]+\.[0-9]+$")
 LEAF_SEGMENT_END = set("():,;")
+
+
+@dataclass(frozen=True)
+class LeafScan:
+    end: int
+    logical_label: str
+    source_positions: Tuple[int, ...]
+    has_label: bool
+
+
+@dataclass(frozen=True)
+class ConversionResult:
+    text: str
+    converted: int
+    leaf_count: int
+
+
+class CliUsageError(ValueError):
+    """Invalid CLI path configuration that retains exit code 2."""
 
 
 def consume_comment(text: str, start: int) -> int:
@@ -37,32 +57,45 @@ def consume_quoted_label(text: str, start: int) -> int:
     raise ValueError("unterminated quoted Newick label")
 
 
-def rewrite_leaf_segment(segment: str) -> Tuple[str, bool, bool]:
-    """Strip a logical leaf-label suffix while retaining comments and quoting."""
+def scan_leaf_segment(text: str, start: int) -> LeafScan:
+    """Scan a leaf-label region and retain its logical source positions."""
     logical_characters = []
     source_positions = []
-    index = 0
+    index = start
 
-    while index < len(segment):
-        char = segment[index]
+    while index < len(text):
+        char = text[index]
+        if char in LEAF_SEGMENT_END:
+            break
         if char == "[":
-            index = consume_comment(segment, index)
+            index += 1
+            while index < len(text) and text[index] != "]":
+                index += 1
+            if index == len(text):
+                raise ValueError("unterminated Newick comment")
+            index += 1
             continue
         if char == "'":
-            end = consume_quoted_label(segment, index)
-            quoted_index = index + 1
-            while quoted_index < end - 1:
-                logical_characters.append(segment[quoted_index])
-                source_positions.append(quoted_index)
+            index += 1
+            while index < len(text):
+                quoted_char = text[index]
+                if quoted_char != "'":
+                    logical_characters.append(quoted_char)
+                    source_positions.append(index)
+                    index += 1
+                    continue
                 if (
-                    segment[quoted_index] == "'"
-                    and quoted_index + 1 < end - 1
-                    and segment[quoted_index + 1] == "'"
+                    index + 1 < len(text)
+                    and text[index + 1] == "'"
                 ):
-                    quoted_index += 2
-                else:
-                    quoted_index += 1
-            index = end
+                    logical_characters.append(quoted_char)
+                    source_positions.append(index)
+                    index += 2
+                    continue
+                index += 1
+                break
+            else:
+                raise ValueError("unterminated quoted Newick label")
             continue
         if not char.isspace():
             logical_characters.append(char)
@@ -70,35 +103,25 @@ def rewrite_leaf_segment(segment: str) -> Tuple[str, bool, bool]:
         index += 1
 
     logical_label = "".join(logical_characters)
-    match = ACCESSION_SUFFIX_RE.search(logical_label)
+    return LeafScan(index, logical_label, tuple(source_positions), bool(logical_label))
+
+
+def rewrite_leaf_segment(text: str, start: int, scan: LeafScan) -> Tuple[str, bool]:
+    """Strip a scanned logical leaf-label suffix while retaining its source text."""
+    match = ACCESSION_SUFFIX_RE.search(scan.logical_label)
     if match is None:
-        return segment, False, bool(logical_label)
+        return text[start : scan.end], False
 
-    removed_positions = set(source_positions[match.start() : match.end()])
+    removed_positions = set(scan.source_positions[match.start() : match.end()])
     rewritten = "".join(
-        char for position, char in enumerate(segment) if position not in removed_positions
+        char
+        for position, char in enumerate(text[start : scan.end], start)
+        if position not in removed_positions
     )
-    return rewritten, True, True
+    return rewritten, True
 
 
-def consume_leaf_segment(text: str, start: int) -> int:
-    """Return the end of a leaf-label region, including embedded comments."""
-    index = start
-    while index < len(text):
-        char = text[index]
-        if char in LEAF_SEGMENT_END:
-            break
-        if char == "[":
-            index = consume_comment(text, index)
-            continue
-        if char == "'":
-            index = consume_quoted_label(text, index)
-            continue
-        index += 1
-    return index
-
-
-def rewrite_newick(text: str) -> Tuple[str, int, int]:
+def rewrite_newick(text: str) -> ConversionResult:
     """Rewrite leaf labels while preserving all other Newick text verbatim."""
     output = []
     index = 0
@@ -128,15 +151,15 @@ def rewrite_newick(text: str) -> Tuple[str, int, int]:
             continue
 
         if expecting_leaf:
-            end = consume_leaf_segment(text, index)
-            segment, changed, has_label = rewrite_leaf_segment(text[index:end])
+            scan = scan_leaf_segment(text, index)
+            segment, changed = rewrite_leaf_segment(text, index, scan)
             output.append(segment)
-            if has_label:
+            if scan.has_label:
                 leaf_count += 1
                 converted += int(changed)
                 expecting_leaf = False
-            if end > index:
-                index = end
+            if scan.end > index:
+                index = scan.end
                 continue
 
         if char == "[":
@@ -154,7 +177,7 @@ def rewrite_newick(text: str) -> Tuple[str, int, int]:
         output.append(char)
         index += 1
 
-    return "".join(output), converted, leaf_count
+    return ConversionResult("".join(output), converted, leaf_count)
 
 
 def read_text(path: Path) -> str:
@@ -185,6 +208,25 @@ def write_text_atomic(path: Path, text: str, overwrite: bool) -> None:
             temporary_path.unlink()
 
 
+def convert_file(input_path: Path, output_path: Path, overwrite: bool) -> ConversionResult:
+    """Validate, convert, and atomically publish a Newick file."""
+    if input_path.resolve(strict=False) == output_path.resolve(strict=False):
+        raise CliUsageError("--input and --output must be different paths.")
+    if not input_path.is_file():
+        raise CliUsageError(f"input Newick file does not exist: {input_path}")
+    if not output_path.parent.is_dir():
+        raise CliUsageError(f"output directory does not exist: {output_path.parent}")
+
+    result = rewrite_newick(read_text(input_path))
+    try:
+        write_text_atomic(output_path, result.text, overwrite=overwrite)
+    except FileExistsError as exc:
+        raise CliUsageError(
+            f"output file already exists: {output_path} (use --force to overwrite)"
+        ) from exc
+    return result
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -205,31 +247,18 @@ def main() -> int:
     input_path = args.input.expanduser()
     output_path = args.output.expanduser()
 
-    if input_path.resolve(strict=False) == output_path.resolve(strict=False):
-        print("error: --input and --output must be different paths.", file=sys.stderr)
-        return 2
-    if not input_path.is_file():
-        print(f"error: input Newick file does not exist: {input_path}", file=sys.stderr)
-        return 2
-    if not output_path.parent.is_dir():
-        print(f"error: output directory does not exist: {output_path.parent}", file=sys.stderr)
-        return 2
     try:
-        rewritten, converted, leaf_count = rewrite_newick(read_text(input_path))
-        write_text_atomic(output_path, rewritten, overwrite=args.force)
-    except FileExistsError:
-        print(
-            f"error: output file already exists: {output_path} (use --force to overwrite)",
-            file=sys.stderr,
-        )
+        result = convert_file(input_path, output_path, overwrite=args.force)
+    except CliUsageError as exc:
+        print(f"error: {exc}", file=sys.stderr)
         return 2
     except (OSError, UnicodeError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    unchanged = leaf_count - converted
+    unchanged = result.leaf_count - result.converted
     print(
-        f"Converted {converted} of {leaf_count} leaf labels; output: {output_path}",
+        f"Converted {result.converted} of {result.leaf_count} leaf labels; output: {output_path}",
         file=sys.stderr,
     )
     if unchanged:

@@ -46,6 +46,12 @@ LEGACY_COLUMNS = (
 
 
 class ReportToRowTest(unittest.TestCase):
+    def test_normalizes_complete_organism_name_whitespace(self):
+        self.assertEqual(
+            f.normalize_organism_name("  Genus\talpha  strain-X "),
+            "Genus alpha strain-X",
+        )
+
     def test_extracts_quality_fields_for_stage0_ranking(self):
         report = {
             "accession": "GCF_000000001.1",

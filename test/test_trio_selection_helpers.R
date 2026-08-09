@@ -44,6 +44,12 @@ check(
   "species parser preserves every component of accession-free taxon labels"
 )
 
+check(
+  identical(taxon_from_label("'Chaunax_sp._Z400'"), "Chaunax sp. Z400") &&
+    is.na(taxon_from_label("Chaunax_sp._Z400_GCA_037577475")),
+  "scalar taxon parser preserves accepted and rejected label behavior"
+)
+
 malformed <- species_from_label(c(
   "Homo",
   "_",

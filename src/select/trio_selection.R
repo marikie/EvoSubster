@@ -198,19 +198,21 @@ ACCESSION_RE <- "(^|_)GC[AF]_[0-9]+(\\.[0-9]+)?$"
 
 # "Chaunax_sp._Z400" -> "Chaunax sp. Z400". Preserve all taxon-name components so
 # strains, subspecies, and informal species identifiers remain distinct Stage-0 taxa.
+taxon_from_label <- function(name) {
+  if (!is.na(name) && grepl("^'.*'$", name)) {
+    name <- substr(name, 2, nchar(name) - 1)
+    name <- gsub("''", "'", name, fixed = TRUE)
+  }
+  if (is.na(name) || grepl("[[:space:]]", name) || grepl(ACCESSION_RE, name)) {
+    return(NA_character_)
+  }
+  tokens <- strsplit(name, "_", fixed = TRUE)[[1]]
+  if (length(tokens) >= 2 && all(nzchar(tokens))) paste(tokens, collapse = " ")
+  else NA_character_
+}
+
 species_from_label <- function(labels) {
-  vapply(labels, function(name) {
-    if (!is.na(name) && grepl("^'.*'$", name)) {
-      name <- substr(name, 2, nchar(name) - 1)
-      name <- gsub("''", "'", name, fixed = TRUE)
-    }
-    if (is.na(name) || grepl("[[:space:]]", name) || grepl(ACCESSION_RE, name)) {
-      return(NA_character_)
-    }
-    tokens <- strsplit(name, "_", fixed = TRUE)[[1]]
-    if (length(tokens) >= 2 && all(nzchar(tokens))) paste(tokens, collapse = " ")
-    else NA_character_
-  }, character(1), USE.NAMES = FALSE)
+  vapply(labels, taxon_from_label, character(1), USE.NAMES = FALSE)
 }
 
 # Short names must be stable per species and must NOT carry a trio slot number
