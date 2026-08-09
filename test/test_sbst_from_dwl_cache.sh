@@ -56,11 +56,6 @@ else
 fi
 EOF
 
-cat > "$stub_bin/python" <<'EOF'
-#!/bin/bash
-exec python3 "$@"
-EOF
-
 cat > "$fixture_repo/src/dwl_organism.sh" <<'EOF'
 #!/bin/bash
 acc="$1"
@@ -102,7 +97,6 @@ EOF
 
 chmod +x \
     "$stub_bin/Rscript" \
-    "$stub_bin/python" \
     "$fixture_repo/src/dwl_organism.sh" \
     "$fixture_repo/src/sbst.sh"
 
@@ -115,6 +109,12 @@ check "wrapper help describes the audit/optional-override Stage 0 policy" \
 check "wrapper help documents complete Newick taxon labels and the legacy converter" \
     sh -c 'test "$1" -eq 0 && grep -Fq -- "accession-free complete taxon names" "$2" && grep -Fq -- "strip_newick_accessions.py" "$2"' \
     sh "$help_exit" "$tmp_dir/help.log"
+check "pipeline shell scripts use the documented python3 runtime" \
+    sh -c '! grep -En "(^|[[:space:]])python([[:space:]]|$)" "$@"' \
+    sh \
+    "$ROOT_DIR/src/sbst_fromDwl.sh" \
+    "$ROOT_DIR/src/sbst.sh" \
+    "$ROOT_DIR/src/generate_tsv_files.sh"
 
 tree_file="$tmp_dir/tree.nwk"
 printf '((A,B),C);\n' > "$tree_file"

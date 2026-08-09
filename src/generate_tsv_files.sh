@@ -8,8 +8,8 @@ generate_tsv() {
     local script=$4
 
     if [ ! -e "$output2" ] || [ ! -e "$output3" ]; then
-        echo "time python $script $input_file -o2 ./$output2 -o3 ./$output3"
-        time python "$script" "$input_file" -o2 "./$output2" -o3 "./$output3"
+        echo "time python3 $script $input_file -o2 ./$output2 -o3 ./$output3"
+        time python3 "$script" "$input_file" -o2 "./$output2" -o3 "./$output3"
     else
         echo "$output2 and $output3 already exist"
     fi

@@ -454,8 +454,8 @@ bash "$ALIGN_DIR/mafjoin.sh" "$o2o12" "$o2o13" "$joinedFile"
 # Calculate the substitution ratio without considering neighboring bases
 echo "$(get_config '.messages.sbst_ratio')"
 if [ ! -e "$sbstRatio" ]; then
-echo "time python $METRICS_DIR/subRatio.py $joinedFile >$sbstRatio"
-time python "$METRICS_DIR/subRatio.py" "$joinedFile" >"$sbstRatio"
+echo "time python3 $METRICS_DIR/subRatio.py $joinedFile >$sbstRatio"
+time python3 "$METRICS_DIR/subRatio.py" "$joinedFile" >"$sbstRatio"
 else
     echo "$sbstRatio already exists"
 fi
