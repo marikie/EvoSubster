@@ -439,23 +439,32 @@ fi
 # one2one for org1-org2
 echo "$(get_config '.messages.one2one' | sed "s/{org1_short}/$org1ShortName/g" | sed "s/{org2_short}/$org2ShortName/g")"
 echo "bash $ALIGN_DIR/one2one.sh $DATE $org1FASTA $org2FASTA ${imf}/${dbName} $train12 $o2o12"
-bash "$ALIGN_DIR/one2one.sh" "$DATE" "$org1FASTA" "$org2FASTA" "${imf}/${dbName}" "$train12" "$o2o12"
+bash "$ALIGN_DIR/one2one.sh" "$DATE" "$org1FASTA" "$org2FASTA" "${imf}/${dbName}" "$train12" "$o2o12" || exit 1
 
 # one2one for org1-org3
 echo "$(get_config '.messages.one2one' | sed "s/{org1_short}/$org1ShortName/g" | sed "s/{org2_short}/$org3ShortName/g")"
 echo "bash $ALIGN_DIR/one2one.sh $DATE $org1FASTA $org3FASTA ${imf}/${dbName} $train13 $o2o13"
-bash "$ALIGN_DIR/one2one.sh" "$DATE" "$org1FASTA" "$org3FASTA" "${imf}/${dbName}" "$train13" "$o2o13"
+bash "$ALIGN_DIR/one2one.sh" "$DATE" "$org1FASTA" "$org3FASTA" "${imf}/${dbName}" "$train13" "$o2o13" || exit 1
 
 # maf-join the two .maf files
 echo "$(get_config '.messages.maf_join')"
 echo "bash $ALIGN_DIR/mafjoin.sh $o2o12 $o2o13 $joinedFile"
-bash "$ALIGN_DIR/mafjoin.sh" "$o2o12" "$o2o13" "$joinedFile"
+bash "$ALIGN_DIR/mafjoin.sh" "$o2o12" "$o2o13" "$joinedFile" || exit 1
 
 # Calculate the substitution ratio without considering neighboring bases
 echo "$(get_config '.messages.sbst_ratio')"
-if [ ! -e "$sbstRatio" ]; then
+ratio_complete="${sbstRatio}.complete"
+if [ ! -s "$sbstRatio" ] || [ ! -e "$ratio_complete" ]; then
 echo "time python3 $METRICS_DIR/subRatio.py $joinedFile >$sbstRatio"
-time python3 "$METRICS_DIR/subRatio.py" "$joinedFile" >"$sbstRatio"
+ratio_tmp="${sbstRatio}.tmp.$$"
+if time python3 "$METRICS_DIR/subRatio.py" "$joinedFile" >"$ratio_tmp" \
+        && [ -s "$ratio_tmp" ]; then
+    mv "$ratio_tmp" "$sbstRatio"
+    : > "$ratio_complete"
+else
+    rm -f "$ratio_tmp"
+    exit 1
+fi
 else
     echo "$sbstRatio already exists"
 fi
@@ -496,7 +505,7 @@ if [ "$org1GFF" != "NO_GFF_FILE" ]; then
 		"$org2tsv_ncds" \
 		"$org3tsv_ncds" \
 		"$org2_dinuc_tsv_ncds" \
-		"$org3_dinuc_tsv_ncds"
+		"$org3_dinuc_tsv_ncds" || exit 1
 else
 	echo "There is no gff file of org1"
 	# Generate all TSV files (no ncds files)
@@ -506,7 +515,7 @@ else
 		"$org3tsv" \
 		"$COUNT_DIR" \
 		"$org2_dinuc_tsv" \
-		"$org3_dinuc_tsv"
+		"$org3_dinuc_tsv" || exit 1
 fi
 
 # Generate all graphs
@@ -521,6 +530,6 @@ bash "$SCRIPT_DIR/generate_graphs.sh" \
     "$org3_dinuc_tsv_ncds" \
     "$R_DIR" \
     "$figs_org2" \
-    "$figs_org3"
+    "$figs_org3" || exit 1
 
 echo "[[ This is the end of the pipeline ]]"

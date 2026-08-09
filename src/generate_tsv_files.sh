@@ -1,15 +1,28 @@
 #!/bin/bash
 
+set -e
+
 # Function to generate TSV files
 generate_tsv() {
     local input_file=$1
     local output2=$2
     local output3=$3
     local script=$4
+    local complete_marker="${output2}.complete"
 
-    if [ ! -e "$output2" ] || [ ! -e "$output3" ]; then
+    if [ ! -s "$output2" ] || [ ! -s "$output3" ] || [ ! -e "$complete_marker" ]; then
+        local tmp2="${output2}.tmp.$$"
+        local tmp3="${output3}.tmp.$$"
         echo "time python3 $script $input_file -o2 ./$output2 -o3 ./$output3"
-        time python3 "$script" "$input_file" -o2 "./$output2" -o3 "./$output3"
+        if time python3 "$script" "$input_file" -o2 "$tmp2" -o3 "$tmp3" \
+                && [ -s "$tmp2" ] && [ -s "$tmp3" ]; then
+            mv "$tmp2" "$output2"
+            mv "$tmp3" "$output3"
+            : > "$complete_marker"
+        else
+            rm -f "$tmp2" "$tmp3"
+            return 1
+        fi
     else
         echo "$output2 and $output3 already exist"
     fi
