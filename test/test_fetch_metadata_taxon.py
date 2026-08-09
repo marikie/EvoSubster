@@ -1,6 +1,11 @@
+import contextlib
+import io
 import os
 import sys
+import time
 import unittest
+import urllib.error
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "select"))
 
@@ -156,6 +161,32 @@ class ReportToRowTest(unittest.TestCase):
 
 
 class TaxonRequestTest(unittest.TestCase):
+    def test_retries_a_transient_bad_gateway_response(self):
+        transient_error = urllib.error.HTTPError(
+            f.DATASET_REPORT_URL,
+            502,
+            "Bad Gateway",
+            {},
+            io.BytesIO(b"temporary upstream failure"),
+        )
+        success_response = io.BytesIO(b'{"reports": []}')
+
+        with mock.patch.object(
+            f.urllib.request,
+            "urlopen",
+            side_effect=[transient_error, success_response],
+        ) as urlopen, mock.patch.object(time, "sleep"):
+            with contextlib.redirect_stderr(io.StringIO()):
+                try:
+                    response = f.post_json(f.DATASET_REPORT_URL, {"taxons": ["9606"]})
+                except urllib.error.HTTPError as exc:
+                    self.fail(
+                        f"post_json did not retry the transient HTTP {exc.code} response"
+                    )
+
+        self.assertEqual(response, {"reports": []})
+        self.assertEqual(urlopen.call_count, 2)
+
     def test_requests_current_non_mag_candidates_for_local_quality_audit(self):
         payload = f.build_taxon_payload(["9606", "562"])
         self.assertEqual(

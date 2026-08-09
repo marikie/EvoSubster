@@ -21,6 +21,7 @@ import argparse
 import csv
 import json
 import sys
+import time
 import urllib.error
 import urllib.request
 from typing import Dict, Iterable, List
@@ -30,6 +31,9 @@ DATASET_REPORT_URL = "https://api.ncbi.nlm.nih.gov/datasets/v2/genome/dataset_re
 # The v2 endpoint defaults to page_size=20 and truncates *silently*, so the page
 # size must be set explicitly and the response paged until it is exhausted.
 PAGE_SIZE = 1000
+MAX_REQUEST_ATTEMPTS = 4
+RETRY_DELAY_SECONDS = 2
+RETRYABLE_HTTP_STATUS = frozenset({429, 500, 502, 503, 504})
 
 COLUMNS = (
     "accession",
@@ -77,8 +81,25 @@ def post_json(url: str, payload: dict) -> dict:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(request) as response:
-        return json.loads(response.read().decode("utf-8"))
+    for attempt in range(1, MAX_REQUEST_ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(request) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            if exc.code not in RETRYABLE_HTTP_STATUS or attempt == MAX_REQUEST_ATTEMPTS:
+                raise
+        except urllib.error.URLError:
+            if attempt == MAX_REQUEST_ATTEMPTS:
+                raise
+
+        print(
+            "warning: transient NCBI request failure; retrying "
+            f"({attempt + 1}/{MAX_REQUEST_ATTEMPTS})...",
+            file=sys.stderr,
+        )
+        time.sleep(RETRY_DELAY_SECONDS)
+
+    raise AssertionError("unreachable")
 
 
 def fetch_reports(accessions: List[str]) -> List[dict]:
