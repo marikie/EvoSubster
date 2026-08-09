@@ -197,6 +197,13 @@ This script:
 - Computes GC content for all three genomes.
 - Runs `last_train.sh` on every pair of the three species to calculate their substitution percent identity.
 - Produces paired `one2one` alignments for `org1` vs `org2` and `org1` vs `org3`.
+- Builds a separate `RY128` LAST database for these close-genome alignments,
+  following LAST's whole-genome recipe and reducing repeat-driven memory use.
+  Set `LASTDB_ALIGNMENT_SEED=RY4` only when greater sensitivity for more distant
+  genomes is needed and sufficient memory is available. `LASTAL_QUERY_BATCH_SIZE`
+  (default `1M`) and `LASTAL_SPLIT_MEMORY` (default `8T`) are also configurable;
+  the pipeline fails instead of accepting an alignment if LAST reports that a
+  sequence was skipped because the split-memory limit was too low.
 - Joins the MAFs into a three-way alignment.
 - Calls Python utilities to count DNA-base substitutions and create TSV summaries.
 - Uses the outgroup GFF, when available, to cut CDS regions, count DNA-base substitutions and generate non-coding TSV summaries.

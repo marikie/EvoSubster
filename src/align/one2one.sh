@@ -13,23 +13,49 @@ dbBasename=$(basename "$dbDir")
 
 threadNum=${THREAD_NUM:-8}
 queryBatchSize=${LASTAL_QUERY_BATCH_SIZE:-1M}
-splitMemory=${LASTAL_SPLIT_MEMORY:-8G}
+splitMemory=${LASTAL_SPLIT_MEMORY:-8T}
+seedScheme=${LASTDB_ALIGNMENT_SEED-RY128}
+
+case "$seedScheme" in
+	"")
+		echo "ERROR: LASTDB_ALIGNMENT_SEED must not be empty." >&2
+		exit 1
+		;;
+	*[!A-Za-z0-9._-]*)
+		echo "ERROR: LASTDB_ALIGNMENT_SEED contains unsupported characters: $seedScheme" >&2
+		exit 1
+		;;
+esac
+
+alignmentDbDir="${dbDir}.seed-${seedScheme}"
+alignmentDbBasename=$(basename "$alignmentDbDir")
 # lastdb
 echo "---lastdb"
-if [ ! -d "$dbDir" ]; then
-	echo "making lastdb"
-	mkdir -p "$dbDir"
-	(cd "$dbDir" && echo "time lastdb -P${threadNum} -c -uRY4 $dbBasename $org1FASTA" && \
-		time lastdb -P${threadNum} -c -uRY4 "$dbBasename" "$org1FASTA") || exit 1
+if [ ! -d "$alignmentDbDir" ]; then
+	echo "making whole-genome alignment lastdb with seed $seedScheme"
+	alignmentDbTmp="${alignmentDbDir}.tmp.$$"
+	rm -rf "$alignmentDbTmp"
+	mkdir -p "$alignmentDbTmp"
+	if (cd "$alignmentDbTmp" && \
+		echo "time lastdb -P${threadNum} -c -u${seedScheme} $alignmentDbBasename $org1FASTA" && \
+		time lastdb -P"${threadNum}" -c -u"${seedScheme}" "$alignmentDbBasename" "$org1FASTA"); then
+		mv "$alignmentDbTmp" "$alignmentDbDir"
+	else
+		rm -rf "$alignmentDbTmp"
+		exit 1
+	fi
 else
-	echo "$dbDir already exists"
+	echo "$alignmentDbDir already exists"
 fi
 # -P4: makes it faster by using 4 threads (This has no effect on the results.)
 # -c: Soft-mask lowercase letters.  This means that, when we compare
 #     these sequences to some other sequences using lastal, lowercase
 #     letters will be excluded from initial matches.  This will apply
 #     to lowercase letters in both sets of sequences.
-# -uRY4: selects a seeding scheme that reduces the run time and memory use, but also reduces sensitivity.
+# -uRY128: follows LAST's whole-genome recipe for close genomes. It avoids the
+# candidate explosion that RY4 can cause in large, repetitive chromosomes.
+# Set LASTDB_ALIGNMENT_SEED=RY4 when extra sensitivity is required for more
+# distant genomes and sufficient memory is available.
 
 # last-train
 echo "--last-train"
@@ -53,12 +79,23 @@ o2omaf_dir=$(dirname "$o2omaf")
 o2omaf_sorted="${o2omaf_dir}/${o2omaf_base}_sorted.maf"
 if [ ! -e "$o2omaf" ] && [ ! -e "$o2omaf_sorted" ]; then
 	o2omaf_tmp="${o2omaf}.raw"
-	echo "time lastal -P${threadNum} -i $queryBatchSize -H1 -C2 --split-f=MAF+ --split-b=$splitMemory -p $trainFile $dbDir/$dbBasename $org2FASTA | last-split -r >$o2omaf_tmp"
-	if ! time lastal -P"${threadNum}" -i "$queryBatchSize" -H1 -C2 --split-f=MAF+ --split-b="$splitMemory" -p "$trainFile" "$dbDir/$dbBasename" "$org2FASTA" \
-			| last-split -r >"$o2omaf_tmp"; then
+	lastal_stderr="${o2omaf}.lastal.stderr.$$"
+	echo "time lastal -P${threadNum} -i $queryBatchSize -H1 -C2 --split-f=MAF+ --split-b=$splitMemory -p $trainFile $alignmentDbDir/$alignmentDbBasename $org2FASTA | last-split -r >$o2omaf_tmp"
+	if ! { time lastal -P"${threadNum}" -i "$queryBatchSize" -H1 -C2 --split-f=MAF+ --split-b="$splitMemory" -p "$trainFile" "$alignmentDbDir/$alignmentDbBasename" "$org2FASTA" \
+			| last-split -r >"$o2omaf_tmp"; } 2>"$lastal_stderr"; then
+		cat "$lastal_stderr" >&2
+		rm -f "$lastal_stderr"
 		rm -f "$o2omaf_tmp"
 		exit 1
 	fi
+	cat "$lastal_stderr" >&2
+	if grep -Fq "skipping sequence" "$lastal_stderr"; then
+		echo "ERROR: LAST skipped one or more sequences because LASTAL_SPLIT_MEMORY=$splitMemory was too low." >&2
+		echo "Increase LASTAL_SPLIT_MEMORY; incomplete alignments are not accepted." >&2
+		rm -f "$lastal_stderr" "$o2omaf_tmp"
+		exit 1
+	fi
+	rm -f "$lastal_stderr"
 	echo "time maf-linked $o2omaf_tmp >$o2omaf"
 	o2omaf_linked_tmp="${o2omaf}.tmp.$$"
 	if time maf-linked "$o2omaf_tmp" >"$o2omaf_linked_tmp" \
