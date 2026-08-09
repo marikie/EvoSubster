@@ -572,7 +572,11 @@ prune_to_best_assembly <- function(tree, out_dir, min_rel_contig_n50 = 0,
   log_stage("  ", review_species, "species require assembly review ->", review_file)
 
   # Keep one tip per species (first in tree order); duplicate-species tips are dropped.
-  leaves <- tibble::tibble(tip = tree$tip.label, species = tip_species) %>%
+  leaves <- tibble::tibble(
+    tip = tree$tip.label,
+    species = tip_species,
+    .tip_index = seq_along(tree$tip.label)
+  ) %>%
     inner_join(best, by = "species") %>%
     group_by(species) %>%
     slice_head(n = 1) %>%
@@ -615,8 +619,9 @@ prune_to_best_assembly <- function(tree, out_dir, min_rel_contig_n50 = 0,
   log_stage("  ", nrow(meta), "assembly records ->", nrow(ranked$shortlist),
             "shortlisted ->", nrow(leaves), "species kept", gate_note)
 
-  pruned <- drop.tip(tree, setdiff(tree$tip.label, leaves$tip))
+  pruned <- drop.tip(tree, setdiff(seq_along(tree$tip.label), leaves$.tip_index))
   leaves <- leaves[match(pruned$tip.label, leaves$tip), ]
+  leaves$.tip_index <- NULL
   leaves$short_name <- make_short_names(leaves$species)
 
   list(tree = pruned, leaves = leaves)

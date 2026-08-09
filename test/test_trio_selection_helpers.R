@@ -286,6 +286,37 @@ write_stage0_fixture <- function(path, metadata) {
   )
 }
 
+suppressPackageStartupMessages({
+  library(ape)
+  library(dplyr)
+})
+duplicate_tip_out <- tempfile("trio-stage0-duplicate-tip-")
+duplicate_tip_metadata <- rbind(
+  transform(
+    stage0_metadata_row("GCF_000000101.1", reference = TRUE, annotated = TRUE),
+    organism_name = "Genus alpha",
+    organism_tax_id = "101",
+    species = "Genus alpha",
+    genus = "Genus"
+  ),
+  transform(
+    stage0_metadata_row("GCF_000000102.1", reference = TRUE, annotated = TRUE),
+    organism_name = "Genus beta",
+    organism_tax_id = "102",
+    species = "Genus beta",
+    genus = "Genus"
+  )
+)
+write_stage0_fixture(duplicate_tip_out, duplicate_tip_metadata)
+duplicate_tip_tree <- read.tree(text = "((Genus_alpha:1,Genus_alpha:1):1,Genus_beta:2);")
+duplicate_tip_result <- prune_to_best_assembly(duplicate_tip_tree, duplicate_tip_out)
+check(
+  Ntip(duplicate_tip_result$tree) == 2L &&
+    nrow(duplicate_tip_result$leaves) == 2L &&
+    !anyDuplicated(duplicate_tip_result$leaves$species),
+  "Stage 0 collapses duplicate taxon labels to one tree tip per species"
+)
+
 no_review_out <- tempfile("trio-stage0-empty-review-")
 no_review_metadata <- rbind(
   stage0_metadata_row("GCF_000001405.40", reference = TRUE, annotated = TRUE),
