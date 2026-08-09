@@ -63,6 +63,9 @@ MAX_OUTGROUP_TRIES=""
 INGROUP_PAIRING=""
 MIN_REL_CONTIG_N50=""
 KEEP_UNUSED_SPECIES_DATA=0
+STAGE0_TOP_K=""
+ASSEMBLY_QC=""
+ALLOW_QC_OVERRIDE=0
 POSITIONAL_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -84,6 +87,9 @@ Tree mode:
   --tree FILE.nwk      Select trios from a Newick tree (src/select/trio_selection.R),
                        then run the pipeline for each selected trio. The four positional
                        accessions are unused here; DATE is optional (defaults to today).
+                       Leaf labels must be accession-free complete taxon names with spaces
+                       encoded as underscores (for example, Chaunax_sp._Z400). Convert
+                       legacy accession-suffixed trees with strip_newick_accessions.py.
   --idt-threshold N    Minimum pairwise percent identity for trio selection (default: 80).
   --max-outgroup-tries N  Give up on an ingroup pair after training this many outgroup
                        candidates without a thesis-rule pass (default: 5). Per-pair cost cap.
@@ -96,6 +102,11 @@ Tree mode:
   --keep-unused-species-data
                        Keep current-run genome and train artifacts for candidates absent
                        from every selected trio (tree mode only; default: remove them).
+  --stage0-top-k N     Keep N candidates per species in the metadata shortlist for QC audit and optional explicit strict override
+                       (default: 3; the eligible NCBI reference is anchored in the shortlist).
+  --assembly-qc FILE   Optional external QC TSV with BUSCO genome-mode and/or Merqury results.
+  --allow-qc-override  Explicitly allow a strict BUSCO-based override of the metadata baseline.
+                       Off by default; external QC is otherwise audit-only.
 
 Options:
   --genome-dir PATH       Genome storage directory (default: ./genomes)
@@ -221,6 +232,47 @@ EOF
             shift
             continue
             ;;
+        --stage0-top-k)
+            if [[ -z "${2:-}" ]] || ! [[ "$2" =~ ^[1-9][0-9]*$ ]]; then
+                echo "Error: --stage0-top-k requires a positive integer argument." >&2
+                exit 1
+            fi
+            STAGE0_TOP_K="$2"
+            shift 2
+            continue
+            ;;
+        --stage0-top-k=*)
+            STAGE0_TOP_K="${1#*=}"
+            if ! [[ "$STAGE0_TOP_K" =~ ^[1-9][0-9]*$ ]]; then
+                echo "Error: --stage0-top-k requires a positive integer argument." >&2
+                exit 1
+            fi
+            shift
+            continue
+            ;;
+        --assembly-qc)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: --assembly-qc requires a TSV file path." >&2
+                exit 1
+            fi
+            ASSEMBLY_QC="$2"
+            shift 2
+            continue
+            ;;
+        --assembly-qc=*)
+            ASSEMBLY_QC="${1#*=}"
+            if [[ -z "$ASSEMBLY_QC" ]]; then
+                echo "Error: --assembly-qc requires a TSV file path." >&2
+                exit 1
+            fi
+            shift
+            continue
+            ;;
+        --allow-qc-override)
+            ALLOW_QC_OVERRIDE=1
+            shift
+            continue
+            ;;
         --idt-threshold|--max-outgroup-tries|--min-rel-contig-n50)
             if [[ -z "${2:-}" ]]; then
                 echo "Error: $1 requires a non-negative number argument." >&2
@@ -341,6 +393,9 @@ fi
 if [ -n "$TRAIN_CACHE_DIR_OVERRIDE" ]; then
     TRAIN_CACHE_DIR_OVERRIDE=$(resolve_path "$TRAIN_CACHE_DIR_OVERRIDE")
 fi
+if [ -n "$ASSEMBLY_QC" ]; then
+    ASSEMBLY_QC=$(resolve_path "$ASSEMBLY_QC")
+fi
 
 # --- Tree mode: select trios from a Newick tree, then run the pipeline per trio ---
 # trio_selection.R downloads genomes and runs last-train itself to score candidates;
@@ -363,6 +418,9 @@ if [ -n "$TREE_FILE" ]; then
     [ -n "$MAX_OUTGROUP_TRIES" ] && r_args+=(--max-outgroup-tries "$MAX_OUTGROUP_TRIES")
     [ -n "$INGROUP_PAIRING" ] && r_args+=(--ingroup-pairing "$INGROUP_PAIRING")
     [ -n "$MIN_REL_CONTIG_N50" ] && r_args+=(--min-rel-contig-n50 "$MIN_REL_CONTIG_N50")
+    [ -n "$STAGE0_TOP_K" ] && r_args+=(--stage0-top-k "$STAGE0_TOP_K")
+    [ -n "$ASSEMBLY_QC" ] && r_args+=(--assembly-qc "$ASSEMBLY_QC")
+    [ "$ALLOW_QC_OVERRIDE" -eq 1 ] && r_args+=(--allow-qc-override)
     [ -n "$TRAIN_CACHE_DIR_OVERRIDE" ] && r_args+=(--train-cache-dir "$TRAIN_CACHE_DIR_OVERRIDE")
     [ "$KEEP_UNUSED_SPECIES_DATA" -eq 1 ] && r_args+=(--keep-unused-species-data)
 

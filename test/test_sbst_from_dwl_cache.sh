@@ -106,6 +106,16 @@ chmod +x \
     "$fixture_repo/src/dwl_organism.sh" \
     "$fixture_repo/src/sbst.sh"
 
+PATH="$stub_bin:$PATH" \
+bash "$fixture_repo/src/sbst_fromDwl.sh" --help > "$tmp_dir/help.log" 2>&1
+help_exit=$?
+check "wrapper help describes the audit/optional-override Stage 0 policy" \
+    sh -c 'test "$1" -eq 0 && grep -Fq -- "metadata shortlist for QC audit and optional explicit strict override" "$2"' \
+    sh "$help_exit" "$tmp_dir/help.log"
+check "wrapper help documents complete Newick taxon labels and the legacy converter" \
+    sh -c 'test "$1" -eq 0 && grep -Fq -- "accession-free complete taxon names" "$2" && grep -Fq -- "strip_newick_accessions.py" "$2"' \
+    sh "$help_exit" "$tmp_dir/help.log"
+
 tree_file="$tmp_dir/tree.nwk"
 printf '((A,B),C);\n' > "$tree_file"
 
@@ -211,6 +221,52 @@ check "zero selected trios finish successfully after selector cleanup" test "$em
 check "zero selected trios do not start downstream sbst.sh" test ! -s "$empty_sbst_log"
 check "zero selected trios report that there is nothing to run" \
     grep -Fq "selected no trios; nothing to run" "$tmp_dir/empty-wrapper.log"
+
+qc_file="$tmp_dir/external-qc.tsv"
+printf 'accession\tqc_busco_mode\nGCA_000000011.1\tgenome\n' > "$qc_file"
+quality_out="$tmp_dir/quality-out"
+quality_r_log="$tmp_dir/quality-r.log"
+quality_sbst_log="$tmp_dir/quality-sbst.log"
+PATH="$stub_bin:$PATH" \
+R_ARGS_LOG="$quality_r_log" \
+SBST_ARGS_LOG="$quality_sbst_log" \
+bash "$fixture_repo/src/sbst_fromDwl.sh" \
+    --tree "$tree_file" 20260723 \
+    --genome-dir "$tmp_dir/quality-genomes" \
+    --out-dir "$quality_out" \
+    --stage0-top-k 4 \
+    --assembly-qc "$qc_file" \
+    --idt-only \
+    > "$tmp_dir/quality-wrapper.log" 2>&1
+quality_exit=$?
+
+check "tree wrapper accepts Stage 0 quality-ranking options" test "$quality_exit" -eq 0
+check "tree wrapper forwards the Stage 0 shortlist size" \
+    sh -c 'grep -Fxq -- "$1" "$2"' sh 4 "$quality_r_log"
+check "tree wrapper forwards the external assembly-QC table" \
+    sh -c 'grep -Fxq -- "$1" "$2"' sh "$qc_file" "$quality_r_log"
+check "QC-only tree wrapper does not forward the explicit override flag" \
+    sh -c '! grep -Fxq -- "--allow-qc-override" "$1"' sh "$quality_r_log"
+
+override_out="$tmp_dir/override-out"
+override_r_log="$tmp_dir/override-r.log"
+override_sbst_log="$tmp_dir/override-sbst.log"
+PATH="$stub_bin:$PATH" \
+R_ARGS_LOG="$override_r_log" \
+SBST_ARGS_LOG="$override_sbst_log" \
+bash "$fixture_repo/src/sbst_fromDwl.sh" \
+    --tree "$tree_file" 20260723 \
+    --genome-dir "$tmp_dir/override-genomes" \
+    --out-dir "$override_out" \
+    --assembly-qc "$qc_file" \
+    --allow-qc-override \
+    --idt-only \
+    > "$tmp_dir/override-wrapper.log" 2>&1
+override_exit=$?
+
+check "tree wrapper accepts an explicit strict QC override" test "$override_exit" -eq 0
+check "tree wrapper forwards the explicit strict QC override flag" \
+    grep -Fxq -- "--allow-qc-override" "$override_r_log"
 
 unversioned_log="$tmp_dir/unversioned-sbst.log"
 PATH="$stub_bin:$PATH" \
