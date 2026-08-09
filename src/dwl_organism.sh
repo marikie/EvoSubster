@@ -45,7 +45,7 @@ curl_with_retry() {
         fi
 
         case "$status" in
-            5|6|7|18|28|35|52|55|56|92) ;;
+            5|6|7|18|22|28|35|52|55|56|92) ;;
             *) return "$status" ;;
         esac
         [ "$attempt" -ge "$max_attempts" ] && return "$status"

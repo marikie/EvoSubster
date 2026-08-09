@@ -159,6 +159,18 @@ if grep -Fq 'preexisting.txt' "$preexisting_manifest" \
 fi
 test -s "$preexisting_work_dir/genomes/Test_species/preexisting.txt"
 
+rate_limit_work_dir="$tmp_dir/rate-limit-work"
+rate_limit_state_dir="$tmp_dir/rate-limit-state"
+mkdir -p "$rate_limit_work_dir" "$rate_limit_state_dir"
+rate_limit_result=$(
+    cd "$rate_limit_work_dir" || exit 1
+    PATH="$stub_bin:$PATH" FIXTURE_ZIP="$fixture_zip" CURL_STATE_DIR="$rate_limit_state_dir" \
+        CURL_FIRST_ERROR=22 bash "$ROOT_DIR/src/dwl_organism.sh" GCA_000000001.1 \
+        --out-dir ./genomes --no-genome --no-taxonomy
+) || exit 1
+test "$(printf '%s\n' "$rate_limit_result" | awk -F '|' '{print NF}')" -eq 6
+test "$(cat "$rate_limit_state_dir/summary")" -eq 2
+
 failure_state_dir="$tmp_dir/failure-state"
 mkdir -p "$failure_state_dir"
 if (
@@ -177,4 +189,5 @@ grep -Fq "Error: Failed to fetch genome summary for GCF_000000002.1" \
 
 echo "ok: fresh download retries HTTP/2 failures over HTTP/1.1 and preserves relative output paths"
 echo "ok: artifact manifests distinguish fresh directory trees from files added to pre-existing directories"
+echo "ok: transient HTTP failures such as rate limits are retried"
 echo "ok: sustained DNS failure stops after four attempts"
