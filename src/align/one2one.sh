@@ -61,7 +61,14 @@ fi
 echo "--last-train"
 if [ ! -e "$trainFile" ]; then
 	echo "time last-train -P${threadNum} --revsym -C2 $dbDir/$dbBasename $org2FASTA >$trainFile"
-	time last-train -P${threadNum} --revsym -C2 "$dbDir/$dbBasename" "$org2FASTA" >"$trainFile"
+	trainTmp="${trainFile}.tmp.$$"
+	if time last-train -P"${threadNum}" --revsym -C2 "$dbDir/$dbBasename" "$org2FASTA" >"$trainTmp" \
+			&& [ -s "$trainTmp" ]; then
+		mv "$trainTmp" "$trainFile"
+	else
+		rm -f "$trainTmp"
+		exit 1
+	fi
 else
 	echo "$trainFile already exists"
 fi

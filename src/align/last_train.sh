@@ -21,9 +21,16 @@ threadNum=${THREAD_NUM:-8}
 echo "---lastdb"
 if [ ! -d "$dbDir" ]; then
 	echo "making lastdb"
-	mkdir -p "$dbDir"
-	(cd "$dbDir" && echo "time lastdb -P${threadNum} -c -uRY4 $dbBasename $org2FASTA" && \
-		time lastdb -P${threadNum} -c -uRY4 "$dbBasename" "$org2FASTA") || exit 1
+	dbTmp="${dbDir}.tmp.$$"
+	rm -rf "$dbTmp"
+	mkdir -p "$dbTmp"
+	if (cd "$dbTmp" && echo "time lastdb -P${threadNum} -c -uRY4 $dbBasename $org2FASTA" && \
+		time lastdb -P"${threadNum}" -c -uRY4 "$dbBasename" "$org2FASTA"); then
+		mv "$dbTmp" "$dbDir"
+	else
+		rm -rf "$dbTmp"
+		exit 1
+	fi
 else
 	echo "$dbDir already exists"
 fi
@@ -38,7 +45,14 @@ fi
 echo "--last-train"
 if [ ! -e "$trainFile" ]; then
 	echo "time last-train -P${threadNum} --revsym -C2 $dbDir/$dbBasename $org3FASTA >$trainFile"
-	time last-train -P${threadNum} --revsym -C2 "$dbDir/$dbBasename" "$org3FASTA" >"$trainFile"
+	trainTmp="${trainFile}.tmp.$$"
+	if time last-train -P"${threadNum}" --revsym -C2 "$dbDir/$dbBasename" "$org3FASTA" >"$trainTmp" \
+			&& [ -s "$trainTmp" ]; then
+		mv "$trainTmp" "$trainFile"
+	else
+		rm -f "$trainTmp"
+		exit 1
+	fi
 else
 	echo "$trainFile already exists"
 fi
