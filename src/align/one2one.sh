@@ -13,6 +13,7 @@ dbBasename=$(basename "$dbDir")
 
 threadNum=${THREAD_NUM:-8}
 queryBatchSize=${LASTAL_QUERY_BATCH_SIZE:-1M}
+splitMemory=${LASTAL_SPLIT_MEMORY:-8G}
 # lastdb
 echo "---lastdb"
 if [ ! -d "$dbDir" ]; then
@@ -52,8 +53,8 @@ o2omaf_dir=$(dirname "$o2omaf")
 o2omaf_sorted="${o2omaf_dir}/${o2omaf_base}_sorted.maf"
 if [ ! -e "$o2omaf" ] && [ ! -e "$o2omaf_sorted" ]; then
 	o2omaf_tmp="${o2omaf}.raw"
-	echo "time lastal -P${threadNum} -i $queryBatchSize -H1 -C2 --split-f=MAF+ -p $trainFile $dbDir/$dbBasename $org2FASTA | last-split -r >$o2omaf_tmp"
-	if ! time lastal -P"${threadNum}" -i "$queryBatchSize" -H1 -C2 --split-f=MAF+ -p "$trainFile" "$dbDir/$dbBasename" "$org2FASTA" \
+	echo "time lastal -P${threadNum} -i $queryBatchSize -H1 -C2 --split-f=MAF+ --split-b=$splitMemory -p $trainFile $dbDir/$dbBasename $org2FASTA | last-split -r >$o2omaf_tmp"
+	if ! time lastal -P"${threadNum}" -i "$queryBatchSize" -H1 -C2 --split-f=MAF+ --split-b="$splitMemory" -p "$trainFile" "$dbDir/$dbBasename" "$org2FASTA" \
 			| last-split -r >"$o2omaf_tmp"; then
 		rm -f "$o2omaf_tmp"
 		exit 1

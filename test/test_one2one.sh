@@ -53,6 +53,7 @@ PATH="$stub_bin:$PATH" LASTAL_ARGS_LOG="$tmp_dir/lastal.args" THREAD_NUM=4 \
 test -s "$output"
 grep -Fxq -- '-i' "$tmp_dir/lastal.args"
 grep -Fxq -- '1M' "$tmp_dir/lastal.args"
+grep -Fxq -- '--split-b=8G' "$tmp_dir/lastal.args"
 test "$(grep -Fxc -- '-P4' "$tmp_dir/lastal.args")" -eq 1
 
 echo "ok: one2one bounds lastal query batches while preserving caller thread control"
