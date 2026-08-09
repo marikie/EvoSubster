@@ -11,10 +11,14 @@ R Markdown report can consume.
 
 import argparse
 import json
-import re
 import sys
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set, Tuple
+
+# The thesis (section 2.3) trio selection rule lives in src/select/trio_filter.py so
+# that trio_selection.R and this reporter apply the identical rule.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "select"))
+from trio_filter import evaluate_filter_status  # noqa: E402
 
 IDENTITY_PREFIX = "# substitution percent identity:"
 GC_CONTENT_PREFIX = "Total GC content: "
@@ -72,176 +76,6 @@ def matches_short_name(path: Path, short_name: str) -> bool:
         return False
     parts = path.stem.split("_")
     return any(part == short_name for part in parts)
-
-
-def extract_genus_label(metadata_entry: dict) -> Optional[str]:
-    candidates = [
-        metadata_entry.get("raw_organism_name"),
-        metadata_entry.get("ncbi_full_name"),
-        metadata_entry.get("directory_name"),
-        metadata_entry.get("short_name"),
-    ]
-    for candidate in candidates:
-        if not candidate:
-            continue
-        sanitized = candidate.replace("_", " ").strip()
-        if not sanitized:
-            continue
-        token = sanitized.split()[0]
-        if token:
-            return token
-    return None
-
-
-def evaluate_genus_condition(slot_map: Dict[str, dict]) -> Tuple[Optional[bool], List[str]]:
-    patterns, issues = evaluate_genus_patterns(slot_map)
-    if patterns is None:
-        return None, issues
-    return patterns["pattern1"], issues
-
-
-def evaluate_genus_patterns(
-    slot_map: Dict[str, dict]
-) -> Tuple[Optional[Dict[str, bool]], List[str]]:
-    issues: List[str] = []
-    required_slots = ("org1", "org2", "org3")
-    genus_values: Dict[str, str] = {}
-
-    for slot in required_slots:
-        entry = slot_map.get(slot)
-        if not entry:
-            issues.append(f"{slot}: Missing metadata entry for genus evaluation.")
-            return None, issues
-        genus_label = extract_genus_label(entry)
-        if not genus_label:
-            issues.append(f"{slot}: Unable to derive genus from metadata.")
-            return None, issues
-        genus_values[slot] = genus_label.lower()
-
-    pattern1 = (
-        genus_values["org1"] != genus_values["org2"]
-        and genus_values["org1"] != genus_values["org3"]
-        and genus_values["org2"] == genus_values["org3"]
-    )
-    pattern3 = (
-        genus_values["org1"] == genus_values["org2"]
-        and genus_values["org2"] == genus_values["org3"]
-    )
-    pattern4 = (
-        genus_values["org1"] != genus_values["org2"]
-        and genus_values["org1"] != genus_values["org3"]
-        and genus_values["org2"] != genus_values["org3"]
-    )
-    pattern5 = (
-        (
-            genus_values["org1"] != genus_values["org2"]
-            and genus_values["org1"] == genus_values["org3"]
-            and genus_values["org2"] != genus_values["org3"]
-        )
-        or (
-            genus_values["org1"] == genus_values["org2"]
-            and genus_values["org1"] != genus_values["org3"]
-            and genus_values["org2"] != genus_values["org3"]
-        )
-    )
-
-    patterns = {
-        "pattern1": pattern1,
-        "pattern3": pattern3,
-        "pattern4": pattern4,
-        "pattern5": pattern5,
-    }
-    return patterns, issues
-
-
-def parse_identity_percentage(value: str) -> Optional[float]:
-    if not value:
-        return None
-    sanitized = value.replace("%", " ")
-    match = re.search(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", sanitized)
-    if not match:
-        return None
-    try:
-        return float(match.group())
-    except ValueError:
-        return None
-
-
-def evaluate_identity_condition(
-    identity_values: Dict[str, str]
-) -> Tuple[Optional[bool], List[str], Optional[Dict[str, float]]]:
-    issues: List[str] = []
-    numeric_values: Dict[str, float] = {}
-    required_keys = ("idt_12", "idt_13", "idt_23")
-
-    for key in required_keys:
-        raw_value = identity_values.get(key)
-        if raw_value is None:
-            issues.append(f"{key}: Identity value missing; cannot evaluate condition.")
-            return None, issues, None
-        parsed = parse_identity_percentage(raw_value)
-        if parsed is None:
-            issues.append(f"{key}: Unable to parse numeric identity from '{raw_value}'.")
-            return None, issues, None
-        numeric_values[key] = parsed
-
-    condition_met = numeric_values["idt_12"] < numeric_values["idt_23"] and numeric_values["idt_13"] < numeric_values["idt_23"]
-    return condition_met, issues, numeric_values
-
-
-def evaluate_filter_status(
-    slot_map: Dict[str, dict],
-    identity_values: Dict[str, str],
-    idt_threshold: float,
-) -> Tuple[Dict[str, Optional[bool]], List[str]]:
-    issues: List[str] = []
-    genus_patterns, genus_issues = evaluate_genus_patterns(slot_map)
-    identity_condition, identity_issues, numeric_identity_values = evaluate_identity_condition(
-        identity_values
-    )
-    issues.extend(genus_issues)
-    issues.extend(identity_issues)
-
-    genus_condition = genus_patterns["pattern1"] if genus_patterns else None
-    genus_pattern_same_all = genus_patterns["pattern3"] if genus_patterns else None
-    genus_pattern_all_different = genus_patterns["pattern4"] if genus_patterns else None
-    genus_pattern_two_vs_one = genus_patterns["pattern5"] if genus_patterns else None
-
-    threshold_condition: Optional[bool] = None
-    if numeric_identity_values is not None:
-        threshold_condition = all(value > idt_threshold for value in numeric_identity_values.values())
-
-    filter_flag: Optional[bool] = None
-
-    # Threshold gate: if below threshold, filter out before other rules
-    if threshold_condition is False:
-        filter_flag = True
-    else:
-        if genus_condition is True:
-            filter_flag = False
-        elif identity_condition is True:
-            if genus_pattern_same_all is True:
-                filter_flag = False
-            elif genus_pattern_all_different is True:
-                filter_flag = False
-            elif genus_pattern_two_vs_one is True:
-                filter_flag = True
-        elif identity_condition is False:
-            filter_flag = True
-
-    excluded = filter_flag is True
-    filter_details = {
-        "genus_condition_met": genus_condition,
-        "genus_pattern_same_all": genus_pattern_same_all,
-        "genus_pattern_all_different": genus_pattern_all_different,
-        "genus_pattern_two_vs_one": genus_pattern_two_vs_one,
-        "identity_condition_met": identity_condition,
-        "idt_threshold_condition": threshold_condition,
-        "idt_threshold_value": idt_threshold,
-        "filter_flag": filter_flag,
-        "excluded": excluded,
-    }
-    return filter_details, issues
 
 
 def filter_for_short_name(paths: Iterable[Path], short_name: str) -> List[Path]:

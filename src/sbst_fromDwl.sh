@@ -5,6 +5,9 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 PATH="$SCRIPT_DIR:$PATH"
 
+# shellcheck source=lib/train_cache.sh
+source "$SCRIPT_DIR/lib/train_cache.sh"
+
 config_file="$ROOT_DIR/config/dwl_config.yaml"
 # Load YAML configuration using yq
 if [ ! -f "$config_file" ]; then
@@ -49,32 +52,66 @@ make_short_name() {
 
 
 OUT_DIR_OVERRIDE=""
+TRAIN_CACHE_DIR_OVERRIDE=""
 BASE_GENOMES_OVERRIDE=""
 IDT_ONLY=0
 THREAD_NUM_OVERRIDE=8
 FORCE_DOWNLOAD=0
+TREE_FILE=""
+IDT_THRESHOLD=""
+MAX_OUTGROUP_TRIES=""
+INGROUP_PAIRING=""
+MIN_REL_CONTIG_N50=""
+STAGE0_TOP_K=""
+ASSEMBLY_QC=""
+ALLOW_QC_OVERRIDE=0
 POSITIONAL_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help)
             cat <<'EOF'
-Usage: sbst_fromDwl.sh <DATE> <ACC1> <ACC2> <ACC3> [OPTIONS]
+Usage:
+  sbst_fromDwl.sh <DATE> <ACC1> <ACC2> <ACC3> [OPTIONS]   # single trio
+  sbst_fromDwl.sh --tree <FILE.nwk> [DATE] [OPTIONS]       # select trios from a tree
 
 Download genomes from NCBI and run the substitution spectrum pipeline.
 
-Positional arguments:
+Positional arguments (single-trio mode):
   DATE     Run date (e.g. 20240101)
   ACC1     Outgroup accession ID (e.g. GCA_023078555.1)
   ACC2     Ingroup accession ID (e.g. GCA_900538255.1)
   ACC3     Ingroup accession ID (e.g. GCA_024500015.1)
 
+Tree mode:
+  --tree FILE.nwk      Select trios from a Newick tree (src/select/trio_selection.R),
+                       then run the pipeline for each selected trio. The four positional
+                       accessions are unused here; DATE is optional (defaults to today).
+                       Leaf labels must be accession-free complete taxon names with spaces
+                       encoded as underscores (for example, Chaunax_sp._Z400). Convert
+                       legacy accession-suffixed trees with strip_newick_accessions.py.
+  --idt-threshold N    Minimum pairwise percent identity for trio selection (default: 80).
+  --max-outgroup-tries N  Give up on an ingroup pair after training this many outgroup
+                       candidates without a thesis-rule pass (default: 5). Per-pair cost cap.
+  --ingroup-pairing MODE  Which ingroup couples to consider: 'matching' (default; greedy
+                       closest-first disjoint sister-pair matching, ~n/2 independent couples)
+                       or 'all' (every tip pair, exhaustive).
+  --min-rel-contig-n50 F  Drop a species unless some current assembly has relative contig
+                       N50 (contig_n50/total_ungapped_length) >= F. Size-normalized so one
+                       value works across lineages; default: 0 = off, e.g. 0.005.
+  --stage0-top-k N     Keep N candidates per species in the metadata shortlist for QC audit and optional explicit strict override
+                       (default: 3; the eligible NCBI reference is anchored in the shortlist).
+  --assembly-qc FILE   Optional external QC TSV with BUSCO genome-mode and/or Merqury results.
+  --allow-qc-override  Explicitly allow a strict BUSCO-based override of the metadata baseline.
+                       Off by default; external QC is otherwise audit-only.
+
 Options:
-  --genome-dir PATH    Genome storage directory (default: ./genomes)
-  --out-dir PATH       Output directory (default: ./results)
-  --thread N           Number of threads for LAST alignment (default: 8)
-  --idt-only           Stop after checking sequence percent identity among three genomes; skip downstream analysis
-  --force              Re-download genomes even if local files exist
-  -h, --help           Show this help message and exit
+  --genome-dir PATH       Genome storage directory (default: ./genomes)
+  --out-dir PATH          Output directory (default: ./results)
+  --train-cache-dir PATH  Directory containing cached last-train files
+  --thread N              Number of threads for LAST alignment (default: 8)
+  --idt-only              Stop after checking sequence percent identity among three genomes; skip downstream analysis
+  --force                 Re-download genomes even if local files exist
+  -h, --help              Show this help message and exit
 EOF
             exit 0
             ;;
@@ -132,6 +169,24 @@ EOF
             shift
             continue
             ;;
+        --train-cache-dir)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: --train-cache-dir requires a non-empty path argument." >&2
+                exit 1
+            fi
+            TRAIN_CACHE_DIR_OVERRIDE="$2"
+            shift 2
+            continue
+            ;;
+        --train-cache-dir=*)
+            TRAIN_CACHE_DIR_OVERRIDE="${1#*=}"
+            if [[ -z "$TRAIN_CACHE_DIR_OVERRIDE" ]]; then
+                echo "Error: --train-cache-dir requires a non-empty path argument." >&2
+                exit 1
+            fi
+            shift
+            continue
+            ;;
         --genome-dir)
             if [[ -z "${2:-}" ]]; then
                 echo "Error: --genome-dir requires a non-empty path argument." >&2
@@ -147,6 +202,120 @@ EOF
                 echo "Error: --genome-dir requires a non-empty path argument." >&2
                 exit 1
             fi
+            shift
+            continue
+            ;;
+        --tree)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: --tree requires a Newick file path." >&2
+                exit 1
+            fi
+            TREE_FILE="$2"
+            shift 2
+            continue
+            ;;
+        --tree=*)
+            TREE_FILE="${1#*=}"
+            if [[ -z "$TREE_FILE" ]]; then
+                echo "Error: --tree requires a Newick file path." >&2
+                exit 1
+            fi
+            shift
+            continue
+            ;;
+        --stage0-top-k)
+            if [[ -z "${2:-}" ]] || ! [[ "$2" =~ ^[1-9][0-9]*$ ]]; then
+                echo "Error: --stage0-top-k requires a positive integer argument." >&2
+                exit 1
+            fi
+            STAGE0_TOP_K="$2"
+            shift 2
+            continue
+            ;;
+        --stage0-top-k=*)
+            STAGE0_TOP_K="${1#*=}"
+            if ! [[ "$STAGE0_TOP_K" =~ ^[1-9][0-9]*$ ]]; then
+                echo "Error: --stage0-top-k requires a positive integer argument." >&2
+                exit 1
+            fi
+            shift
+            continue
+            ;;
+        --assembly-qc)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: --assembly-qc requires a TSV file path." >&2
+                exit 1
+            fi
+            ASSEMBLY_QC="$2"
+            shift 2
+            continue
+            ;;
+        --assembly-qc=*)
+            ASSEMBLY_QC="${1#*=}"
+            if [[ -z "$ASSEMBLY_QC" ]]; then
+                echo "Error: --assembly-qc requires a TSV file path." >&2
+                exit 1
+            fi
+            shift
+            continue
+            ;;
+        --allow-qc-override)
+            ALLOW_QC_OVERRIDE=1
+            shift
+            continue
+            ;;
+        --idt-threshold|--max-outgroup-tries|--min-rel-contig-n50)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: $1 requires a non-negative number argument." >&2
+                exit 1
+            fi
+            if ! [[ "$2" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+                echo "Error: $1 must be a non-negative number (got: $2)." >&2
+                exit 1
+            fi
+            case "$1" in
+                --idt-threshold)      IDT_THRESHOLD="$2" ;;
+                --max-outgroup-tries) MAX_OUTGROUP_TRIES="$2" ;;
+                --min-rel-contig-n50) MIN_REL_CONTIG_N50="$2" ;;
+            esac
+            shift 2
+            continue
+            ;;
+        --idt-threshold=*|--max-outgroup-tries=*|--min-rel-contig-n50=*)
+            _opt_key="${1%%=*}"
+            _opt_val="${1#*=}"
+            if ! [[ "$_opt_val" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+                echo "Error: $_opt_key must be a non-negative number (got: $_opt_val)." >&2
+                exit 1
+            fi
+            case "$_opt_key" in
+                --idt-threshold)      IDT_THRESHOLD="$_opt_val" ;;
+                --max-outgroup-tries) MAX_OUTGROUP_TRIES="$_opt_val" ;;
+                --min-rel-contig-n50) MIN_REL_CONTIG_N50="$_opt_val" ;;
+            esac
+            shift
+            continue
+            ;;
+        --ingroup-pairing)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: $1 requires a mode argument (matching or all)." >&2
+                exit 1
+            fi
+            if ! [[ "$2" =~ ^(matching|all)$ ]]; then
+                echo "Error: --ingroup-pairing must be 'matching' or 'all' (got: $2)." >&2
+                exit 1
+            fi
+            INGROUP_PAIRING="$2"
+            shift 2
+            continue
+            ;;
+        --ingroup-pairing=*)
+            _opt_val="${1#*=}"
+            if ! [[ "$_opt_val" =~ ^(matching|all)$ ]]; then
+                echo "Error: --ingroup-pairing must be 'matching' or 'all' (got: $_opt_val)." >&2
+                exit 1
+            fi
+            INGROUP_PAIRING="$_opt_val"
             shift
             continue
             ;;
@@ -174,8 +343,9 @@ org2ID="$3"
 org3ID="$4"
 
 
-# Check minimally required arguments (DATE and 3 accessions)
-if [ -z "$DATE" ] || [ -z "$org1ID" ] || [ -z "$org2ID" ] || [ -z "$org3ID" ]; then
+# Check minimally required arguments (DATE and 3 accessions).
+# Tree mode picks its own trios, so the positional accessions are optional there.
+if [ -z "$TREE_FILE" ] && { [ -z "$DATE" ] || [ -z "$org1ID" ] || [ -z "$org2ID" ] || [ -z "$org3ID" ]; }; then
     echo "$(get_config '.errors.arg_count' | sed "s/{arg_num}/$(get_config '.settings.required_args')/g")" >&2
    echo "$(get_config '.errors.usage')" >&2
    exit 1
@@ -211,6 +381,97 @@ if [ ! -d "$out_dir_base" ]; then
     fi
 fi
 
+if [ -n "$TRAIN_CACHE_DIR_OVERRIDE" ]; then
+    TRAIN_CACHE_DIR_OVERRIDE=$(resolve_path "$TRAIN_CACHE_DIR_OVERRIDE")
+fi
+if [ -n "$ASSEMBLY_QC" ]; then
+    ASSEMBLY_QC=$(resolve_path "$ASSEMBLY_QC")
+fi
+
+# --- Tree mode: select trios from a Newick tree, then run the pipeline per trio ---
+# trio_selection.R downloads genomes and runs last-train itself to score candidates;
+# here we only loop the per-trio pipeline over the trios it selected.  Each per-trio
+# call takes the positional path (no --tree), so selection never re-enters itself.
+if [ -n "$TREE_FILE" ]; then
+    if [ ! -f "$TREE_FILE" ]; then
+        echo "Error: --tree file not found: $TREE_FILE" >&2
+        exit 1
+    fi
+    DATE="${DATE:-$(date +%Y%m%d)}"
+
+    rt_out_dir="$out_dir_base/trio_selection"
+    r_args=(--tree "$TREE_FILE"
+            --genome-dir "$base_genomes"
+            --out-dir "$rt_out_dir"
+            --date "$DATE"
+            --threads "$THREAD_NUM_OVERRIDE")
+    [ -n "$IDT_THRESHOLD" ] && r_args+=(--idt-threshold "$IDT_THRESHOLD")
+    [ -n "$MAX_OUTGROUP_TRIES" ] && r_args+=(--max-outgroup-tries "$MAX_OUTGROUP_TRIES")
+    [ -n "$INGROUP_PAIRING" ] && r_args+=(--ingroup-pairing "$INGROUP_PAIRING")
+    [ -n "$MIN_REL_CONTIG_N50" ] && r_args+=(--min-rel-contig-n50 "$MIN_REL_CONTIG_N50")
+    [ -n "$STAGE0_TOP_K" ] && r_args+=(--stage0-top-k "$STAGE0_TOP_K")
+    [ -n "$ASSEMBLY_QC" ] && r_args+=(--assembly-qc "$ASSEMBLY_QC")
+    [ "$ALLOW_QC_OVERRIDE" -eq 1 ] && r_args+=(--allow-qc-override)
+    [ -n "$TRAIN_CACHE_DIR_OVERRIDE" ] && r_args+=(--train-cache-dir "$TRAIN_CACHE_DIR_OVERRIDE")
+
+    echo "--- [tree mode] selecting trios from $TREE_FILE"
+    if ! Rscript "$SCRIPT_DIR/select/trio_selection.R" "${r_args[@]}"; then
+        echo "Error: trio_selection.R failed" >&2
+        exit 1
+    fi
+
+    selected_file="$rt_out_dir/selected_trios.tsv"
+    if [ ! -s "$selected_file" ]; then
+        echo "[tree mode] trio_selection.R selected no trios; nothing to run."
+        exit 0
+    fi
+
+    # Locate the accession columns by name so the table layout can change freely.
+    IFS= read -r _hdr < "$selected_file"
+    col_index() {
+        local target="$1" n=0 field
+        local IFS=$'\t'
+        for field in $_hdr; do
+            n=$((n + 1))
+            if [ "$field" = "$target" ]; then echo "$n"; return 0; fi
+        done
+        return 1
+    }
+    out_col=$(col_index out_acc) && in1_col=$(col_index in1_acc) && in2_col=$(col_index in2_acc) || {
+        echo "Error: $selected_file is missing an out_acc/in1_acc/in2_acc column." >&2
+        exit 1
+    }
+
+    # Options forwarded to every single-trio run.
+    pass_opts=(--genome-dir "$base_genomes" --out-dir "$out_dir_base" --thread "$THREAD_NUM_OVERRIDE")
+    if [ -n "$TRAIN_CACHE_DIR_OVERRIDE" ]; then
+        pass_opts+=(--train-cache-dir "$TRAIN_CACHE_DIR_OVERRIDE")
+    else
+        pass_opts+=(--train-cache-dir "$rt_out_dir/train_cache")
+    fi
+    [ "$IDT_ONLY" -eq 1 ] && pass_opts+=(--idt-only)
+    [ "$FORCE_DOWNLOAD" -eq 1 ] && pass_opts+=(--force)
+
+    trio_count=0
+    trio_failures=0
+    while IFS=$'\t' read -r out_acc in1_acc in2_acc; do
+        if [ -z "$out_acc" ] || [ -z "$in1_acc" ] || [ -z "$in2_acc" ]; then
+            continue
+        fi
+        trio_count=$((trio_count + 1))
+        echo "=== [tree mode] trio $trio_count: outgroup=$out_acc ingroup=$in1_acc,$in2_acc ==="
+        if ! bash "$SCRIPT_DIR/sbst_fromDwl.sh" "$DATE" "$out_acc" "$in1_acc" "$in2_acc" "${pass_opts[@]}"; then
+            echo "Warning: pipeline failed for trio $out_acc/$in1_acc/$in2_acc; continuing." >&2
+            trio_failures=$((trio_failures + 1))
+        fi
+    done < <(awk -F'\t' -v o="$out_col" -v a="$in1_col" -v b="$in2_col" \
+                 'NR > 1 { print $o "\t" $a "\t" $b }' "$selected_file")
+
+    echo "[tree mode] ran pipeline on $trio_count trio(s); $trio_failures failed."
+    [ "$trio_failures" -gt 0 ] && exit 1
+    exit 0
+fi
+
 # Download genome + taxonomy for each accession via dwl_organism.sh
 _dwl_flags=()
 [ "$FORCE_DOWNLOAD" -eq 1 ] && _dwl_flags+=("--force")
@@ -221,6 +482,38 @@ org3Result=$(bash "$SCRIPT_DIR/dwl_organism.sh" "$org3ID" --out-dir "$base_genom
 IFS='|' read -r org1FullName org1FASTA org1SummaryJson org1RawName org1NcbiFullName org1TaxJson <<< "$org1Result"
 IFS='|' read -r org2FullName org2FASTA org2SummaryJson org2RawName org2NcbiFullName org2TaxJson <<< "$org2Result"
 IFS='|' read -r org3FullName org3FASTA org3SummaryJson org3RawName org3NcbiFullName org3TaxJson <<< "$org3Result"
+
+resolve_downloaded_accession() {
+    local requested="$1" summary_json="$2" fasta_path="$3"
+    local metadata_accession=""
+    if [ -f "$summary_json" ]; then
+        metadata_accession=$(jq -r 'try .reports[0].accession catch ""' "$summary_json")
+    fi
+
+    local fasta_accession
+    fasta_accession=$(extract_ncbi_accession_from_path "$fasta_path")
+    local candidate
+    for candidate in "$metadata_accession" "$fasta_accession" "$requested"; do
+        if [[ "$candidate" =~ ^GC[AF]_[0-9]+\.[0-9]+$ ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+resolvedOrg1ID=$(resolve_downloaded_accession "$org1ID" "$org1SummaryJson" "$org1FASTA") || {
+    echo "Error: Could not resolve a versioned NCBI accession for $org1ID." >&2
+    exit 1
+}
+resolvedOrg2ID=$(resolve_downloaded_accession "$org2ID" "$org2SummaryJson" "$org2FASTA") || {
+    echo "Error: Could not resolve a versioned NCBI accession for $org2ID." >&2
+    exit 1
+}
+resolvedOrg3ID=$(resolve_downloaded_accession "$org3ID" "$org3SummaryJson" "$org3FASTA") || {
+    echo "Error: Could not resolve a versioned NCBI accession for $org3ID." >&2
+    exit 1
+}
 
 echo "Derived org1FullName: $org1FullName"
 echo "Derived org2FullName: $org2FullName"
@@ -378,6 +671,10 @@ trisbst_args=()
 if [ -n "$OUT_DIR_OVERRIDE" ]; then
     trisbst_args+=("--out-dir" "$OUT_DIR_OVERRIDE")
 fi
+if [ -n "$TRAIN_CACHE_DIR_OVERRIDE" ]; then
+    trisbst_args+=("--train-cache-dir" "$TRAIN_CACHE_DIR_OVERRIDE")
+fi
+trisbst_args+=("--accession-ids" "$resolvedOrg1ID" "$resolvedOrg2ID" "$resolvedOrg3ID")
 trisbst_args+=("--thread" "$THREAD_NUM_OVERRIDE")
 if [ "$IDT_ONLY" -eq 1 ]; then
     trisbst_args+=("--idt-only")

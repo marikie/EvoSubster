@@ -56,13 +56,121 @@ During execution the wrapper:
 - Detects `genomic.gff` for the outgroup; if missing, downstream steps receive `NO_GFF_FILE`.
 - Resolves FASTA paths and invokes `sbst.sh` with the appropriate arguments.
 
+### Select trios from a Newick tree
+
+Tree leaves must contain accession-free complete NCBI taxon names, with spaces
+encoded as underscores. Keep subspecies, strain, and informal identifiers; for example,
+`Chaunax_sp._Z400` is read as `Chaunax sp. Z400`. A terminal assembly accession
+is not accepted by Stage 0.
+
+Convert a legacy tree whose leaves end in a versioned GCA/GCF accession before
+running the pipeline:
+
+```bash
+python3 src/select/strip_newick_accessions.py \
+  --input path/to/legacy-tree.nwk \
+  --output path/to/accession-free-tree.nwk
+```
+
+The converter removes only a terminal `_GCA_...version` or
+`_GCF_...version` suffix from leaf labels. Leaves that are already
+accession-free are retained and reported as warnings. Existing output files are
+not overwritten unless `--force` is supplied, and the input file itself is
+never overwritten.
+
+```bash
+./src/sbst_fromDwl.sh \
+  --tree path/to/accession-free-tree.nwk \
+  20260801 \
+  --stage0-top-k 3 \
+  --assembly-qc path/to/external_qc.tsv
+```
+
+Stage 0 queries each complete leaf taxon with exact NCBI taxon matching, so a
+subspecies or strain is not silently merged into its parent species. It
+discovers all current non-MAG NCBI assemblies for every taxon on the tree and
+records the versioned `GCA_...version` or `GCF_...version` accession.
+It then uses a two-phase selection:
+
+1. Exclude non-current, NCBI-atypical, ANI-Failed, unsupported hybrid/alternate
+   haplotype/unresolved-diploid, and optional relative-contig-N50 gate failures.
+2. Build a per-species shortlist and choose a metadata baseline. The exact
+   eukaryote baseline order is: annotated NCBI Reference; unannotated NCBI
+   Reference; annotated RefSeq; other annotated; existing metadata fallback.
+
+Prokaryote candidates are ranked by ANI status, CheckM completeness,
+CheckM contamination, optional Merqury evidence, assembly level, contig count,
+and contig N50. This prokaryote ranking is unchanged. For eukaryotes, comparable
+external BUSCO `genome`-mode and optional Merqury results are attached for audit
+and review but do not change the metadata baseline by default. NCBI annotation
+BUSCO values are retained for audit but are not treated as assembly-level BUSCO
+genome-mode measurements.
+
+Pass `--allow-qc-override` only when an automatic replacement is intended. An
+override requires complete BUSCO components for both distinct assemblies from
+the same genome mode, lineage, and BUSCO version. The alternative must have
+higher Single-copy BUSCO and no worse Duplicated, Fragmented, or Missing BUSCO.
+Annotation is not required for the alternative. Merqury remains audit-only for
+this decision. A BUSCO override measures gene-content completeness under that
+BUSCO run; it does not establish base-level consensus accuracy or Merqury QV.
+
+The optional external QC TSV is keyed by an exact versioned GCA/GCF
+`accession`. Unmatched accessions produce a diagnostic; when an explicit
+override is requested with no input rows or no row matching the fetched
+metadata, Stage 0 stops. Every row must contain BUSCO or Merqury evidence. The
+TSV may contain these columns:
+
+```text
+accession
+qc_busco_mode              # required as "genome" when any BUSCO field is set
+qc_busco_lineage
+qc_busco_version
+qc_busco_complete
+qc_busco_single
+qc_busco_duplicated
+qc_busco_fragmented
+qc_busco_missing
+qc_busco_internal_stop
+merqury_qv
+merqury_completeness
+```
+
+Merqury-only rows may leave `qc_busco_mode` empty. All BUSCO percentage
+components must be in `[0, 100]`. Complete must equal
+Single-copy plus Duplicated within 0.2 percentage points, and Complete plus
+Fragmented plus Missing must equal 100 within 0.2 percentage points. If
+Single-copy is omitted but Complete and Duplicated are present, it is derived as
+their difference. All comparable BUSCO candidates for one species must use the
+same lineage and version. Incomplete legacy rows remain auditable but cannot
+trigger an override.
+
+NCBI `paired_accession` metadata is used to treat paired GCA/GCF accessions as
+one assembly. A paired record cannot create a review or override merely by
+appearing under the other accession namespace.
+
+Stage 0 writes the following audit files under
+`<out-dir>/trio_selection/`:
+
+- `assembly_metadata.tsv`: raw NCBI candidate metadata.
+- `assembly_candidates_audit.tsv`: every candidate plus exclusion reason,
+  profile, baseline and final ranks, baseline/QC preferences, review reasons,
+  override blocker codes, and selection basis.
+- `assembly_shortlist.tsv`: up to `--stage0-top-k` candidates per species.
+- `assembly_review.tsv`: every candidate for species requiring QC review; this
+  file always contains headers, including when no species requires review.
+- `selected_assemblies.tsv`: the one assembly passed to Stage 1 for each species.
+
 ### Use FASTA files of your choice
 
 ```bash
-./src/sbst.sh <DATE> <ORG1_FASTA> <ORG2_FASTA> <ORG3_FASTA> <ORG1_GFF|NO_GFF_FILE> [--out-dir PATH] [--thread N] [--idt-only]
+./src/sbst.sh <DATE> <ORG1_FASTA> <ORG2_FASTA> <ORG3_FASTA> <ORG1_GFF|NO_GFF_FILE> [--out-dir PATH] [--train-cache-dir PATH] [--accession-ids ACC1 ACC2 ACC3] [--thread N] [--idt-only]
 ```
 
 - Provide paths to the FASTA files.
+- When reusing `last-train` cache files with custom FASTA names, provide the
+  exact versioned NCBI accessions through `--accession-ids`; otherwise cache
+  reuse is enabled only when all three filenames begin with a versioned
+  `GCA_...` or `GCF_...` accession.
 - Supply the outgroup GFF path or use `NO_GFF_FILE`.
 - `--out-dir`, `--thread`, and `--idt-only` behave the same as in the download wrapper.
 

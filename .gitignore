@@ -1,4 +1,5 @@
 # Large data (Noble: don't track generated/large files)
+AI_outputs/
 results/
 genomes/
 log/
@@ -38,10 +39,12 @@ doc/*.log
 tasks/
 
 # Temporary
+.worktrees/
 test_genomes/
 test_results/
 bench_genomes/
 bench_results/
+tmp/
 
 # Large documents
 *.pdf
