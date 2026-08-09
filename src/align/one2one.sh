@@ -12,7 +12,7 @@ o2omaf=$6
 dbBasename=$(basename "$dbDir")
 
 threadNum=${THREAD_NUM:-8}
-queryBatchSize=${LASTAL_QUERY_BATCH_SIZE:-64M}
+queryBatchSize=${LASTAL_QUERY_BATCH_SIZE:-1M}
 # lastdb
 echo "---lastdb"
 if [ ! -d "$dbDir" ]; then
