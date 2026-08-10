@@ -15,7 +15,6 @@ suppressPackageStartupMessages({
   library(tibble)
   library(cluster)
   library(scales)
-  library(ggpubr)
   library(rlang)
   library(ggrepel)
 })
@@ -30,17 +29,66 @@ invisible(utils::globalVariables(c("mutNum", "totalRootNum", "mutType")))
 
 parse_args <- function() {
   parser <- ArgumentParser(
-    description = "Traverse dataset directories, collect TSV files, and run PCA clustering."
+    description = paste(
+      "Traverse dataset directories, collect substitution TSV files from each",
+      "dataset's latest numeric run directory, and generate 2D PCA and k-means",
+      "clustering results. Both log-ratio and observed-frequency variants are produced."
+    ),
+    formatter_class = "argparse.RawDescriptionHelpFormatter",
+    epilog = paste(
+      "Examples:",
+      "  Rscript src/visualize/pca_2d.R results/fungi",
+      "  Rscript src/visualize/pca_2d.R results/fungi --output-dir results/fungi/pca_custom",
+      "  Rscript src/visualize/pca_2d.R results/fungi --tsv-pattern '*_cds.tsv' --max-clusters 6",
+      "  Rscript src/visualize/pca_2d.R results/fungi --cluster-boundary ellipse",
+      sep = "\n"
+    )
   )
-  parser$add_argument("input_dir", help = "Root directory containing dataset subdirectories (e.g., data/cnidaria).")
-  parser$add_argument("--tsv-pattern", default = DEFAULT_TSV_PATTERN, help = "Glob pattern for TSV files inside each run dir.")
-  parser$add_argument("--output-dir", help = "Directory for PCA outputs (default: <input_dir>/pca).")
-  parser$add_argument("--max-clusters", type = "integer", default = 10L, help = "Maximum clusters to evaluate.")
-  parser$add_argument("--random-state", type = "integer", default = 42L, help = "Random seed.")
+  parser$add_argument(
+    "input_dir",
+    metavar = "INPUT_DIR",
+    help = paste(
+      "Root directory containing dataset/trio subdirectories. For each dataset,",
+      "the latest numeric run directory is used (for example, results/fungi)."
+    )
+  )
+  parser$add_argument(
+    "--tsv-pattern",
+    metavar = "GLOB",
+    default = DEFAULT_TSV_PATTERN,
+    help = sprintf(
+      "Glob pattern used to select substitution TSV files inside each latest run directory (default: %s).",
+      DEFAULT_TSV_PATTERN
+    )
+  )
+  parser$add_argument(
+    "--output-dir",
+    metavar = "DIR",
+    default = NULL,
+    help = "Directory for plots, PCA loadings, clustering metrics, and result CSV files. Default: <INPUT_DIR>/pca."
+  )
+  parser$add_argument(
+    "--max-clusters",
+    metavar = "N",
+    type = "integer",
+    default = 10L,
+    help = "Maximum number of k-means clusters to evaluate; the sample count may reduce this limit (default: 10)."
+  )
+  parser$add_argument(
+    "--random-state",
+    metavar = "SEED",
+    type = "integer",
+    default = 42L,
+    help = "Random seed used by k-means clustering and reproducible label placement (default: 42)."
+  )
   parser$add_argument(
     "--cluster-boundary",
+    metavar = "none|ellipse|hull",
     default = "hull",
-    help = "Boundary overlay for classification-level plots: none|ellipse|hull (default: hull)."
+    help = paste(
+      "Boundary overlay for classification-level plots: 'none' draws no boundary,",
+      "'ellipse' draws 95%% normal ellipses, and 'hull' draws expanded convex hulls (default: hull)."
+    )
   )
   args <- parser$parse_args()
   allowed <- c("none", "ellipse", "hull")
@@ -430,7 +478,7 @@ plot_metrics <- function(metrics_path, inertia, silhouette) {
       annotate("text", x = 0.5, y = 0.5, label = "Silhouette undefined\n(n_samples too small)", size = 4) +
       theme_void()
   }
-  ggsave(metrics_path, ggpubr::ggarrange(p1, p2, nrow = 1), dpi = 300, width = 12, height = 5)
+  ggsave(metrics_path, gridExtra::arrangeGrob(p1, p2, nrow = 1), dpi = 300, width = 12, height = 5)
 }
 
 write_pc_loadings <- function(rotation_matrix, feature_names, output_dir, prefix) {
