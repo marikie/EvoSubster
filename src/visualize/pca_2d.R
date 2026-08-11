@@ -119,14 +119,32 @@ resolve_path <- function(value, base_dir) {
   normalizePath(path, winslash = "/", mustWork = FALSE)
 }
 
+resolve_manifest_file <- function(value, manifest_dir, label) {
+  if (is.null(value) || is.na(value) || value == "") {
+    stop(sprintf("%s missing in metadata manifest", label))
+  }
+  local_path <- normalizePath(file.path(manifest_dir, basename(value)), winslash = "/", mustWork = FALSE)
+  recorded_path <- resolve_path(value, manifest_dir)
+  candidates <- unique(c(local_path, recorded_path))
+  existing <- candidates[file.exists(candidates)]
+  if (length(existing) == 0) {
+    stop(sprintf(
+      "%s not found; checked relocated path %s and recorded path %s",
+      label,
+      local_path,
+      recorded_path
+    ))
+  }
+  existing[1]
+}
+
 load_manifest_lookup <- function(manifest_path) {
   manifest <- fromJSON(manifest_path, simplifyVector = FALSE)
   metadata_dir_value <- manifest$metadata_dir
-  if (is.null(metadata_dir_value)) stop(sprintf("'metadata_dir' missing in manifest %s", manifest_path))
-  metadata_dir <- resolve_path(metadata_dir_value, dirname(manifest_path))
-  if (is.null(metadata_dir) || !dir.exists(metadata_dir)) {
-    stop(sprintf("metadata_dir does not exist: %s", metadata_dir_value))
+  if (is.null(metadata_dir_value) || length(metadata_dir_value) != 1 || is.na(metadata_dir_value) || metadata_dir_value == "") {
+    stop(sprintf("'metadata_dir' missing or empty in manifest %s", manifest_path))
   }
+  manifest_dir <- normalizePath(dirname(manifest_path), winslash = "/", mustWork = TRUE)
 
   lookup <- list()
   organisms <- manifest$organisms %||% list()
@@ -139,8 +157,12 @@ load_manifest_lookup <- function(manifest_path) {
     if (is.null(short_name) || is.null(accession) || is.null(metadata_json)) {
       stop(sprintf("Incomplete organism entry in manifest %s", manifest_path))
     }
-    metadata_path <- resolve_path(metadata_json, dirname(manifest_path))
-    taxonomy_path <- file.path(metadata_dir, sprintf("taxonomy_%s_%s.json", short_name, accession))
+    metadata_path <- resolve_manifest_file(
+      metadata_json,
+      manifest_dir,
+      sprintf("metadata_json for %s (%s)", short_name, accession)
+    )
+    taxonomy_path <- file.path(dirname(metadata_path), sprintf("taxonomy_%s_%s.json", short_name, accession))
     key <- paste(accession, short_name, sep = "::")
     lookup[[key]] <- list(metadata_path = metadata_path, taxonomy_path = taxonomy_path, entry = entry)
   }
@@ -270,12 +292,36 @@ evaluate_genus_condition <- function(slot_map) {
   list(result = condition, issues = character())
 }
 
-select_first <- function(run_dir, pattern) {
-  matches <- Sys.glob(file.path(run_dir, pattern))
-  if (length(matches) == 0) {
-    return(NULL)
-  }
-  sort(matches)[1]
+select_preferred_artifacts <- function(preferred, legacy) {
+  preferred <- sort(unique(preferred))
+  if (length(preferred) > 0) return(preferred)
+  sort(unique(legacy))
+}
+
+filter_entry_substitution_tsvs <- function(paths, entry) {
+  prefix <- paste0(entry$accession, "_", entry$short_name, "_")
+  paths[vapply(basename(paths), function(file_name) {
+    startsWith(file_name, prefix) && !grepl("_dinuc_", file_name, fixed = TRUE)
+  }, logical(1))]
+}
+
+collect_substitution_tsvs <- function(run_dir, pattern, slot_map) {
+  ingroup_entries <- Filter(function(entry) {
+    tolower(entry$role %||% "") != "outgroup" &&
+      !is.null(entry$short_name) && entry$short_name != "" &&
+      !is.null(entry$accession) && entry$accession != ""
+  }, slot_map)
+  legacy_candidates <- Sys.glob(file.path(run_dir, pattern))
+  matches <- unlist(lapply(ingroup_entries, function(entry) {
+    nested_candidates <- Sys.glob(file.path(
+      run_dir, "statistics", entry$short_name, "singlenuc", pattern
+    ))
+    select_preferred_artifacts(
+      filter_entry_substitution_tsvs(nested_candidates, entry),
+      filter_entry_substitution_tsvs(legacy_candidates, entry)
+    )
+  }), use.names = FALSE)
+  sort(unique(matches))
 }
 
 extract_identity_line <- function(train_path) {
@@ -321,11 +367,15 @@ collect_identity_strings <- function(run_dir, slot_map) {
       next
     }
     pattern <- sprintf("*%s2%s_*.train", short_a, short_b)
-    train_path <- select_first(run_dir, pattern)
-    if (is.null(train_path)) {
+    train_paths <- select_preferred_artifacts(
+      Sys.glob(file.path(run_dir, "intermediateFiles", pattern)),
+      Sys.glob(file.path(run_dir, pattern))
+    )
+    if (length(train_paths) == 0) {
       issues <- c(issues, sprintf("%s: No train file matching '%s'.", spec$key, pattern))
       next
     }
+    train_path <- train_paths[1]
     identity_line <- extract_identity_line(train_path)
     if (is.null(identity_line)) {
       issues <- c(issues, sprintf("%s: '%s' line missing in %s.", spec$key, IDENTITY_PREFIX, basename(train_path)))
@@ -807,7 +857,7 @@ main <- function() {
     dataset_status[[dataset_name]] <- filter_info$filter_status
     dataset_filter_flag <- isTRUE(filter_info$filter_status$excluded)
 
-    tsv_files <- Sys.glob(file.path(latest_run, args$tsv_pattern))
+    tsv_files <- collect_substitution_tsvs(latest_run, args$tsv_pattern, slot_map)
     if (length(tsv_files) == 0) {
       warn(sprintf("%s: No TSV files matching '%s' in %s.", dataset_name, args$tsv_pattern, latest_run))
       next
@@ -951,10 +1001,12 @@ main <- function() {
   message(sprintf("Results saved to: %s", output_dir))
 }
 
-tryCatch(
-  main(),
-  error = function(e) {
-    message(sprintf("Error: %s", e$message))
-    quit(status = 1)
-  }
-)
+if (sys.nframe() == 0L) {
+  tryCatch(
+    main(),
+    error = function(e) {
+      message(sprintf("Error: %s", e$message))
+      quit(status = 1)
+    }
+  )
+}
