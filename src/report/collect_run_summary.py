@@ -5,8 +5,8 @@ Collect run-level metadata and artifact paths for downstream reporting.
 
 The script walks dataset directories under the provided root, identifies the most
 recent run (by lexicographically largest directory name), gathers summary values,
-retrieves organism names from the NCBI CLI, and emits a JSON payload that an
-R Markdown report can consume.
+reads organism metadata cached with each run, and emits a JSON payload that an R
+Markdown report can consume.
 """
 
 import argparse
@@ -19,16 +19,37 @@ from typing import Dict, Iterable, List, Optional, Set, Tuple
 # that trio_selection.R and this reporter apply the identical rule.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "select"))
 from trio_filter import evaluate_filter_status  # noqa: E402
+from report_contract import summary_paths  # noqa: E402
 
 IDENTITY_PREFIX = "# substitution percent identity:"
 GC_CONTENT_PREFIX = "Total GC content: "
+PDF_ARTIFACT_SPECS = (
+    ("norm", "singlenuc/ratio", "_norm.pdf", ("_ncds_norm",), "norm.pdf"),
+    (
+        "logratio",
+        "singlenuc/log-ratio",
+        "_logRatio*.pdf",
+        ("_ncds_logRatio",),
+        "logRatio*.pdf",
+    ),
+    ("ncds_norm", "singlenuc/ratio", "_ncds_norm.pdf", (), None),
+    (
+        "ncds_logratio",
+        "singlenuc/log-ratio",
+        "_ncds_logRatio*.pdf",
+        (),
+        None,
+    ),
+    ("dinuc_tsv", "dinuc", "_dinuc.tsv.pdf", (), "dinuc.tsv.pdf"),
+    ("dinuc_ncds_tsv", "dinuc", "_dinuc_ncds.tsv.pdf", (), None),
+)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Collect summary values and artifact paths from the latest run under each dataset "
-            "directory, enriching the results with organism metadata from the NCBI CLI."
+            "directory, using organism metadata cached with each run."
         )
     )
     parser.add_argument(
@@ -60,15 +81,19 @@ def find_latest_run_dir(dataset_dir: Path) -> Optional[Path]:
     return max(run_dirs, key=lambda path: path.name)
 
 
-def select_first(run_dir: Path, pattern: str) -> Optional[Path]:
-    matches = sorted(run_dir.glob(pattern))
-    if not matches:
-        return None
-    return matches[0]
+def has_manifest_run(path: Path) -> bool:
+    return any(
+        entry.is_dir()
+        and entry.name.isdigit()
+        and (entry / "metadata" / "metadata_manifest.json").is_file()
+        for entry in path.iterdir()
+    )
 
 
-def select_all(run_dir: Path, pattern: str) -> List[Path]:
-    return sorted(run_dir.glob(pattern))
+def is_dataset_candidate(path: Path) -> bool:
+    if has_manifest_run(path):
+        return True
+    return len(path.name.split("_")) == 3 and find_latest_run_dir(path) is not None
 
 
 def matches_short_name(path: Path, short_name: str) -> bool:
@@ -78,20 +103,46 @@ def matches_short_name(path: Path, short_name: str) -> bool:
     return any(part == short_name for part in parts)
 
 
-def filter_for_short_name(paths: Iterable[Path], short_name: str) -> List[Path]:
-    filtered = [path for path in paths if matches_short_name(path, short_name)]
-    return sorted(filtered)
+class ArtifactResolver:
+    """Resolve artifacts from preferred layouts before legacy fallbacks."""
 
+    def __init__(self, run_dir: Path):
+        self.run_dir = run_dir
 
-def select_first_for_short_name(run_dir: Path, pattern: str, short_name: str) -> Optional[Path]:
-    matches = filter_for_short_name(run_dir.glob(pattern), short_name)
-    if not matches:
-        return None
-    return matches[0]
+    def find_all(
+        self,
+        patterns: Iterable[str],
+        *,
+        short_name: Optional[str] = None,
+        excluded_fragments: Tuple[str, ...] = (),
+    ) -> List[Path]:
+        for pattern in patterns:
+            matches = sorted(self.run_dir.glob(pattern))
+            if short_name:
+                matches = [path for path in matches if matches_short_name(path, short_name)]
+            if excluded_fragments:
+                matches = [
+                    path
+                    for path in matches
+                    if not any(fragment in path.name for fragment in excluded_fragments)
+                ]
+            if matches:
+                return matches
+        return []
 
-
-def select_all_for_short_name(run_dir: Path, pattern: str, short_name: str) -> List[Path]:
-    return filter_for_short_name(run_dir.glob(pattern), short_name)
+    def find_first(
+        self,
+        patterns: Iterable[str],
+        *,
+        short_name: Optional[str] = None,
+        excluded_fragments: Tuple[str, ...] = (),
+    ) -> Optional[Path]:
+        matches = self.find_all(
+            patterns,
+            short_name=short_name,
+            excluded_fragments=excluded_fragments,
+        )
+        return matches[0] if matches else None
 
 
 def load_json_file(path: Path) -> Tuple[Optional[dict], Optional[str]]:
@@ -134,6 +185,14 @@ def load_manifest(run_dir: Path) -> Tuple[Optional[dict], Optional[str]]:
     payload, error = load_json_file(manifest_path)
     if error:
         return None, error
+    for entry in payload.get("organisms", []):
+        metadata_json = entry.get("metadata_json")
+        if not metadata_json:
+            continue
+        metadata_path = Path(metadata_json)
+        relocated_path = manifest_path.parent / metadata_path.name
+        if relocated_path.is_file():
+            entry["metadata_json"] = str(relocated_path)
     payload["manifest_path"] = str(manifest_path)
     return payload, None
 
@@ -219,6 +278,8 @@ def process_species(
         issues.append(f"{slot}: Metadata missing short_name.")
         return data, issues
 
+    resolver = ArtifactResolver(run_dir)
+
     accession = metadata.get("accession")
     if accession:
         data["accession"] = accession
@@ -232,12 +293,16 @@ def process_species(
             issues.append(f"{slot}: {tax_err}")
 
     if include_tsv:
-        tsv_pattern = f"statistics/{short_name}/singlenuc/*_*{short_name}_*.tsv"
-        tsv_path = select_first_for_short_name(run_dir, tsv_pattern, short_name)
+        tsv_patterns = [
+            f"statistics/{short_name}/singlenuc/*_*{short_name}_*.tsv",
+            f"statistics/singlenuc/*_*{short_name}_*.tsv",
+            f"*_*{short_name}_*.tsv",
+        ]
+        tsv_path = resolver.find_first(tsv_patterns, short_name=short_name)
         if tsv_path:
             data["tsv_file"] = str(tsv_path)
         else:
-            issues.append(f"{slot}: No TSV matching '{tsv_pattern}' found.")
+            issues.append(f"{slot}: No single-nucleotide TSV found in supported layouts.")
 
     if include_sbst_ratio:
         if sbst_ratio_path and ratio_line_index is not None:
@@ -252,70 +317,40 @@ def process_species(
         else:
             issues.append(f"{slot}: Missing statistics/misc/sbstRatio*.out file.")
 
-    gc_pattern = f"statistics/misc/*{short_name}_gcContent*.out"
-    gc_path = select_first_for_short_name(run_dir, gc_pattern, short_name)
+    gc_patterns = [
+        f"statistics/misc/*{short_name}_gcContent*.out",
+        f"*{short_name}_gcContent*.out",
+    ]
+    gc_path = resolver.find_first(gc_patterns, short_name=short_name)
     if gc_path:
         data["gc_content_file"] = str(gc_path)
         data["gc_content"] = read_file_lines(gc_path)
     else:
         issues.append(
-            f"{slot}: No GC content file matching '{gc_pattern}' found."
+            f"{slot}: No GC content file found in supported layouts."
         )
 
     if include_pdfs:
-        fig_sn = f"figs/{short_name}/singlenuc"
-        fig_dn = f"figs/{short_name}/dinuc"
-        data["pdfs"] = {
-            "norm": [
+        pdfs: Dict[str, List[str]] = {}
+        for key, subdirectory, suffix, excluded_fragments, required_description in PDF_ARTIFACT_SPECS:
+            patterns = [
+                f"figs/{short_name}/{subdirectory}/*_*{short_name}_*{suffix}",
+                f"*_*{short_name}_*{suffix}",
+            ]
+            pdfs[key] = [
                 str(path)
-                for path in select_all_for_short_name(
-                    run_dir, f"{fig_sn}/ratio/*_*{short_name}_*_norm.pdf", short_name
+                for path in resolver.find_all(
+                    patterns,
+                    short_name=short_name,
+                    excluded_fragments=excluded_fragments,
                 )
-                if "_ncds_norm" not in path.name
-            ],
-            "logratio": [
-                str(path)
-                for path in select_all_for_short_name(
-                    run_dir, f"{fig_sn}/log-ratio/*_*{short_name}_*_logRatio*.pdf", short_name
-                )
-                if "_ncds_logRatio" not in path.name
-            ],
-            "ncds_norm": [
-                str(path)
-                for path in select_all_for_short_name(
-                    run_dir, f"{fig_sn}/ratio/*_*{short_name}_*_ncds_norm.pdf", short_name
-                )
-            ],
-            "ncds_logratio": [
-                str(path)
-                for path in select_all_for_short_name(
-                    run_dir, f"{fig_sn}/log-ratio/*_*{short_name}_*_ncds_logRatio*.pdf", short_name
-                )
-            ],
-            "dinuc_tsv": [
-                str(path)
-                for path in select_all_for_short_name(
-                    run_dir, f"{fig_dn}/*_*{short_name}_*_dinuc.tsv.pdf", short_name
-                )
-            ],
-            "dinuc_ncds_tsv": [
-                str(path)
-                for path in select_all_for_short_name(
-                    run_dir, f"{fig_dn}/*_*{short_name}_*_dinuc_ncds.tsv.pdf", short_name
-                )
-            ],
-        }
-
-        required_pdfs = {
-            "norm": "norm.pdf",
-            "logratio": "logRatio*.pdf",
-            "dinuc_tsv": "dinuc.tsv.pdf",
-        }
-        for key, description in required_pdfs.items():
-            if not data["pdfs"][key]:
+            ]
+            if required_description and not pdfs[key]:
                 issues.append(
-                    f"{slot}: Missing required PDF matching '*_*{short_name}_{description}'."
+                    f"{slot}: Missing required PDF matching "
+                    f"'*_*{short_name}_{required_description}'."
                 )
+        data["pdfs"] = pdfs
 
     return data, issues
 
@@ -325,6 +360,7 @@ def collect_identity_metrics(
 ) -> Tuple[Dict[str, str], List[str]]:
     identity: Dict[str, str] = {}
     issues: List[str] = []
+    resolver = ArtifactResolver(run_dir)
 
     def short_name_for(slot: str) -> Optional[str]:
         entry = slot_map.get(slot)
@@ -343,10 +379,13 @@ def collect_identity_metrics(
             issues.append(f"{key}: Missing short_name for {slot_a} or {slot_b}.")
             continue
 
-        pattern = f"intermediateFiles/*{short_a}2{short_b}_*.train"
-        train_path = select_first(run_dir, pattern)
+        patterns = [
+            f"intermediateFiles/*{short_a}2{short_b}_*.train",
+            f"*{short_a}2{short_b}_*.train",
+        ]
+        train_path = resolver.find_first(patterns)
         if not train_path:
-            issues.append(f"{key}: No train file matching '{pattern}' found.")
+            issues.append(f"{key}: No train file found in supported layouts.")
             continue
 
         identity_line = extract_identity_line(train_path)
@@ -379,8 +418,11 @@ def process_dataset(dataset_dir: Path, idt_threshold: float) -> Tuple[Optional[D
         return None, issues
     dataset_data["metadata_manifest"] = manifest.get("manifest_path")
     slot_map = build_manifest_slot_map(manifest)
+    resolver = ArtifactResolver(latest_run)
 
-    sbst_ratio_path = select_first(latest_run, "statistics/misc/sbstRatio*.out")
+    sbst_ratio_path = resolver.find_first(
+        ["statistics/misc/sbstRatio*.out", "sbstRatio*.out"]
+    )
 
     species1_meta = slot_map.get("org1")
     if not species1_meta:
@@ -449,26 +491,18 @@ def build_summary(root: Path, idt_threshold: float) -> Tuple[Dict[str, object], 
     filtered_entries: List[Dict[str, object]] = []
     aggregated_issues: Dict[str, List[str]] = {}
 
-    processed_candidate = False
+    if find_latest_run_dir(root):
+        dataset_dirs = [root]
+    else:
+        dataset_dirs = [
+            entry
+            for entry in sorted(root.iterdir())
+            if entry.is_dir() and is_dataset_candidate(entry)
+        ]
 
-    for entry in sorted(root.iterdir()):
-        if not entry.is_dir() or entry.name.isdigit():
-            continue
-        processed_candidate = True
+    for entry in dataset_dirs:
         dataset_data, issues = process_dataset(entry, idt_threshold)
         dataset_name = entry.name
-        if dataset_data:
-            dataset_entries.append(dataset_data)
-            filter_info = dataset_data.get("filter_status", {})
-            if not filter_info.get("excluded"):
-                filtered_entries.append(dataset_data)
-            dataset_name = dataset_data.get("dataset", dataset_name)
-        if issues:
-            aggregated_issues.setdefault(dataset_name, []).extend(issues)
-
-    if not processed_candidate:
-        dataset_data, issues = process_dataset(root, idt_threshold)
-        dataset_name = root.name
         if dataset_data:
             dataset_entries.append(dataset_data)
             filter_info = dataset_data.get("filter_status", {})
@@ -499,25 +533,14 @@ def main() -> None:
     output_text = json.dumps(summary_all, ensure_ascii=False, indent=2)
     filtered_output_text = json.dumps(summary_filtered, ensure_ascii=False, indent=2)
 
-    output_path: Optional[Path]
-    filtered_output_path: Optional[Path]
-
-    def derive_filtered_path(base_path: Path) -> Path:
-        suffix = base_path.suffix or ".json"
-        stem = base_path.stem if base_path.suffix else base_path.name
-        return base_path.with_name(f"{stem}_filtered{suffix}")
-
     if args.output:
         if args.output.strip() == "-":
             output_path = None
             filtered_output_path = None
         else:
-            output_path = Path(args.output).resolve()
-            filtered_output_path = derive_filtered_path(output_path)
+            output_path, filtered_output_path = summary_paths(input_root, args.output)
     else:
-        default_name = f"{input_root.name}_summary.json"
-        output_path = input_root / default_name
-        filtered_output_path = input_root / f"{input_root.name}_summary_filtered.json"
+        output_path, filtered_output_path = summary_paths(input_root)
 
     if output_path is not None:
         output_path.parent.mkdir(parents=True, exist_ok=True)

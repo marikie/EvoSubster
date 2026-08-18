@@ -24,6 +24,7 @@ Applied to 60 trios across 7 lineages (fungi, cnidarians, Apicomplexa, Phaeophyc
 ## Automation
 
 ### Skills (slash commands)
+
 - `/add-trio <lineage> <out_acc> <in1_acc> <in2_acc>` — download genomes + full pipeline
 - `/run-lineage <lineage>` — bulk-run all trios in a lineage
 - `/gen-figure <lineage> <triplet>` — regenerate R plots from existing TSVs
@@ -31,6 +32,7 @@ Applied to 60 trios across 7 lineages (fungi, cnidarians, Apicomplexa, Phaeophyc
 - `/gen-report <lineage> [--format word_document|pdf_document|html_document]` — render summary report
 
 ### Hooks (run automatically after file edits)
+
 - `.sh` files: `bash -n` syntax check
 - `src/count/`, `src/statistics/`, `src/metrics/` Python files: unit tests
 - `src/` or `config/` core files: full pipeline integration test (background, log: `/tmp/pipeline_test_*.log`)
@@ -66,7 +68,9 @@ Applied to 60 trios across 7 lineages (fungi, cnidarians, Apicomplexa, Phaeophyc
 │   │   └── pca_2d.R                   # 2D PCA plots
 │   ├── report/                        # Report generation
 │   │   ├── collect_run_summary.py     # Gather run metadata into JSON
+│   │   ├── report_contract.py         # Shared JSON validation and path rules
 │   │   ├── render_report.sh           # R Markdown report rendering
+│   │   ├── render_report.R            # R rendering and DOCX post-processing
 │   │   ├── run_report.sh              # Collect + render wrapper
 │   │   ├── link_tsvs.py              # TSV linking utility
 │   │   └── report_template.Rmd       # Report template
