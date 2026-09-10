@@ -55,3 +55,10 @@ tmp/
 
 # .md files (documentation, not code)
 AGENTS.md
+
+# Sample data and standalone docs kept local-only, not tracked in git
+/Primates_tree.nwk
+/Eupercaria_tree_spname_only.nwk
+/trio_candidates.txt
+/sbst_fromDwl_tree_mode.html
+/trio_selection.html
