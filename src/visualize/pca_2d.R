@@ -24,6 +24,17 @@ HULL_EXPANSION <- 1.10
 IDENTITY_PREFIX <- "# substitution percent identity:"
 DEFAULT_TSV_PATTERN <- "*_ncds.tsv"
 CLASSIFICATION_ORDER <- c("domain", "kingdom", "phylum", "class", "order", "family", "genus", "species")
+PHYLUM_COLORS <- c(
+  Apicomplexa = "#E69F00",
+  Arthropoda = "#0072B2",
+  Ascomycota = "#009E73",
+  Basidiomycota = "#F0E442",
+  Chordata = "#D55E00",
+  Cnidaria = "#CC79A7",
+  Mucoromycota = "#56B4E9",
+  Oomycota = "#000000",
+  Unknown = "#999999"
+)
 
 invisible(utils::globalVariables(c("mutNum", "totalRootNum", "mutType")))
 
@@ -100,6 +111,14 @@ parse_args <- function() {
 }
 
 warn <- function(msg) message(sprintf("Warning: %s", msg))
+
+discover_dataset_dirs <- function(input_root) {
+  input_root <- normalizePath(input_root, winslash = "/", mustWork = TRUE)
+  entries <- list.dirs(input_root, full.names = TRUE, recursive = FALSE)
+  entries <- entries[normalizePath(entries, winslash = "/", mustWork = FALSE) != input_root]
+  dataset_dirs <- entries[!grepl("^[0-9]+$", basename(entries))]
+  if (length(dataset_dirs) == 0) input_root else dataset_dirs
+}
 
 find_latest_run_dir <- function(dataset_dir) {
   entries <- list.dirs(dataset_dir, full.names = TRUE, recursive = FALSE)
@@ -303,6 +322,19 @@ filter_entry_substitution_tsvs <- function(paths, entry) {
   paths[vapply(basename(paths), function(file_name) {
     startsWith(file_name, prefix) && !grepl("_dinuc_", file_name, fixed = TRUE)
   }, logical(1))]
+}
+
+substitution_tsv_search_locations <- function(run_dir, pattern, slot_map) {
+  ingroup_entries <- Filter(function(entry) {
+    tolower(entry$role %||% "") != "outgroup" &&
+      !is.null(entry$short_name) && entry$short_name != ""
+  }, slot_map)
+  nested_locations <- vapply(
+    ingroup_entries,
+    function(entry) file.path(run_dir, "statistics", entry$short_name, "singlenuc", pattern),
+    character(1)
+  )
+  unique(c(unname(nested_locations), file.path(run_dir, pattern)))
 }
 
 collect_substitution_tsvs <- function(run_dir, pattern, slot_map) {
@@ -564,6 +596,19 @@ write_pc_loadings <- function(rotation_matrix, feature_names, output_dir, prefix
   }
 }
 
+build_classification_palette <- function(labels, label_name) {
+  labels <- unique(as.character(labels))
+  palette <- scales::hue_pal()(length(labels))
+  names(palette) <- labels
+  if (tolower(label_name %||% "") != "phylum") {
+    return(palette)
+  }
+
+  known_labels <- intersect(labels, names(PHYLUM_COLORS))
+  palette[known_labels] <- PHYLUM_COLORS[known_labels]
+  palette
+}
+
 plot_pca_scatter <- function(output_path, pca_data, species_labels, color_labels, cluster_labels, label_name, feature_desc, cluster_boundary = "none", show_labels = TRUE) {
   df <- tibble(
     PC1 = pca_data[, 1],
@@ -572,8 +617,7 @@ plot_pca_scatter <- function(output_path, pca_data, species_labels, color_labels
     label = color_labels,
     cluster = factor(cluster_labels)
   )
-  palette <- scales::hue_pal()(length(unique(df$label)))
-  names(palette) <- unique(df$label)
+  palette <- build_classification_palette(df$label, label_name)
   classification_label <- stringr::str_to_title(label_name)
   boundary_mode <- tolower(cluster_boundary %||% "none")
   p <- ggplot(df, aes(x = .data$PC1, y = .data$PC2, color = .data$label)) +
@@ -830,9 +874,7 @@ main <- function() {
   observed_levels <- character()
   dataset_status <- list()
 
-  dataset_dirs <- list.dirs(input_root, recursive = FALSE, full.names = TRUE)
-  dataset_dirs <- dataset_dirs[!grepl("^[0-9]+$", basename(dataset_dirs))]
-  if (length(dataset_dirs) == 0) dataset_dirs <- input_root
+  dataset_dirs <- discover_dataset_dirs(input_root)
 
   for (dataset_dir in dataset_dirs) {
     dataset_name <- basename(dataset_dir)
@@ -859,7 +901,14 @@ main <- function() {
 
     tsv_files <- collect_substitution_tsvs(latest_run, args$tsv_pattern, slot_map)
     if (length(tsv_files) == 0) {
-      warn(sprintf("%s: No TSV files matching '%s' in %s.", dataset_name, args$tsv_pattern, latest_run))
+      locations <- substitution_tsv_search_locations(latest_run, args$tsv_pattern, slot_map)
+      warn(sprintf(
+        "%s: No TSV files matching '%s' in %s. Checked: %s.",
+        dataset_name,
+        args$tsv_pattern,
+        latest_run,
+        paste(locations, collapse = "; ")
+      ))
       next
     }
     samples_before <- length(logratio_vectors)

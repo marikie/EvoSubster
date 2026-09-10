@@ -56,6 +56,73 @@ run_tests <- function() {
   dir.create(test_root)
   on.exit(unlink(test_root, recursive = TRUE), add = TRUE)
 
+  lineage_root <- file.path(test_root, "lineage")
+  dataset_a <- file.path(lineage_root, "dataset-a")
+  dataset_b <- file.path(lineage_root, "dataset-b")
+  dir.create(file.path(dataset_a, "20260809"), recursive = TRUE)
+  dir.create(file.path(dataset_a, "20260810"), recursive = TRUE)
+  dir.create(file.path(dataset_b, "20260811"), recursive = TRUE)
+  dir.create(file.path(lineage_root, "20260812"), recursive = TRUE)
+  dataset_dirs <- if (exists("discover_dataset_dirs")) {
+    discover_dataset_dirs(lineage_root)
+  } else {
+    character()
+  }
+  check(
+    identical(sort(basename(dataset_dirs)), c("dataset-a", "dataset-b")),
+    "lineage-root discovery selects immediate dataset directories and ignores numeric root entries"
+  )
+  check(
+    identical(normalizePath(find_latest_run_dir(dataset_a)), normalizePath(file.path(dataset_a, "20260810"))),
+    "dataset discovery selects the latest numeric run directory"
+  )
+
+  phylum_labels <- c(
+    "Apicomplexa", "Arthropoda", "Ascomycota", "Basidiomycota", "Chordata",
+    "Cnidaria", "Mucoromycota", "Oomycota", "Unknown"
+  )
+  phylum_palette <- if (exists("build_classification_palette")) {
+    build_classification_palette(phylum_labels, "phylum")
+  } else {
+    character()
+  }
+  check(
+    identical(unname(phylum_palette["Apicomplexa"]), "#E69F00") &&
+      identical(unname(phylum_palette["Arthropoda"]), "#0072B2"),
+    "phylum palette separates Apicomplexa orange from Arthropoda blue"
+  )
+  check(
+    length(phylum_palette) == length(phylum_labels) &&
+      length(unique(unname(phylum_palette))) == length(phylum_labels),
+    "phylum palette assigns a unique color to every current category"
+  )
+  check(
+    identical(unname(phylum_palette["Unknown"]), "#999999"),
+    "phylum palette renders Unknown in gray"
+  )
+
+  generic_palette <- if (exists("build_classification_palette")) {
+    build_classification_palette(c("alpha", "beta"), "class")
+  } else {
+    character()
+  }
+  check(
+    identical(generic_palette, c(alpha = "#F8766D", beta = "#00BFC4")),
+    "non-phylum plots retain the existing automatic hue palette"
+  )
+
+  future_palette <- if (exists("build_classification_palette")) {
+    build_classification_palette(c("Apicomplexa", "NovelPhylum"), "phylum")
+  } else {
+    character()
+  }
+  check(
+    length(future_palette) == 2 &&
+      !is.na(future_palette["NovelPhylum"]) &&
+      nzchar(future_palette["NovelPhylum"]),
+    "unregistered phyla receive an automatic fallback color"
+  )
+
   relocated_dir <- file.path(test_root, "relocated", "metadata")
   old_dir <- file.path(test_root, "old", "metadata")
   local_org2 <- file.path(relocated_dir, "In2_GCA_000000002.1.json")
@@ -213,6 +280,23 @@ run_tests <- function() {
       sort(c(mixed_nested_tsv, mixed_legacy_tsv))
     ),
     "TSV discovery falls back independently for each ingroup in a mixed layout"
+  )
+
+  search_locations <- if (exists("substitution_tsv_search_locations")) {
+    substitution_tsv_search_locations(artifact_run, "*_ncds.tsv", relocated$slot_map)
+  } else {
+    character()
+  }
+  check(
+    identical(
+      search_locations,
+      c(
+        file.path(artifact_run, "statistics", "In2", "singlenuc", "*_ncds.tsv"),
+        file.path(artifact_run, "statistics", "In3", "singlenuc", "*_ncds.tsv"),
+        file.path(artifact_run, "*_ncds.tsv")
+      )
+    ),
+    "TSV discovery diagnostics list each ingroup location and the legacy run-root location"
   )
 
   if (fail > 0L) quit(status = 1)
