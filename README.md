@@ -259,6 +259,50 @@ Representative outputs include:
 
 Re-running the pipeline skips steps whose outputs already exist.
 
+## Generating Reports
+
+`src/report/` aggregates the TSV/statistics outputs of one or more pipeline
+runs into a single rendered report (Word, PDF, or HTML).
+
+### Report a single lineage or trio
+
+```bash
+./src/report/run_report.sh <input_dir> [--idt-threshold FLOAT] [--json PATH] [--use-filtered] [-o OUTPUT] [-f FORMAT] [--collect-only]
+```
+
+`input_dir` is a lineage root (`results/<lineage>`) or a single trio root
+(`results/<ORG1>_<ORG2>_<ORG3>`). This runs `collect_run_summary.py`, which
+gathers run metadata into a JSON summary (default:
+`<input_dir>/<name>_summary.json`), then `render_report.sh`, which renders it
+via R Markdown.
+
+- `--idt-threshold` filters trios by percent identity (default: `80.0`).
+- `--use-filtered` renders from the identity-filtered JSON
+  (`_filtered.json`) instead of the full summary.
+- `-f, --format` sets the rmarkdown output format (default: `word_document`;
+  also accepts `pdf_document`, `html_document`).
+- `-o, --report-output` sets the rendered report's filename.
+- `--collect-only` runs only `collect_run_summary.py` and skips rendering.
+
+To re-render a document from an existing JSON summary without recollecting:
+
+```bash
+./src/report/render_report.sh -j <summary.json> [-o OUTPUT] [-f FORMAT]
+```
+
+### Aggregate trios from multiple lineage roots first
+
+```bash
+./src/report/link_trio_dirs.sh --output-dir OUTPUT_DIR INPUT_DIR [INPUT_DIR...]
+```
+
+Scans each `INPUT_DIR` (a lineage root) for trio directories and creates
+relative symlinks to them under `OUTPUT_DIR`, so trios that live under
+different lineage roots can be reported on together by pointing
+`run_report.sh` at `OUTPUT_DIR`. The command is idempotent — existing correct
+symlinks are reused — and fails on a name collision between two source trios
+or if `OUTPUT_DIR` is itself one of the input directories.
+
 ## Example
 
 The figures below are the outputs of a fish trio run. The organisms are:
