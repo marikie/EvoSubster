@@ -178,6 +178,32 @@ Stage 0 writes the following audit files under
   file always contains headers, including when no species requires review.
 - `selected_assemblies.tsv`: the one assembly passed to Stage 1 for each species.
 
+Tree outputs are written in the same directory:
+
+- `pruned_tree.nwk`: the Stage 0 tree with one assembly per species and tip
+  labels in `<tip>_<accession>` format, such as
+  `Takifugu_rubripes_GCA_901000725.3`.
+- `pruned_tree.pdf`: the Stage 0 tree plotted with the same accession labels.
+- `selected_trios.nwk`: the Stage 0 tree with `_trio<k>_<role>` appended to each
+  trio member's accession label, where `k` is the 1-based selected-trio row
+  number and `role` is `out`, `in1`, or `in2`. Shared tips concatenate suffixes
+  in trio order, such as `_trio1_out_trio2_out`; other tips keep their base labels.
+- `selected_trios.pdf`: the tree with colored stars and `T<k>` labels marking
+  trio members, open circles marking outgroups, and a species legend. Tips
+  outside every trio are gray.
+
+Both PDFs are written with `cairo_pdf()`, so the font is embedded and the text
+stays crisp when zoomed in any viewer (a plain `pdf()` leaves Helvetica
+non-embedded, and some viewers substitute a blurry fallback). This requires an
+R build with cairo support (`capabilities("cairo")` must be `TRUE`).
+
+The Stage 0 tree files are also written by `trio_selection.R --dry-run`.
+The Stage 1 tree files are written only for non-dry-run selections containing
+at least one trio. Once the Stage 0 outputs have been written, any Stage 1 tree
+files left by a previous run in the same directory are removed, so a `--dry-run`
+or a run selecting zero trios never leaves stale `selected_trios.nwk`/`.pdf`
+behind.
+
 ### Use FASTA files of your choice
 
 ```bash

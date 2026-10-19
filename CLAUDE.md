@@ -131,7 +131,7 @@ MAF file → `Util.getJoinedAlignmentObj()` → `JoinedAlignment` objects (with 
 - **jq** (for JSON parsing)
 - **yq** (Mike Farah v4+)
 - **Python 3.8+** (stdlib only)
-- **R 4.0+** with: stringr, RColorBrewer, showtext, jsonlite, curl, dplyr, ggplot2, rlang, sysfonts
+- **R 4.0+** (built with cairo, for the tree PDFs) with: stringr, RColorBrewer, showtext, jsonlite, curl, dplyr, ggplot2, rlang, sysfonts
 
 ## Coding Conventions
 

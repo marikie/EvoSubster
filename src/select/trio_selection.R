@@ -18,13 +18,15 @@
 # outgroup while training as few pairs as possible.
 #
 # Stage 0  prune the tree to one assembly per species      [NCBI metadata, no download]
+#          write pruned_tree.nwk/.pdf with accession labels (also for --dry-run)
 # Stage 1  per ingroup pair: search outgroups near->far,   [dwl_organism.sh + last_train.sh
 #          stop at the first thesis-rule pass -> one trio    on demand; trio_filter.py to judge]
+#          write selected_trios.nwk/.pdf with trio roles when trios are selected (stale ones from a previous run are removed)
 #
 # Usage:
 #   Rscript src/select/trio_selection.R --tree Primates_tree.nwk [options]
 #
-# Depends on: ape, dplyr (R); python3, LAST, curl, jq (external).
+# Depends on: ape, dplyr (R); R built with cairo (capabilities("cairo")); python3, LAST, curl, jq (external).
 
 SCRIPT_DIR <- local({
   sourced_file <- tryCatch(sys.frame(1)$ofile, error = function(...) NULL)
@@ -1045,6 +1047,150 @@ select_trios <- function(tree, leaves, opts, fetch = NULL) {
   do.call(rbind, results)
 }
 
+# --- tree outputs ---
+
+accession_tip_labels <- function(tree, leaves) {
+  rows <- match(tree$tip.label, leaves$tip)
+  if (anyNA(rows)) {
+    stop("No matching row in leaves for tree tip(s): ",
+         paste(tree$tip.label[is.na(rows)], collapse = ", "), call. = FALSE)
+  }
+  paste0(tree$tip.label, "_", leaves$accession[rows])
+}
+
+tree_pdf_size <- function(ntip) {
+  c(width = 11, height = max(7, 0.18 * ntip + 2))
+}
+
+# grDevices::pdf() leaves Helvetica non-embedded, so some viewers substitute a
+# poorly rendered fallback that looks blurry when zoomed. cairo_pdf() embeds a
+# font subset for consistent, crisp text; fontconfig maps absent Helvetica to a
+# metric-compatible sans such as Nimbus Sans.
+open_tree_pdf <- function(path, size) {
+  if (!capabilities("cairo")) {
+    stop("R was built without cairo; cannot write the tree PDF with embedded fonts: ", path, call. = FALSE)
+  }
+  grDevices::cairo_pdf(path, width = size[["width"]], height = size[["height"]], family = "Helvetica")
+}
+
+write_stage0_tree <- function(tree, leaves, out_dir) {
+  labeled <- tree
+  labeled$tip.label <- accession_tip_labels(tree, leaves)
+  files <- c(nwk = file.path(out_dir, "pruned_tree.nwk"),
+             pdf = file.path(out_dir, "pruned_tree.pdf"))
+  ape::write.tree(labeled, file = files[["nwk"]])
+
+  ntip <- ape::Ntip(labeled)
+  size <- tree_pdf_size(ntip)
+  open_tree_pdf(files[["pdf"]], size)
+  on.exit(grDevices::dev.off(), add = TRUE)
+  ape::plot.phylo(labeled, cex = 0.7, label.offset = 0.01, underscore = TRUE)
+  title(sprintf("Stage 0: %d species, one assembly each", ntip))
+  invisible(files)
+}
+
+trio_tip_roles <- function(selected) {
+  if (is.null(nrow(selected)) || nrow(selected) == 0L) {
+    return(data.frame(tip = character(), trio = integer(), role = character(),
+                      stringsAsFactors = FALSE))
+  }
+  data.frame(
+    tip = as.vector(t(as.matrix(selected[, c("out_tip", "in1_tip", "in2_tip")]))),
+    trio = rep(seq_len(nrow(selected)), each = 3L),
+    role = rep(c("out", "in1", "in2"), times = nrow(selected)),
+    stringsAsFactors = FALSE
+  )
+}
+
+stage1_tree_paths <- function(out_dir) {
+  c(nwk = file.path(out_dir, "selected_trios.nwk"),
+    pdf = file.path(out_dir, "selected_trios.pdf"))
+}
+
+remove_stage1_tree_outputs <- function(out_dir) {
+  files <- stage1_tree_paths(out_dir)
+  unlink(files)
+  invisible(files)
+}
+
+write_selected_trio_tree <- function(tree, leaves, selected, out_dir) {
+  labeled <- tree
+  labeled$tip.label <- accession_tip_labels(tree, leaves)
+  roles <- trio_tip_roles(selected)
+  tip_idx <- match(leaves$tip[match(roles$tip, leaves$tip)], tree$tip.label)
+  if (anyNA(tip_idx)) {
+    stop("Selected trio tip(s) missing from the tree or leaves: ",
+         paste(roles$tip[is.na(tip_idx)], collapse = ", "), call. = FALSE)
+  }
+
+  annotated <- labeled
+  for (i in seq_len(nrow(roles))) {
+    idx <- tip_idx[i]
+    annotated$tip.label[idx] <- paste0(annotated$tip.label[idx], "_trio",
+                                      roles$trio[i], "_", roles$role[i])
+  }
+  files <- stage1_tree_paths(out_dir)
+  ape::write.tree(annotated, file = files[["nwk"]])
+
+  ntip <- ape::Ntip(labeled)
+  n_trio <- nrow(selected)
+  size <- tree_pdf_size(ntip)
+  open_tree_pdf(files[["pdf"]], size)
+  on.exit(grDevices::dev.off(), add = TRUE)
+  colors <- grDevices::hcl.colors(n_trio, "Dark 3")
+  tip_colors <- ifelse(seq_len(ntip) %in% tip_idx, "black", "grey55")
+
+  # Reserve physical space for each star/number pair before the accession label.
+  # Convert inches to tree units so short branches do not crowd the annotations.
+  tree_depth <- if (is.null(tree$edge.length) || anyNA(tree$edge.length)) {
+    max(ape::node.depth(tree)) - 1
+  } else {
+    max(ape::node.depth.edgelength(tree))
+  }
+  tree_depth <- max(tree_depth, .Machine$double.eps)
+  marker_step <- 0.22 + max(c(0, strwidth(paste0("T", seq_len(n_trio)),
+                                        units = "inches", cex = 0.6)))
+  annotation_width <- max(tabulate(tip_idx, nbins = ntip)) * marker_step + 0.1
+  label_width <- max(strwidth(labeled$tip.label, units = "inches", cex = 0.7, font = 3))
+  units_per_inch <- tree_depth / max(par("pin")[[1]] - annotation_width - label_width, 1)
+  label_offset <- annotation_width * units_per_inch
+  ape::plot.phylo(
+    labeled, cex = 0.7, underscore = TRUE, tip.color = tip_colors,
+    label.offset = label_offset,
+    x.lim = c(0, tree_depth + label_offset + label_width * units_per_inch),
+    y.lim = c(1, ntip + n_trio + 2), xaxs = "i"
+  )
+
+  # Repeated tips use successive positions, preserving the selected-trio order.
+  tip_slots <- integer(ntip)
+  for (k in seq_len(n_trio)) {
+    members <- which(roles$trio == k)
+    for (i in members) {
+      idx <- tip_idx[i]
+      offset <- (0.1 + tip_slots[idx] * marker_step) * units_per_inch
+      ape::tiplabels(tip = idx, pch = 8, col = colors[k], cex = 1.6, lwd = 2,
+                     offset = offset)
+      if (roles$role[i] == "out") {
+        ape::tiplabels(tip = idx, pch = 1, col = colors[k], cex = 1.6, lwd = 2,
+                       offset = offset)
+      }
+      ape::tiplabels(text = paste0("T", k), tip = idx, frame = "none",
+                     col = colors[k], cex = 0.6, adj = c(0, 0.5),
+                     offset = offset + 0.1 * units_per_inch)
+      tip_slots[idx] <- tip_slots[idx] + 1L
+    }
+  }
+  if (n_trio) {
+    legend("topleft", legend = sprintf("T%d: %s (out) / %s + %s", seq_len(n_trio),
+                                      selected$out_species, selected$in1_species,
+                                      selected$in2_species),
+           col = colors, pch = 8, bty = "n", cex = 0.7)
+  }
+  title(sprintf("Stage 1: %d trios selected (star = trio member, circled = outgroup)",
+                n_trio))
+  invisible(files)
+}
+
 # --- main --------------------------------------------------------------------
 
 main <- function() {
@@ -1066,13 +1212,20 @@ main <- function() {
   write_tsv(pruned$leaves, file.path(opts$out_dir, "selected_assemblies.tsv"))
   tree <- pruned$tree
   leaves <- pruned$leaves
+  stage0_files <- write_stage0_tree(tree, leaves, opts$out_dir)
+  log_stage("Stage 0 tree ->", stage0_files[["nwk"]], "/", stage0_files[["pdf"]])
+  # Stage 0 output is current from here on, so Stage 1 tree files from a previous run are
+  # stale whether this run stops at --dry-run or selects zero trios: clear them now and
+  # write them again only when trios are selected.
+  remove_stage1_tree_outputs(opts$out_dir)
 
   if (opts$dry_run) {
     pairs <- enumerate_pairs_dry(tree, leaves, opts$ingroup_pairing)
     out <- file.path(opts$out_dir, "candidate_outgroups.tsv")
     write_tsv(pairs, out)
     log_stage("Stage 1 (dry-run):", nrow(pairs), "ingroup couple(s) with an available",
-              "outgroup (", opts$ingroup_pairing, "pairing); candidate order ->", out)
+              "outgroup (", opts$ingroup_pairing, "pairing); candidate order ->",
+              paste0(out, "; no Stage 1 tree files"))
     return(invisible(NULL))
   }
 
@@ -1080,6 +1233,12 @@ main <- function() {
   selected <- select_trios(tree, leaves, opts, fetch)
   selected_file <- file.path(opts$out_dir, "selected_trios.tsv")
   write_tsv(selected, selected_file)
+  if (nrow(selected)) {
+    stage1_files <- write_selected_trio_tree(tree, leaves, selected, opts$out_dir)
+    log_stage("Stage 1 tree ->", stage1_files[["nwk"]], "/", stage1_files[["pdf"]])
+  } else {
+    log_stage("Stage 1 tree: no trios selected; none written")
+  }
   log_stage("Selected", nrow(selected), "trios (one per ingroup pair) ->", selected_file)
 
   if (!opts$keep_unused_species_data) {
