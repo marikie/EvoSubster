@@ -6,7 +6,10 @@ library(showtext)
 library(sysfonts)
 library(rlang)
 
-generate_plots <- function(tsv_path, out_dir = dirname(tsv_path)) {
+script_file <- sub("^--file=", "", grep("^--file=", commandArgs(), value = TRUE)[1])
+source(file.path(dirname(normalizePath(script_file)), "plot_species_label.R"))
+
+generate_plots <- function(tsv_path, out_dir = dirname(tsv_path), species_name = "") {
   data <- read.csv(tsv_path, sep = "\t", header = TRUE)
 
   # Build output path using out_dir + basename without extension
@@ -15,10 +18,10 @@ generate_plots <- function(tsv_path, out_dir = dirname(tsv_path)) {
   graph_path_mean <- paste(path_without_extension, "_logRatio.pdf", sep = "")
   data <- add_logRatio(data)
   # create_pdf(graph_path_exp, data, value_col = "logRatio_exp")
-  create_pdf(graph_path_mean, data, value_col = "logRatio_mean")
+  create_pdf(graph_path_mean, data, value_col = "logRatio_mean", species_name = species_name)
 }
 
-create_pdf <- function(graph_path, data, value_col) {
+create_pdf <- function(graph_path, data, value_col, species_name = "") {
   # Prepare ordering by substitution type groups and within-group order
   group_order <- c("C>A", "C>G", "C>T", "T>A", "T>C", "T>G")
   # Fonts for labels
@@ -160,9 +163,11 @@ create_pdf <- function(graph_path, data, value_col) {
     geom_hline(yintercept = 0, linetype = "solid", color = "#666666", linewidth = 0.6) +
     scale_x_continuous(breaks = x_breaks, labels = x_labels, expand = c(0, 0), minor_breaks = NULL) +
     scale_y_continuous(breaks = seq(-max_int, max_int, by = 1), minor_breaks = NULL) +
-    labs(x = "Original Trinucleotides", y = y_label) +
+    labs(x = "Original Trinucleotides", y = y_label, title = species_name) +
     theme_minimal(base_size = 12) +
     ggplot2::theme(
+      plot.title.position = "plot",
+      plot.title = element_text(size = 10, hjust = 1, family = "os", face = "italic", margin = margin(b = 8)),
       axis.text.x = element_blank(),
       axis.title.x = element_text(size = 26, margin = margin(t = 10), family = "os"),
       axis.title.y = element_text(size = 26, margin = margin(r = 10), family = "os"),
@@ -230,7 +235,12 @@ add_logRatio <- function(data) {
 # Access the arguments
 args <- commandArgs(trailingOnly = TRUE)
 
+if (length(args) < 1 || length(args) > 3) {
+  stop("Usage: logRatioPlot.R <infile> [out_dir] [species_full_name]")
+}
+
 # Access the arguments
 tsv_path <- args[1] # File path for the input data, .tsv file
 out_dir <- if (length(args) >= 2) args[2] else dirname(tsv_path)
-generate_plots(tsv_path, out_dir)
+species_name <- plot_species_name(tsv_path, if (length(args) >= 3) args[3] else NULL)
+generate_plots(tsv_path, out_dir, species_name)

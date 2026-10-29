@@ -4,9 +4,12 @@ library(showtext)
 library(sysfonts)
 library(dplyr)
 
+script_file <- sub("^--file=", "", grep("^--file=", commandArgs(), value = TRUE)[1])
+source(file.path(dirname(normalizePath(script_file)), "plot_species_label.R"))
+
 # MODIFIED THE CODE FROM https://github.com/kartong88/Plot-Mutation-Landscape
 
-generate_plots <- function(tsv_path, out_dir = dirname(tsv_path)) {
+generate_plots <- function(tsv_path, out_dir = dirname(tsv_path), species_name = "") {
   data <- read_and_transform_data(tsv_path)
   trinuc.lab <- data %>% pull(oriType)
 
@@ -21,11 +24,11 @@ generate_plots <- function(tsv_path, out_dir = dirname(tsv_path)) {
   origraph_path  <- file.path(count_dir, paste0(base, "_ori.pdf"))
 
   print(paste("Creating norm graph...", normgraph_path))
-  create_pdf_plot(normgraph_path, data, trinuc.lab, "norm")
+  create_pdf_plot(normgraph_path, data, trinuc.lab, "norm", species_name)
   print(paste("Creating sbst graph...", sbstgraph_path))
-  create_pdf_plot(sbstgraph_path, data, trinuc.lab, "sbst")
+  create_pdf_plot(sbstgraph_path, data, trinuc.lab, "sbst", species_name)
   print(paste("Creating ori graph...", origraph_path))
-  create_pdf_plot_ori(origraph_path, data, trinuc.lab)
+  create_pdf_plot_ori(origraph_path, data, trinuc.lab, species_name)
 
   process_norm_graph(data)
 }
@@ -70,7 +73,7 @@ compute_y_axis_max <- function(conv_data_norm) {
   }
 }
 
-create_pdf_plot <- function(filename, data, trinuc.lab, graph_type) {
+create_pdf_plot <- function(filename, data, trinuc.lab, graph_type, species_name = "") {
   conv.data.norm <- extract_values(data, graph_type)
   pct_yaxs_max <- compute_y_axis_max(conv.data.norm)
   color_array <- brewer.pal(6, "Dark2")
@@ -94,10 +97,11 @@ create_pdf_plot <- function(filename, data, trinuc.lab, graph_type) {
   add_labels(trinuc.lab, bar_positions)
   add_axis_names(graph_type)
   add_colored_rectangles(bar_positions, pct_yaxs_max, color_array)
+  add_species_label(species_name, cex = if (graph_type == "norm") 2.0 else 0.85, family = "os")
   dev.off()
 }
 
-create_pdf_plot_ori <- function(filename, data, trinuc.lab) {
+create_pdf_plot_ori <- function(filename, data, trinuc.lab, species_name = "") {
   # Get unique oriType and totalRootNum combinations
   unique_data <- data %>%
     select(oriType, totalRootNum) %>%
@@ -126,6 +130,7 @@ create_pdf_plot_ori <- function(filename, data, trinuc.lab) {
   axis(side = 2, line = -0.5)
   add_unique_labels(unique_labels, bar_positions)
   add_axis_names("ori")
+  add_species_label(species_name, family = "os")
   dev.off()
 }
 
@@ -223,7 +228,12 @@ process_norm_graph <- function(data) {
 
 args <- commandArgs(trailingOnly = TRUE)
 
+if (length(args) < 1 || length(args) > 3) {
+  stop("Usage: sbmut.R <infile> [out_dir] [species_full_name]")
+}
+
 # Access the arguments
 tsv_path <- args[1] # File path for the input data, .tsv file
 out_dir <- if (length(args) >= 2) args[2] else dirname(tsv_path)
-generate_plots(tsv_path, out_dir)
+species_name <- plot_species_name(tsv_path, if (length(args) >= 3) args[3] else NULL)
+generate_plots(tsv_path, out_dir, species_name)
