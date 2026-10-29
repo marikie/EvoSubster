@@ -229,9 +229,33 @@ Tree outputs are written in the same directory:
   trio member's accession label, where `k` is the 1-based selected-trio row
   number and `role` is `out`, `in1`, or `in2`. Shared tips concatenate suffixes
   in trio order, such as `_trio1_out_trio2_out`; other tips keep their base labels.
-- `selected_trios.pdf`: the tree with colored stars and `T<k>` labels marking
-  trio members, open circles marking outgroups, and a species legend. Tips
-  outside every trio are gray.
+- `selected_trios.pdf`: the tree with colored stars marking trio members,
+  open circles marking outgroups, and a species legend. Outgroup labels show
+  `T<k>` followed by outgroup–in1, outgroup–in2, and in1–in2 sequence percent
+  identities, in that order, rounded to the nearest integer with .5 rounded up
+  (for example, `T1 81% 82% 92%`). The stored identity values retain their precision.
+  Ingroup labels are `T<k>.1` for in1 (genome2) and `T<k>.2` for in2 (genome3).
+  A key below the title illustrates the circled star for outgroups and plain star
+  for ingroups, and explains the three identity values and their rounding.
+  The title reports the selected trio count. Below it, **Command** records the
+  actual `Rscript` invocation, followed by all effective CLI settings (including
+  defaults), grouped as **Effective selection settings**, **Runtime**, and
+  **Paths**. The command includes only the supplied arguments, with shell quoting
+  where needed; pipeline tree mode records its underlying R invocation.
+  Values are marked `[specified]`, `[default]`, `[from --idt-threshold]`, or
+  `[derived from --out-dir]`. Supplying a value equal to its default still marks
+  it as specified. The run date and automatic train-cache path show their actual
+  resolved values. Selection conditions use strict `>` and give the gap in
+  percentage points; the genus exemption is stated explicitly. False flags show
+  `off`, and absent external QC shows `none`. This describes the R CLI settings;
+  environment-only LAST settings are not included.
+  Long commands and paths wrap to the page width, and the page height/top margin
+  grow to fit the settings without reducing the tree area. Direct calls to the
+  plotting helper without execution metadata display `not recorded`.
+  Existing PDFs are unchanged until regenerated. The TSV threshold records and
+  selection rules are unchanged, and threshold records are not required to plot.
+  Shared tips display each trio's annotation in order, and the page widens to
+  accommodate the annotations. Tips outside every trio are gray.
 
 Both PDFs are written with `cairo_pdf()`, so the font is embedded and the text
 stays crisp when zoomed in any viewer (a plain `pdf()` leaves Helvetica
