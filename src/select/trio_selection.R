@@ -12,10 +12,10 @@
 # ultrametric, so its distances cannot rank outgroups -- the real decision needs
 # last-train identity.  For each pair we walk the candidates nearest-first,
 # download + last-train on demand, and STOP at the first outgroup that passes the
-# thesis rule.  The strict thesis ordering (idt_12 < idt_23 AND idt_13 < idt_23)
-# is itself the "not too close" boundary, and --idt-threshold is the "not too far"
-# boundary, so nearest-first + first-pass yields the closest still-external
-# outgroup while training as few pairs as possible.
+# thesis rule. Both ingroup-minus-outgroup identity gaps must exceed
+# --min-idt-gap-between-out-in, unless the target genus pattern exempts them.
+# Separate ingroup/outgroup identity thresholds set the "not too far" boundary.
+# Nearest-first + first-pass trains as few pairs as possible.
 #
 # Stage 0  prune the tree to one assembly per species      [NCBI metadata, no download]
 #          write pruned_tree.nwk/.pdf with accession labels (also for --dry-run)
@@ -57,6 +57,9 @@ IDENTITY_PREFIX <- "# substitution percent identity:"
 defaults <- list(
   tree = NULL,
   idt_threshold = 80,
+  ingroup_idt_threshold = NULL,
+  outgroup_idt_threshold = NULL,
+  min_idt_gap_between_out_in = 0,
   max_outgroup_tries = 5,
   ingroup_pairing = "matching",
   min_rel_contig_n50 = 0,
@@ -81,7 +84,12 @@ usage <- function() {
     "                          with spaces encoded as underscores (for example,",
     "                          Chaunax_sp._Z400). Legacy accession-suffixed trees must first",
     "                          be converted with src/select/strip_newick_accessions.py.",
-    "  --idt-threshold N       Every pairwise identity must exceed this (default: 80).",
+    "  --idt-threshold N       Common identity threshold (default: 80); individual values override it.",
+    "  --ingroup-idt-threshold N  Ingroup identity must strictly exceed this (default: 80).",
+    "  --outgroup-idt-threshold N  Both outgroup-ingroup identities must strictly exceed this (default: 80).",
+    "  --min-idt-gap-between-out-in N  Both ingroup minus outgroup-ingroup identity gaps must",
+    "                          strictly exceed N percentage points (default: 0). Exempt when",
+    "                          ingroups share a genus distinct from the outgroup.",
     "  --max-outgroup-tries N  Give up on an ingroup pair after training this many outgroup",
     "                          candidates without a thesis-rule pass (default: 5). Caps the",
     "                          per-pair last-train cost.",
@@ -149,6 +157,9 @@ parse_args <- function(argv) {
     switch(key,
       "--tree"               = { opts$tree <- take(); i <- i + 2 },
       "--idt-threshold"      = { opts$idt_threshold <- as.numeric(take()); i <- i + 2 },
+      "--ingroup-idt-threshold" = { opts$ingroup_idt_threshold <- as.numeric(take()); i <- i + 2 },
+      "--outgroup-idt-threshold" = { opts$outgroup_idt_threshold <- as.numeric(take()); i <- i + 2 },
+      "--min-idt-gap-between-out-in" = { opts$min_idt_gap_between_out_in <- as.numeric(take()); i <- i + 2 },
       "--max-outgroup-tries" = { opts$max_outgroup_tries <- as.integer(take()); i <- i + 2 },
       "--ingroup-pairing"    = { opts$ingroup_pairing <- take(); i <- i + 2 },
       "--min-rel-contig-n50" = { opts$min_rel_contig_n50 <- as.numeric(take()); i <- i + 2 },
@@ -183,6 +194,20 @@ parse_args <- function(argv) {
   if (is.na(opts$stage0_top_k) || opts$stage0_top_k < 1) {
     stop("--stage0-top-k must be a positive integer (got: ", opts$stage0_top_k, ")",
          call. = FALSE)
+  }
+  normalize_identity_options(opts)
+}
+
+normalize_identity_options <- function(opts) {
+  # Resolve only after parsing: individual settings win regardless of CLI order.
+  if (is.null(opts$ingroup_idt_threshold)) opts$ingroup_idt_threshold <- opts$idt_threshold
+  if (is.null(opts$outgroup_idt_threshold)) opts$outgroup_idt_threshold <- opts$idt_threshold
+  for (key in c("idt_threshold", "ingroup_idt_threshold", "outgroup_idt_threshold",
+                "min_idt_gap_between_out_in")) {
+    value <- opts[[key]]
+    if (length(value) != 1L || !is.finite(value) || value < 0 || value > 100) {
+      stop("--", gsub("_", "-", key), " must be a finite number in [0, 100].", call. = FALSE)
+    }
   }
   opts
 }
@@ -946,10 +971,14 @@ make_fetchers <- function(leaves, opts) {
 # Shell one candidate trio through trio_filter.py (the single source of the
 # thesis rule) and return its verdict row.
 evaluate_one <- function(row, opts, tmp_in, tmp_out) {
+  opts <- normalize_identity_options(opts)
   write_tsv(row, tmp_in)
   run("python3", c(shQuote(TRIO_FILTER),
                    "--trios", shQuote(tmp_in),
                    "--idt-threshold", opts$idt_threshold,
+                   "--ingroup-idt-threshold", opts$ingroup_idt_threshold,
+                   "--outgroup-idt-threshold", opts$outgroup_idt_threshold,
+                   "--min-idt-gap-between-out-in", opts$min_idt_gap_between_out_in,
                    "--out", shQuote(tmp_out)),
       quiet_stderr = TRUE)
   read_tsv(tmp_out)[1, , drop = FALSE]
@@ -972,9 +1001,10 @@ build_row <- function(infoO, infoA, infoB, idt_12, idt_13, idt_23, tries) {
 # --- Stage 1 driver: one nearest-but-external outgroup per ingroup pair -------
 
 select_trios <- function(tree, leaves, opts, fetch = NULL) {
+  opts <- normalize_identity_options(opts)
   if (is.null(fetch)) fetch <- make_fetchers(leaves, opts)
   get_identity <- fetch$get_identity
-  threshold <- opts$idt_threshold
+  threshold <- opts$ingroup_idt_threshold
   tmp_in <- file.path(opts$out_dir, ".candidate_in.tsv")
   tmp_out <- file.path(opts$out_dir, ".candidate_out.tsv")
 
@@ -1026,7 +1056,7 @@ select_trios <- function(tree, leaves, opts, fetch = NULL) {
         # farther candidate is more diverged still -> the window has closed.
         break
       }
-      # else "too close" (strict ordering failed) -> the next candidate is farther out.
+      # else "too close" (configured gap failed) -> try the next, farther candidate.
     }
 
     if (!is.null(chosen)) {

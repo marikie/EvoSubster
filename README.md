@@ -64,7 +64,48 @@ During execution the wrapper:
 
 Tree mode selects assemblies and candidate outgroups, downloads genomes and
 builds `last-train` caches on demand, then runs the pipeline for each selected
-trio. After `selected_trios.tsv` is finalized, it removes only genome artifacts,
+trio. Identity conditions can be configured independently:
+
+| Option | Default | Requirement |
+| --- | --- | --- |
+| `--ingroup-idt-threshold N` | 80 | Ingroup–ingroup identity must be greater than N. |
+| `--outgroup-idt-threshold N` | 80 | Each outgroup–ingroup identity must be greater than N. |
+| `--min-idt-gap-between-out-in N` | 0 | Each ingroup identity minus outgroup–ingroup identity must be greater than N percentage points. |
+
+With outgroup O and ingroups I1/I2, the two gaps are
+`identity(I1,I2) - identity(O,I1)` and `identity(I1,I2) - identity(O,I2)`.
+For example, 95% minus 90% is a gap of 5 percentage points; it fails a gap
+threshold of 5 because the comparison is strictly `>`, as are both absolute
+identity comparisons. If I1 and I2 share a genus distinct from O's genus, the
+gap requirement is exempt, preserving the existing genus rule; both absolute
+identity thresholds still apply. An outgroup sharing a genus with exactly one
+ingroup is still excluded.
+
+All thresholds accept finite numbers in `[0, 100]`. The existing
+`--idt-threshold N` sets the common fallback for both absolute thresholds;
+an explicitly specified individual threshold takes precedence regardless of
+argument order. These options also work with the standalone R selector and
+Python filter CLI. For example:
+
+```bash
+./src/sbst_fromDwl.sh --tree path/to/tree.nwk \
+  --ingroup-idt-threshold 90 \
+  --outgroup-idt-threshold 80 \
+  --min-idt-gap-between-out-in 3
+```
+
+`selected_trios.tsv` records the resolved thresholds in
+`ingroup_idt_threshold_value`, `outgroup_idt_threshold_value`, and
+`min_idt_gap_between_out_in_value`; `idt_gap_12` and `idt_gap_13` record the two
+gaps (slot 1 is the outgroup). `idt_gap_condition` records whether both gaps
+strictly pass, and `idt_gap_exempt` records the genus exemption. Existing
+`identity_condition_met` now evaluates the configured gap (equivalent to the
+original strict ordering at default 0); `idt_threshold_condition` evaluates
+both resolved absolute thresholds. The legacy `idt_threshold_value` column
+continues to record the common fallback. Report commands retain their existing
+common threshold and zero-gap behavior; their CLI is unchanged.
+
+After `selected_trios.tsv` is finalized, tree mode removes only genome artifacts,
 train files, and LAST database directories that were created by the current
 selection run and belong to accessions absent from every selected trio.
 Pre-existing data, selected-accession data, and

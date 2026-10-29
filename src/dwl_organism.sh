@@ -409,10 +409,13 @@ fi
 # Load fasta pattern from config (fall back to default)
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 config_file="$ROOT_DIR/config/dwl_config.yaml"
+FASTA_PATTERN_TMPL=""
 if command -v yq >/dev/null 2>&1 && [ -f "$config_file" ]; then
-    FASTA_PATTERN_TMPL=$(yq eval '.patterns.fasta' "$config_file" 2>/dev/null)
+    FASTA_PATTERN_TMPL=$(yq eval '.patterns.fasta' "$config_file" 2>/dev/null) || FASTA_PATTERN_TMPL=""
 fi
-[ -z "$FASTA_PATTERN_TMPL" ] && FASTA_PATTERN_TMPL='{org_id}*.fna'
+if [ -z "$FASTA_PATTERN_TMPL" ] || [ "$FASTA_PATTERN_TMPL" = "null" ]; then
+    FASTA_PATTERN_TMPL='{org_id}*.fna'
+fi
 
 # Build download query params from config annotation types
 DWL_QUERY_PARAMS=""

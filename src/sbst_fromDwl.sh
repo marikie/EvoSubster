@@ -64,6 +64,9 @@ THREAD_NUM_OVERRIDE=8
 FORCE_DOWNLOAD=0
 TREE_FILE=""
 IDT_THRESHOLD=""
+INGROUP_IDT_THRESHOLD=""
+OUTGROUP_IDT_THRESHOLD=""
+MIN_IDT_GAP_BETWEEN_OUT_IN=""
 MAX_OUTGROUP_TRIES=""
 INGROUP_PAIRING=""
 MIN_REL_CONTIG_N50=""
@@ -95,7 +98,13 @@ Tree mode:
                        Leaf labels must be accession-free complete taxon names with spaces
                        encoded as underscores (for example, Chaunax_sp._Z400). Convert
                        legacy accession-suffixed trees with strip_newick_accessions.py.
-  --idt-threshold N    Minimum pairwise percent identity for trio selection (default: 80).
+  --idt-threshold N    Common identity threshold (default: 80); individual values override it.
+  --ingroup-idt-threshold N  Ingroup identity must strictly exceed this (default: 80).
+  --outgroup-idt-threshold N  Both outgroup-ingroup identities must strictly exceed this (default: 80).
+  --min-idt-gap-between-out-in N
+                       Both ingroup minus outgroup-ingroup identity gaps must strictly exceed
+                       N percentage points (default: 0). Exempt when ingroups share a genus
+                       distinct from the outgroup. Absolute thresholds still apply.
   --max-outgroup-tries N  Give up on an ingroup pair after training this many outgroup
                        candidates without a thesis-rule pass (default: 5). Per-pair cost cap.
   --ingroup-pairing MODE  Which ingroup couples to consider: 'matching' (default; greedy
@@ -286,7 +295,41 @@ EOF
             shift
             continue
             ;;
-        --idt-threshold|--max-outgroup-tries|--min-rel-contig-n50)
+        --idt-threshold|--ingroup-idt-threshold|--outgroup-idt-threshold|--min-idt-gap-between-out-in|\
+        --idt-threshold=*|--ingroup-idt-threshold=*|--outgroup-idt-threshold=*|--min-idt-gap-between-out-in=*)
+            _opt_key="${1%%=*}"
+            if [[ "$1" == *=* ]]; then
+                _opt_val="${1#*=}"
+                shift
+            else
+                if [[ -z "${2:-}" ]]; then
+                    echo "Error: $_opt_key requires a finite number in [0, 100]." >&2
+                    exit 1
+                fi
+                _opt_val="$2"
+                shift 2
+            fi
+            if ! python3 -c '
+import math, sys
+try:
+    value = float(sys.argv[1])
+    valid = math.isfinite(value) and 0 <= value <= 100
+except ValueError:
+    valid = False
+sys.exit(0 if valid else 1)
+' "$_opt_val"; then
+                echo "Error: $_opt_key must be a finite number in [0, 100] (got: $_opt_val)." >&2
+                exit 1
+            fi
+            case "$_opt_key" in
+                --idt-threshold) IDT_THRESHOLD="$_opt_val" ;;
+                --ingroup-idt-threshold) INGROUP_IDT_THRESHOLD="$_opt_val" ;;
+                --outgroup-idt-threshold) OUTGROUP_IDT_THRESHOLD="$_opt_val" ;;
+                --min-idt-gap-between-out-in) MIN_IDT_GAP_BETWEEN_OUT_IN="$_opt_val" ;;
+            esac
+            continue
+            ;;
+        --max-outgroup-tries|--min-rel-contig-n50)
             if [[ -z "${2:-}" ]]; then
                 echo "Error: $1 requires a non-negative number argument." >&2
                 exit 1
@@ -296,14 +339,13 @@ EOF
                 exit 1
             fi
             case "$1" in
-                --idt-threshold)      IDT_THRESHOLD="$2" ;;
                 --max-outgroup-tries) MAX_OUTGROUP_TRIES="$2" ;;
                 --min-rel-contig-n50) MIN_REL_CONTIG_N50="$2" ;;
             esac
             shift 2
             continue
             ;;
-        --idt-threshold=*|--max-outgroup-tries=*|--min-rel-contig-n50=*)
+        --max-outgroup-tries=*|--min-rel-contig-n50=*)
             _opt_key="${1%%=*}"
             _opt_val="${1#*=}"
             if ! [[ "$_opt_val" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
@@ -311,7 +353,6 @@ EOF
                 exit 1
             fi
             case "$_opt_key" in
-                --idt-threshold)      IDT_THRESHOLD="$_opt_val" ;;
                 --max-outgroup-tries) MAX_OUTGROUP_TRIES="$_opt_val" ;;
                 --min-rel-contig-n50) MIN_REL_CONTIG_N50="$_opt_val" ;;
             esac
@@ -430,6 +471,9 @@ if [ -n "$TREE_FILE" ]; then
             --date "$DATE"
             --threads "$THREAD_NUM_OVERRIDE")
     [ -n "$IDT_THRESHOLD" ] && r_args+=(--idt-threshold "$IDT_THRESHOLD")
+    [ -n "$INGROUP_IDT_THRESHOLD" ] && r_args+=(--ingroup-idt-threshold "$INGROUP_IDT_THRESHOLD")
+    [ -n "$OUTGROUP_IDT_THRESHOLD" ] && r_args+=(--outgroup-idt-threshold "$OUTGROUP_IDT_THRESHOLD")
+    [ -n "$MIN_IDT_GAP_BETWEEN_OUT_IN" ] && r_args+=(--min-idt-gap-between-out-in "$MIN_IDT_GAP_BETWEEN_OUT_IN")
     [ -n "$MAX_OUTGROUP_TRIES" ] && r_args+=(--max-outgroup-tries "$MAX_OUTGROUP_TRIES")
     [ -n "$INGROUP_PAIRING" ] && r_args+=(--ingroup-pairing "$INGROUP_PAIRING")
     [ -n "$MIN_REL_CONTIG_N50" ] && r_args+=(--min-rel-contig-n50 "$MIN_REL_CONTIG_N50")

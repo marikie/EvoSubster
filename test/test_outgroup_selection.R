@@ -134,6 +134,74 @@ check(nrow(ab) == 1 && ab$out_tip == "D",
 check(nrow(ab) == 1 && ab$outgroup_tries == "2",
       "(A,B) tried 2 candidates before the first pass")
 
+# --- threshold options and their boundary behavior -------------------------
+parsed <- parse_args(c("--tree", "example.nwk"))
+check(parsed$ingroup_idt_threshold == 80 && parsed$outgroup_idt_threshold == 80 &&
+        parsed$min_idt_gap_between_out_in == 0, "identity defaults are 80/80/0")
+for (args in list(
+  c("--idt-threshold", "99", "--ingroup-idt-threshold", "94", "--outgroup-idt-threshold", "89"),
+  c("--ingroup-idt-threshold", "94", "--outgroup-idt-threshold", "89", "--idt-threshold", "99")
+)) {
+  parsed <- parse_args(c("--tree", "example.nwk", args))
+  check(parsed$ingroup_idt_threshold == 94 && parsed$outgroup_idt_threshold == 89,
+        "individual thresholds override common threshold regardless of argument order")
+}
+parsed <- parse_args(c("--tree", "example.nwk", "--idt-threshold", "85",
+                      "--ingroup-idt-threshold", "94"))
+check(parsed$ingroup_idt_threshold == 94 && parsed$outgroup_idt_threshold == 85,
+      "common threshold remains the fallback for an unspecified individual threshold")
+for (option in c("--idt-threshold", "--ingroup-idt-threshold", "--outgroup-idt-threshold",
+                 "--min-idt-gap-between-out-in")) {
+  for (value in c("-1", "100.1", "NaN", "Inf", "junk")) {
+    error <- tryCatch(suppressWarnings(parse_args(c("--tree", "example.nwk", option, value))),
+                      error = identity)
+    check(inherits(error, "error") && grepl(option, conditionMessage(error), fixed = TRUE),
+          paste("reject invalid identity option", option, value))
+  }
+  error <- tryCatch(parse_args(c("--tree", "example.nwk", option)), error = identity)
+  check(inherits(error, "error"), paste("reject missing value for", option))
+}
+
+# C now has correct ordering, but one of its gaps is too small. D must be tried.
+idt_tbl[c("a|c", "b|c")] <- c(92, 94)
+gap_opts <- modifyList(opts, list(min_idt_gap_between_out_in = 2))
+sel <- select_trios(tree, leaves, gap_opts, fetch = fetch)
+check(nrow(sel) == 1 && sel$out_tip == "D" && sel$outgroup_tries == "2",
+      "a candidate with only one sufficient gap is skipped in favor of the next")
+check(nrow(sel) == 1 && as.numeric(sel$idt_gap_12) == 5 && as.numeric(sel$idt_gap_13) == 5 &&
+        as.numeric(sel$min_idt_gap_between_out_in_value) == 2,
+      "selected trio records both gaps and the applied gap threshold")
+sel <- select_trios(tree, leaves, modifyList(gap_opts, list(min_idt_gap_between_out_in = 5)), fetch)
+check(nrow(sel) == 0, "gap equal to configured threshold fails")
+
+# An absolute outgroup failure closes the search window before D is trained.
+idt_tbl[c("a|c", "b|c")] <- c(89, 89)
+seen <- character()
+counting_fetch <- fetch
+counting_fetch$get_identity <- function(a, b) {
+  seen <<- c(seen, key(a, b))
+  mock_get_identity(a, b)
+}
+sel <- select_trios(tree, leaves, modifyList(opts, list(outgroup_idt_threshold = 89)), counting_fetch)
+check(nrow(sel) == 0 && !any(c("a|d", "b|d") %in% seen),
+      "outgroup threshold equality stops the search before farther candidates")
+
+idt_tbl[c("a|b", "a|c", "b|c")] <- c(79, 75, 75)
+sel <- select_trios(tree, leaves,
+                    modifyList(opts, list(ingroup_idt_threshold = 78, outgroup_idt_threshold = 74)), fetch)
+check(nrow(sel) == 1 && sel$out_tip == "C", "independent low thresholds reach the Python verdict")
+sel <- select_trios(tree, leaves,
+                    modifyList(opts, list(ingroup_idt_threshold = 79, outgroup_idt_threshold = 74)), fetch)
+check(nrow(sel) == 0, "ingroup threshold equality fails the prefilter")
+
+exempt_leaves <- leaves
+exempt_leaves$genus[exempt_leaves$tip == "C"] <- "Other"
+sel <- select_trios(tree, exempt_leaves,
+                    modifyList(opts, list(ingroup_idt_threshold = 78, outgroup_idt_threshold = 74,
+                                          min_idt_gap_between_out_in = 20)), fetch)
+check(nrow(sel) == 1 && sel$out_tip == "C" && sel$idt_gap_exempt == "TRUE" &&
+        sel$idt_gap_condition == "FALSE", "genus exemption survives nonzero gap selection")
+
 if (fail > 0L) {
   cat("\n", fail, "test(s) FAILED\n", sep = "")
   quit(status = 1)

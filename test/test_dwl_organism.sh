@@ -92,7 +92,14 @@ EOF
 cat > "$stub_bin/yq" <<'EOF'
 #!/bin/bash
 case "$*" in
-    *patterns.fasta*) printf '{org_id}*.fna\n' ;;
+    *patterns.fasta*)
+        case "${FASTA_CONFIG_MODE:-configured}" in
+            empty) exit 0 ;;
+            null) printf 'null\n' ;;
+            failed) exit 1 ;;
+            *) printf '{org_id}*.fna\n' ;;
+        esac
+        ;;
     *download.includes*) printf 'GENOME_FASTA\n' ;;
 esac
 EOF
@@ -170,6 +177,53 @@ rate_limit_result=$(
 ) || exit 1
 test "$(printf '%s\n' "$rate_limit_result" | awk -F '|' '{print NF}')" -eq 6
 test "$(cat "$rate_limit_state_dir/summary")" -eq 2
+
+# A missing config must use the built-in FASTA pattern, including under set -u.
+fallback_repo="$tmp_dir/fallback-repo"
+mkdir -p "$fallback_repo/src" "$tmp_dir/fallback-state"
+cp "$ROOT_DIR/src/dwl_organism.sh" "$fallback_repo/src/dwl_organism.sh"
+fallback_result=$(
+    PATH="$stub_bin:$PATH" FIXTURE_ZIP="$fixture_zip" CURL_STATE_DIR="$tmp_dir/fallback-state" \
+        bash "$fallback_repo/src/dwl_organism.sh" GCA_000000001.1 \
+        --out-dir "$tmp_dir/fallback-genomes" --no-taxonomy
+) || exit 1
+IFS='|' read -r _fallback_name fallback_fasta _fallback_rest <<< "$fallback_result"
+test -s "$fallback_fasta" || exit 1
+test "$(head -c 1 "$fallback_fasta")" = '>' || exit 1
+echo "ok: missing config uses the default FASTA pattern under nounset"
+
+mkdir -p "$fallback_repo/config"
+cp "$ROOT_DIR/config/dwl_config.yaml" "$fallback_repo/config/dwl_config.yaml"
+for mode in empty null failed; do
+    mkdir -p "$tmp_dir/fallback-$mode-state"
+    fallback_result=$(
+        PATH="$stub_bin:$PATH" FIXTURE_ZIP="$fixture_zip" \
+        CURL_STATE_DIR="$tmp_dir/fallback-$mode-state" FASTA_CONFIG_MODE="$mode" \
+            bash "$fallback_repo/src/dwl_organism.sh" GCA_000000001.1 \
+            --out-dir "$tmp_dir/fallback-$mode-genomes" --no-taxonomy
+    ) || exit 1
+    IFS='|' read -r _fallback_name fallback_fasta _fallback_rest <<< "$fallback_result"
+    test -s "$fallback_fasta" || exit 1
+    echo "ok: $mode FASTA config uses the default pattern"
+done
+
+# Build a PATH containing the required tools but no yq, independent of the host.
+no_yq_bin="$tmp_dir/no-yq-bin"
+mkdir -p "$no_yq_bin" "$tmp_dir/no-yq-state"
+for tool in bash basename cat cp dirname find grep head ls mkdir mktemp mv rm rmdir unzip; do
+    ln -s "$(type -P "$tool")" "$no_yq_bin/$tool"
+done
+for tool in curl jq sleep; do
+    ln -s "$stub_bin/$tool" "$no_yq_bin/$tool"
+done
+fallback_result=$(
+    PATH="$no_yq_bin" FIXTURE_ZIP="$fixture_zip" CURL_STATE_DIR="$tmp_dir/no-yq-state" \
+        bash "$fallback_repo/src/dwl_organism.sh" GCA_000000001.1 \
+        --out-dir "$tmp_dir/no-yq-genomes" --no-taxonomy
+) || exit 1
+IFS='|' read -r _fallback_name fallback_fasta _fallback_rest <<< "$fallback_result"
+test -s "$fallback_fasta" || exit 1
+echo "ok: missing yq uses the default FASTA pattern under nounset"
 
 failure_state_dir="$tmp_dir/failure-state"
 mkdir -p "$failure_state_dir"

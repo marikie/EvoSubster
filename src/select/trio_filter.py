@@ -8,11 +8,12 @@ topology ((org2, org3), org1) -- org1 is the outgroup, org2 and org3 are the
 ingroup.  A trio is retained only when both the pairwise sequence identities and
 the genus names are consistent with that topology:
 
-  * every pairwise identity must exceed the threshold (default 80%);
+  * the ingroup identity and both outgroup-ingroup identities must exceed their
+    respective thresholds (both default 80%);
   * if the genera form the target configuration (the outgroup differs from both
     ingroup species, which share a genus) the trio is always retained;
-  * otherwise the identities must order as idt_12 < idt_23 and idt_13 < idt_23
-    (the ingroup pair is the most similar), and the trio is still excluded when
+  * otherwise both idt_23 - idt_12 and idt_23 - idt_13 must strictly exceed
+    min_idt_gap_between_out_in (default 0 percentage points), and the trio is still excluded when
     the genera split two-vs-one, i.e. the outgroup shares a genus with exactly
     one ingroup species -- taxonomy is then asserting a topology that
     contradicts the outgroup assignment.
@@ -34,8 +35,10 @@ written as TRUE/FALSE and unknowns as NA so that R reads them natively.
 
 import argparse
 import csv
+import math
 import re
 import sys
+from decimal import Decimal
 from typing import Dict, List, Optional, Tuple
 
 # Slot 1 is the outgroup; slots 2 and 3 are the ingroup.  The thesis uses the
@@ -55,6 +58,13 @@ FILTER_DETAIL_KEYS = (
     "idt_threshold_value",
     "filter_flag",
     "excluded",
+    "ingroup_idt_threshold_value",
+    "outgroup_idt_threshold_value",
+    "min_idt_gap_between_out_in_value",
+    "idt_gap_12",
+    "idt_gap_13",
+    "idt_gap_condition",
+    "idt_gap_exempt",
 )
 
 
@@ -146,13 +156,21 @@ def parse_identity_percentage(value: str) -> Optional[float]:
     if not match:
         return None
     try:
-        return float(match.group())
+        value = float(match.group())
+        return value if math.isfinite(value) else None
     except ValueError:
         return None
 
 
+def identity_gaps(numeric_values: Dict[str, float]) -> Tuple[Decimal, Decimal]:
+    # Subtract decimal percentages: binary floats can make an equal gap appear
+    # slightly larger (e.g. 95 - 91.8 > 3.2). Keep the strict boundary exact.
+    ingroup = Decimal(str(numeric_values["idt_23"]))
+    return tuple(ingroup - Decimal(str(numeric_values[key])) for key in ("idt_12", "idt_13"))
+
+
 def evaluate_identity_condition(
-    identity_values: Dict[str, str]
+    identity_values: Dict[str, str], min_idt_gap_between_out_in: float = 0.0,
 ) -> Tuple[Optional[bool], List[str], Optional[Dict[str, float]]]:
     issues: List[str] = []
     numeric_values: Dict[str, float] = {}
@@ -169,19 +187,40 @@ def evaluate_identity_condition(
             return None, issues, None
         numeric_values[key] = parsed
 
-    condition_met = numeric_values["idt_12"] < numeric_values["idt_23"] and numeric_values["idt_13"] < numeric_values["idt_23"]
+    threshold = Decimal(str(min_idt_gap_between_out_in))
+    condition_met = all(gap > threshold for gap in identity_gaps(numeric_values))
     return condition_met, issues, numeric_values
+
+
+def validate_identity_threshold(value: float) -> float:
+    """Validate identity thresholds and gaps in percentage points."""
+    value = float(value)
+    if not math.isfinite(value) or not 0 <= value <= 100:
+        raise ValueError("must be a finite number in [0, 100]")
+    return value
 
 
 def evaluate_filter_status(
     slot_map: Dict[str, dict],
     identity_values: Dict[str, str],
-    idt_threshold: float,
-) -> Tuple[Dict[str, Optional[bool]], List[str]]:
+    idt_threshold: float = 80.0,
+    *,
+    ingroup_idt_threshold: Optional[float] = None,
+    outgroup_idt_threshold: Optional[float] = None,
+    min_idt_gap_between_out_in: float = 0.0,
+) -> Tuple[Dict[str, object], List[str]]:
+    idt_threshold = validate_identity_threshold(idt_threshold)
+    ingroup_threshold = validate_identity_threshold(
+        idt_threshold if ingroup_idt_threshold is None else ingroup_idt_threshold
+    )
+    outgroup_threshold = validate_identity_threshold(
+        idt_threshold if outgroup_idt_threshold is None else outgroup_idt_threshold
+    )
+    gap_threshold = validate_identity_threshold(min_idt_gap_between_out_in)
     issues: List[str] = []
     genus_patterns, genus_issues = evaluate_genus_patterns(slot_map)
     identity_condition, identity_issues, numeric_identity_values = evaluate_identity_condition(
-        identity_values
+        identity_values, gap_threshold
     )
     issues.extend(genus_issues)
     issues.extend(identity_issues)
@@ -192,8 +231,14 @@ def evaluate_filter_status(
     genus_pattern_two_vs_one = genus_patterns["pattern5"] if genus_patterns else None
 
     threshold_condition: Optional[bool] = None
+    gap_12 = gap_13 = None
     if numeric_identity_values is not None:
-        threshold_condition = all(value > idt_threshold for value in numeric_identity_values.values())
+        threshold_condition = (
+            numeric_identity_values["idt_23"] > ingroup_threshold
+            and numeric_identity_values["idt_12"] > outgroup_threshold
+            and numeric_identity_values["idt_13"] > outgroup_threshold
+        )
+        gap_12, gap_13 = (float(gap) for gap in identity_gaps(numeric_identity_values))
 
     filter_flag: Optional[bool] = None
 
@@ -224,6 +269,13 @@ def evaluate_filter_status(
         "idt_threshold_value": idt_threshold,
         "filter_flag": filter_flag,
         "excluded": excluded,
+        "ingroup_idt_threshold_value": ingroup_threshold,
+        "outgroup_idt_threshold_value": outgroup_threshold,
+        "min_idt_gap_between_out_in_value": gap_threshold,
+        "idt_gap_12": gap_12,
+        "idt_gap_13": gap_13,
+        "idt_gap_condition": identity_condition,
+        "idt_gap_exempt": genus_condition,
     }
     return filter_details, issues
 
@@ -240,14 +292,14 @@ def format_cell(value) -> str:
     return str(value)
 
 
-def screen_row(row: Dict[str, str], idt_threshold: float) -> Dict[str, str]:
+def screen_row(row: Dict[str, str], idt_threshold: float = 80.0, **options) -> Dict[str, str]:
     slot_map = {
         slot: {"raw_organism_name": row.get(column, "")}
         for slot, column in zip(SLOTS, GENUS_COLUMNS)
     }
     identity_values = {key: row.get(key) for key in IDENTITY_KEYS}
 
-    filter_details, issues = evaluate_filter_status(slot_map, identity_values, idt_threshold)
+    filter_details, issues = evaluate_filter_status(slot_map, identity_values, idt_threshold, **options)
 
     verdict = {key: format_cell(filter_details[key]) for key in FILTER_DETAIL_KEYS}
     verdict["filter_issues"] = "; ".join(issues)
@@ -268,9 +320,22 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--idt-threshold",
-        type=float,
+        type=validate_identity_threshold,
         default=80.0,
-        help="Every pairwise identity must exceed this to be retained (default: 80).",
+        help="Common identity threshold (default: 80); individual thresholds take precedence.",
+    )
+    parser.add_argument(
+        "--ingroup-idt-threshold", type=validate_identity_threshold,
+        help="Ingroup identity must strictly exceed this (default: common threshold, 80).",
+    )
+    parser.add_argument(
+        "--outgroup-idt-threshold", type=validate_identity_threshold,
+        help="Both outgroup-ingroup identities must strictly exceed this (default: common threshold, 80).",
+    )
+    parser.add_argument(
+        "--min-idt-gap-between-out-in", type=validate_identity_threshold, default=0.0,
+        help="Both ingroup minus outgroup-ingroup identity gaps must exceed this in percentage points "
+             "(default: 0); exempt when ingroups share a genus distinct from the outgroup.",
     )
     parser.add_argument(
         "--out",
@@ -310,7 +375,12 @@ def main() -> int:
         )
         writer.writeheader()
         for row in rows:
-            row.update(screen_row(row, args.idt_threshold))
+            row.update(screen_row(
+                row, args.idt_threshold,
+                ingroup_idt_threshold=args.ingroup_idt_threshold,
+                outgroup_idt_threshold=args.outgroup_idt_threshold,
+                min_idt_gap_between_out_in=args.min_idt_gap_between_out_in,
+            ))
             writer.writerow(row)
     finally:
         if args.out:
@@ -318,7 +388,10 @@ def main() -> int:
 
     retained = sum(1 for row in rows if row["excluded"] == "FALSE")
     print(
-        f"{len(rows)} trios screened at idt-threshold {args.idt_threshold}: "
+        f"{len(rows)} trios screened at ingroup/outgroup thresholds "
+        f"{args.idt_threshold if args.ingroup_idt_threshold is None else args.ingroup_idt_threshold}/"
+        f"{args.idt_threshold if args.outgroup_idt_threshold is None else args.outgroup_idt_threshold}, "
+        f"out-in gap > {args.min_idt_gap_between_out_in}: "
         f"{retained} retained, {len(rows) - retained} excluded.",
         file=sys.stderr,
     )

@@ -3,6 +3,7 @@
 set -u
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REAL_RSCRIPT=$(type -P Rscript)
 tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/evosubster-wrapper-cache.XXXXXX")
 trap 'rm -rf "$tmp_dir"' EXIT
 
@@ -33,6 +34,9 @@ cat > "$stub_bin/Rscript" <<'EOF'
 script="$1"
 shift
 printf '%s\n' "$script" "$@" > "$R_ARGS_LOG"
+if [ "${VALIDATE_IDENTITY_OPTIONS:-0}" -eq 1 ]; then
+    "$REAL_RSCRIPT" "$IDENTITY_PARSER" "$@" || exit 1
+fi
 printf '%s\n' "$EVOSUBSTER_LAST_OPTIONS" > "$R_ARGS_LOG.env"
 if [ "${SELECTOR_FAIL:-0}" -eq 1 ]; then
     exit 42
@@ -287,6 +291,58 @@ check "single-trio wrapper preserves support for unversioned requested accession
 check "single-trio wrapper forwards resolved versioned accessions" \
     grep -Fq -- "--accession-ids GCA_000000011.9 GCA_000000022.9 GCA_000000033.9" \
     "$unversioned_log"
+
+# Keep the real R argument parser in this integration test; only external work
+# (downloads and downstream analysis) is stubbed out.
+cat > "$tmp_dir/parse_identity.R" <<'EOF'
+source(Sys.getenv("REAL_SELECTOR"))
+opts <- parse_args(commandArgs(TRUE))
+cat(opts$ingroup_idt_threshold, opts$outgroup_idt_threshold,
+    opts$min_idt_gap_between_out_in, sep = "\t", file = Sys.getenv("IDENTITY_LOG"))
+EOF
+for style in spaced equals; do
+    if [ "$style" = spaced ]; then
+        identity_args=(--idt-threshold 99 --ingroup-idt-threshold 95
+                       --outgroup-idt-threshold 84 --min-idt-gap-between-out-in 10)
+    else
+        identity_args=(--ingroup-idt-threshold=95 --outgroup-idt-threshold=84
+                       --min-idt-gap-between-out-in=10 --idt-threshold=99)
+    fi
+    PATH="$stub_bin:$PATH" REAL_RSCRIPT="$REAL_RSCRIPT" \
+    REAL_SELECTOR="$ROOT_DIR/src/select/trio_selection.R" \
+    IDENTITY_PARSER="$tmp_dir/parse_identity.R" \
+    VALIDATE_IDENTITY_OPTIONS=1 IDENTITY_LOG="$tmp_dir/identity-$style.tsv" \
+    R_ARGS_LOG="$tmp_dir/identity-$style-r.log" SBST_ARGS_LOG="$tmp_dir/identity-$style-sbst.log" \
+    SELECTOR_EMPTY=1 \
+    bash "$fixture_repo/src/sbst_fromDwl.sh" --tree "$tree_file" \
+        --genome-dir "$tmp_dir/identity-genomes" --out-dir "$tmp_dir/identity-out" \
+        "${identity_args[@]}" > "$tmp_dir/identity-$style.log" 2>&1
+    identity_exit=$?
+    if [ "$identity_exit" -ne 0 ]; then
+        cat "$tmp_dir/identity-$style.log"
+    fi
+    check "tree wrapper accepts identity options ($style)" test "$identity_exit" -eq 0
+    check "R receives independent identity settings ($style)" \
+        test "$(cat "$tmp_dir/identity-$style.tsv" 2>/dev/null)" = $'95\t84\t10'
+done
+
+for option in --idt-threshold --ingroup-idt-threshold --outgroup-idt-threshold --min-idt-gap-between-out-in; do
+    for value in -1 100.1 nan inf junk ''; do
+        invalid_args=("$option=$value")
+        PATH="$stub_bin:$PATH" R_ARGS_LOG="$tmp_dir/invalid-r.log" \
+        bash "$fixture_repo/src/sbst_fromDwl.sh" --tree "$tree_file" \
+            --genome-dir "$tmp_dir/invalid-genomes" --out-dir "$tmp_dir/invalid-out" \
+            "${invalid_args[@]}" > "$tmp_dir/invalid-identity.log" 2>&1
+        invalid_exit=$?
+        check "wrapper rejects $option=$value before creating data directories" \
+            sh -c 'test "$1" -ne 0 && test ! -e "$2" && test ! -e "$3" && grep -Fq -- "$4" "$5"' \
+            sh "$invalid_exit" "$tmp_dir/invalid-out" "$tmp_dir/invalid-genomes" \
+            "$option" "$tmp_dir/invalid-identity.log"
+    done
+    PATH="$stub_bin:$PATH" bash "$fixture_repo/src/sbst_fromDwl.sh" "$option" \
+        > "$tmp_dir/missing-identity.log" 2>&1
+    check "wrapper rejects missing $option value" test "$?" -ne 0
+done
 
 PATH="$stub_bin:$PATH" \
 R_ARGS_LOG="$tmp_dir/options-r.log" \
