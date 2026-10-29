@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "^(apply_patch|Edit|Write)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "rtk proxy python3 \"$(rtk proxy git rev-parse --show-toplevel)/scripts/codex_checks.py\"",
+            "timeout": 300,
+            "statusMessage": "Checking edited EvoSubster files"
+          }
+        ]
+      }
+    ]
+  }
+}

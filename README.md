@@ -285,6 +285,41 @@ Representative outputs include:
 
 Re-running the pipeline skips steps whose outputs already exist.
 
+## Pipeline regression checks
+
+Run the counting and check-runner unit tests from `test/`:
+
+```bash
+rtk proxy bash -c 'cd test && python3 -m unittest test_codex_checks test_single_sbst_2TSVs test_single_sbst_2TSVs_errprob test_subRatio'
+```
+
+Queue a full pipeline regression run, then inspect its status:
+
+```bash
+rtk proxy python3 scripts/codex_checks.py --queue-pipeline
+rtk proxy python3 scripts/codex_checks.py --status
+```
+
+Each run downloads GCA_907165135.1 (outgroup), GCA_004367875.1, and
+GCA_004367855.1 into an isolated directory under `tmp/codex-checks/`, with fresh
+results and training caches. It has a 600-second pipeline timeout. Success requires
+both a zero pipeline exit code and byte-for-byte equality of all eight counting
+TSVs against the saved April 20, 2026 results in `test/fixtures/pipeline_counts/`:
+single-base and dinucleotide counts for both ingroups, for all regions and
+non-CDS regions. A missing GFF prevents the required non-CDS results from passing.
+Only the date in output filenames is mapped to the baseline date; file contents,
+row order, and line endings must match exactly.
+
+`queued` and `running` indicate pending validation. Completed results include
+`pipeline_exit_code`, the combined `exit_code`, and `counting_comparison` in the
+status output and per-run `result.json`. The pipeline log contains file-level
+results and unified diffs for mismatches. Pipeline failures and timeouts fail the
+check and skip comparison. Historical expectations are never updated automatically;
+changes from those results are reported as failures.
+
+The supplied `.codex/hooks.json` queues these checks after relevant edits when
+trusted and enabled in Codex. Manual invocation works without enabling hooks.
+
 ## Generating Reports
 
 `src/report/` aggregates the TSV/statistics outputs of one or more pipeline
