@@ -15,7 +15,11 @@ out_dir="${6:-.}"
 dbBasename="${org2ShortName}db_${DATE}"
 dbDir="${out_dir}/${dbBasename}"
 trainFile="${out_dir}/${org2ShortName}2${org3ShortName}_${DATE}.train"
-threadNum=${THREAD_NUM:-8}
+
+# Validate settings before reusing a DB or profile.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/last_options.sh"
+last_options_load || exit 1
+last_options_guard "$out_dir" training || exit 1
 
 # lastdb
 echo "---lastdb"
@@ -24,8 +28,8 @@ if [ ! -d "$dbDir" ]; then
 	dbTmp="${dbDir}.tmp.$$"
 	rm -rf "$dbTmp"
 	mkdir -p "$dbTmp"
-	if (cd "$dbTmp" && echo "time lastdb -P${threadNum} -c -uRY4 $dbBasename $org2FASTA" && \
-		time lastdb -P"${threadNum}" -c -uRY4 "$dbBasename" "$org2FASTA"); then
+	if (cd "$dbTmp" && echo "time lastdb ${LASTDB_TRAIN_ARGS[*]} $dbBasename $org2FASTA" && \
+		time lastdb "${LASTDB_TRAIN_ARGS[@]}" "$dbBasename" "$org2FASTA"); then
 		mv "$dbTmp" "$dbDir"
 	else
 		rm -rf "$dbTmp"
@@ -44,9 +48,9 @@ fi
 # last-train
 echo "--last-train"
 if [ ! -e "$trainFile" ]; then
-	echo "time last-train -P${threadNum} --revsym -C2 $dbDir/$dbBasename $org3FASTA >$trainFile"
+	echo "time last-train ${LAST_TRAIN_ARGS[*]} $dbDir/$dbBasename $org3FASTA >$trainFile"
 	trainTmp="${trainFile}.tmp.$$"
-	if time last-train -P"${threadNum}" --revsym -C2 "$dbDir/$dbBasename" "$org3FASTA" >"$trainTmp" \
+	if time last-train "${LAST_TRAIN_ARGS[@]}" "$dbDir/$dbBasename" "$org3FASTA" >"$trainTmp" \
 			&& [ -s "$trainTmp" ]; then
 		mv "$trainTmp" "$trainFile"
 	else

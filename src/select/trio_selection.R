@@ -828,6 +828,8 @@ make_fetchers <- function(leaves, opts) {
   }
   dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
   Sys.setenv(THREAD_NUM = opts$threads)
+  run("python3", c(shQuote(file.path(SRC_DIR, "lib", "last_options.py")),
+                   "guard", shQuote(cache_dir), "training"))
 
   append_owned <- function(records) {
     if (nrow(records)) {

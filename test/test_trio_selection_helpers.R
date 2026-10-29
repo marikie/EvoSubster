@@ -420,6 +420,9 @@ write_complete_train <- function(path, final_identity) {
 
 real_run <- run
 run <- function(command, args, quiet_stderr = FALSE) {
+  if (command == "python3" && any(grepl("last_options.py", args, fixed = TRUE))) {
+    return(real_run(command, args, quiet_stderr))
+  }
   if (grepl("dwl_organism[.]sh", args[1])) {
     manifest_idx <- match("--artifact-manifest", args)
     if (!is.na(manifest_idx)) {

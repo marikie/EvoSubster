@@ -285,12 +285,55 @@ Representative outputs include:
 
 Re-running the pipeline skips steps whose outputs already exist.
 
-## Pipeline regression checks
+## Configuring LAST
 
-Run the counting and check-runner unit tests from `test/`:
+Both `sbst_fromDwl.sh` and `sbst.sh` accept quoted argument strings for LAST 1648:
 
 ```bash
-rtk proxy bash -c 'cd test && python3 -m unittest test_codex_checks test_single_sbst_2TSVs test_single_sbst_2TSVs_errprob test_subRatio'
+rtk proxy bash src/sbst_fromDwl.sh \
+  20261028 GCA_907165135.1 GCA_004367875.1 GCA_004367855.1 \
+  --thread 8 \
+  --lastdb-options '-uRY4' \
+  --lastal-options '-H2 -C1' \
+  --last-train-options '--sample-number=1000' \
+  --last-split-options '-m0.1'
+```
+
+Each `--*-options` may appear once; an empty string adds nothing. Values use
+shell-style quoting, including quotes around a value containing spaces, but are
+passed as argument arrays without shell expansion or evaluation. Additional
+arguments naming files should use absolute paths, since pipeline stages run from
+their output or database directories. Additional
+settings override matching defaults and the existing `LASTDB_ALIGNMENT_SEED`,
+`LASTAL_QUERY_BATCH_SIZE`, and `LASTAL_SPLIT_MEMORY` environment settings.
+The defaults remain unchanged when no options are supplied. Boolean defaults
+such as `last-train --revsym` remain enabled.
+
+`--lastdb-options` applies to both training and alignment databases.
+`--last-train-options` also applies during tree selection; all four option strings
+are inherited by the selected trios. `--last-split-options` applies to the external
+`last-split -r` step; lastal's embedded splitter is configured via `--lastal-options`.
+`maf-sort`, `maf-join`, and `maf-linked` keep their existing settings.
+
+Threads are controlled by `--thread`. Options that replace pipeline inputs,
+the trained parameter-file connection, required MAF output, or alignment direction
+are rejected before downloads. Unknown options are rejected using the LAST 1648
+CLI definition; the underlying LAST command validates parameter values.
+
+Effective settings are saved in `metadata/last_options.json` for each trio run,
+and in settings files beside cached training/alignment products. Reusing a
+directory with different settings fails and preserves its existing results;
+choose another date or `--out-dir`, and a separate `--train-cache-dir` when training
+settings change. Legacy outputs without settings records cannot be reused by a stage receiving
+additional LAST options. Unchanged training settings can still reuse their cache. FASTA record order still affects tied mappings;
+these CLI options do not reorder genomes or update historical expected TSVs.
+
+## Pipeline regression checks
+
+Run the LAST-option, counting, and check-runner unit tests from `test/`:
+
+```bash
+rtk proxy bash -c 'cd test && python3 -m unittest test_last_options test_codex_checks test_single_sbst_2TSVs test_single_sbst_2TSVs_errprob test_subRatio'
 ```
 
 Queue a full pipeline regression run, then inspect its status:

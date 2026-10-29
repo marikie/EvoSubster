@@ -1,7 +1,12 @@
 #!/bin/bash
 
+# Shared, shell-free LAST option parsing (also inherited by tree-mode children).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$ROOT_DIR/src/lib/last_options.sh"
+last_options_parse_cli "$@" || exit 1
+set -- "${LAST_REMAINING_ARGS[@]}"
+
 
 PATH="$SCRIPT_DIR:$PATH"
 
@@ -113,9 +118,17 @@ Options:
   --out-dir PATH          Output directory (default: ./results)
   --train-cache-dir PATH  Directory containing cached last-train files
   --thread N              Number of threads for LAST alignment (default: 8)
+  --lastdb-options TEXT    Additional lastdb arguments (training and alignment)
+  --lastal-options TEXT    Additional lastal arguments
+  --last-train-options TEXT  Additional last-train arguments (including tree selection)
+  --last-split-options TEXT  Additional last-split arguments
   --idt-only              Stop after checking sequence percent identity among three genomes; skip downstream analysis
   --force                 Re-download genomes even if local files exist
   -h, --help              Show this help message and exit
+
+LAST option strings use shell-style quoting without shell expansion (LAST 1648).
+Specify each --*-options once. Pipeline-managed formats, inputs and threads
+cannot be replaced. Different settings require a new date/output/cache directory.
 EOF
             exit 0
             ;;
@@ -344,6 +357,7 @@ EOF
     esac
 done
 set -- "${POSITIONAL_ARGS[@]}"
+export THREAD_NUM="$THREAD_NUM_OVERRIDE"
 
 # Parse positional arguments
 DATE="$1"
@@ -409,6 +423,7 @@ if [ -n "$TREE_FILE" ]; then
     DATE="${DATE:-$(date +%Y%m%d)}"
 
     rt_out_dir="$out_dir_base/trio_selection"
+    last_options_guard "$rt_out_dir" selection || exit 1
     r_args=(--tree "$TREE_FILE"
             --genome-dir "$base_genomes"
             --out-dir "$rt_out_dir"
@@ -560,6 +575,7 @@ short_names=("$org1ShortName" "$org2ShortName" "$org3ShortName")
 run_combo_dir="${org1ShortName}_${org2ShortName}_${org3ShortName}"
 run_dir_root="$out_dir_base/$run_combo_dir"
 run_date_dir_rel="$run_dir_root/$DATE"
+last_options_guard "$run_date_dir_rel" run || exit 1
 metadata_dir_rel="$run_date_dir_rel/metadata"
 
 if ! mkdir -p "$metadata_dir_rel"; then

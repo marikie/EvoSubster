@@ -1,5 +1,12 @@
 #!/bin/bash
 
+# Shared, shell-free LAST option parsing (also inherited by tree-mode children).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$ROOT_DIR/src/lib/last_options.sh"
+last_options_parse_cli "$@" || exit 1
+set -- "${LAST_REMAINING_ARGS[@]}"
+
 for _arg in "$@"; do
     if [[ "$_arg" == "-h" || "$_arg" == "--help" ]]; then
         cat <<'EOF'
@@ -19,8 +26,16 @@ Options:
   --train-cache-dir PATH      Directory containing cached last-train files
   --accession-ids A1 A2 A3   Exact NCBI accessions for cache keys; normally supplied by sbst_fromDwl.sh
   --thread N                  Number of threads for LAST alignment (default: 8)
+  --lastdb-options TEXT    Additional lastdb arguments (training and alignment)
+  --lastal-options TEXT    Additional lastal arguments
+  --last-train-options TEXT  Additional last-train arguments (including tree selection)
+  --last-split-options TEXT  Additional last-split arguments
   --idt-only                  Stop after checking sequence percent identity among three genomes; skip downstream analysis
   -h, --help                  Show this help message and exit
+
+LAST option strings use shell-style quoting without shell expansion (LAST 1648).
+Specify each --*-options once. Pipeline-managed formats, inputs and threads
+cannot be replaced. Different settings require a new date/output/cache directory.
 EOF
         exit 0
     fi
@@ -29,8 +44,6 @@ done
 lastal --version
 
 # Resolve script locations and configuration relative to this script
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ALIGN_DIR="$ROOT_DIR/src/align"
 COUNT_DIR="$ROOT_DIR/src/count"
 METRICS_DIR="$ROOT_DIR/src/metrics"
@@ -257,6 +270,9 @@ org1GFF=$5
 # Propagate thread count to child scripts (last_train.sh / one2one.sh).
 threadNum="$THREAD_NUM_OVERRIDE"
 export THREAD_NUM="$threadNum"
+if [ -n "$TRAIN_CACHE_DIR" ]; then
+    last_options_guard "$TRAIN_CACHE_DIR" training || exit 1
+fi
 
 # Extract the name of the parent directory of $org1FASTA
 org1DirName="$(basename $(dirname $org1FASTA))"
@@ -315,6 +331,7 @@ if [ ! -d "$outDirBase" ]; then
     fi
 fi
 outDirPath="${outDirBase}/${org1ShortName}_${org2ShortName}_${org3ShortName}"
+last_options_guard "$outDirPath/$DATE" run || exit 1
 
 gcContent_org1=$(get_config '.patterns.gc_content' | sed "s/{org_short}/$org1ShortName/g" | sed "s/{date}/$DATE/g")
 gcContent_org2=$(get_config '.patterns.gc_content' | sed "s/{org_short}/$org2ShortName/g" | sed "s/{date}/$DATE/g")
@@ -351,6 +368,7 @@ if [ ! -d "$DATE" ]; then
 fi
 cd "$DATE"
 outDirPath=$(pwd)
+last_options_guard "$outDirPath/intermediateFiles" training || exit 1
 echo "pwd: $(pwd)"
 
 # Create subdirectory structure

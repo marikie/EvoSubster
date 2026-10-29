@@ -62,6 +62,8 @@ grep -Fxq -- '-uRY128' "$tmp_dir/lastdb.args"
 test -d "$tmp_dir/db.seed-RY128"
 
 rm -f "$output"
+mkdir -p "$tmp_dir/custom"
+output="$tmp_dir/custom/output.maf"
 PATH="$stub_bin:$PATH" LASTAL_ARGS_LOG="$tmp_dir/lastal.args" \
     LASTDB_ARGS_LOG="$tmp_dir/lastdb.args" THREAD_NUM=2 \
     LASTDB_ALIGNMENT_SEED=RY4 LASTAL_SPLIT_MEMORY=32G \
@@ -88,9 +90,11 @@ printf '##maf version=1\n\n'
 EOF
 chmod +x "$stub_bin/lastal"
 rm -f "$output"
+mkdir -p "$tmp_dir/skipped"
+output="$tmp_dir/skipped/output.maf"
 if PATH="$stub_bin:$PATH" THREAD_NUM=1 \
     bash "$ROOT_DIR/src/align/one2one.sh" 20260809 "$reference" "$query" \
-    "$tmp_dir/db" "$train" "$output" > "$tmp_dir/run-skip.log" 2>&1; then
+    "$tmp_dir/skipped/db" "$train" "$output" > "$tmp_dir/run-skip.log" 2>&1; then
     echo "one2one unexpectedly accepted a skipped LAST sequence" >&2
     exit 1
 fi

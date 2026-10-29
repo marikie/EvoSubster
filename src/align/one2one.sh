@@ -11,21 +11,14 @@ trainFile=$5
 o2omaf=$6
 dbBasename=$(basename "$dbDir")
 
-threadNum=${THREAD_NUM:-8}
-queryBatchSize=${LASTAL_QUERY_BATCH_SIZE:-1M}
 splitMemory=${LASTAL_SPLIT_MEMORY:-8T}
-seedScheme=${LASTDB_ALIGNMENT_SEED-RY128}
-
-case "$seedScheme" in
-	"")
-		echo "ERROR: LASTDB_ALIGNMENT_SEED must not be empty." >&2
-		exit 1
-		;;
-	*[!A-Za-z0-9._-]*)
-		echo "ERROR: LASTDB_ALIGNMENT_SEED contains unsupported characters: $seedScheme" >&2
-		exit 1
-		;;
-esac
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/last_options.sh"
+last_options_load || exit 1
+seedScheme=$(python3 "$LAST_OPTIONS_HELPER" database-label) || exit 1
+for last_al_arg in "${LASTAL_ARGS[@]}"; do
+    if [[ "$last_al_arg" == --split-b=* ]]; then splitMemory="${last_al_arg#*=}"; fi
+done
+last_options_guard "$o2omaf" alignment || exit 1
 
 alignmentDbDir="${dbDir}.seed-${seedScheme}"
 alignmentDbBasename=$(basename "$alignmentDbDir")
@@ -36,15 +29,17 @@ if [ ! -d "$alignmentDbDir" ]; then
 	alignmentDbTmp="${alignmentDbDir}.tmp.$$"
 	rm -rf "$alignmentDbTmp"
 	mkdir -p "$alignmentDbTmp"
+	last_options_guard "$alignmentDbTmp" database || exit 1
 	if (cd "$alignmentDbTmp" && \
-		echo "time lastdb -P${threadNum} -c -u${seedScheme} $alignmentDbBasename $org1FASTA" && \
-		time lastdb -P"${threadNum}" -c -u"${seedScheme}" "$alignmentDbBasename" "$org1FASTA"); then
+		echo "time lastdb ${LASTDB_ALIGN_ARGS[*]} $alignmentDbBasename $org1FASTA" && \
+		time lastdb "${LASTDB_ALIGN_ARGS[@]}" "$alignmentDbBasename" "$org1FASTA"); then
 		mv "$alignmentDbTmp" "$alignmentDbDir"
 	else
 		rm -rf "$alignmentDbTmp"
 		exit 1
 	fi
 else
+	last_options_guard "$alignmentDbDir" database || exit 1
 	echo "$alignmentDbDir already exists"
 fi
 # -P4: makes it faster by using 4 threads (This has no effect on the results.)
@@ -60,9 +55,9 @@ fi
 # last-train
 echo "--last-train"
 if [ ! -e "$trainFile" ]; then
-	echo "time last-train -P${threadNum} --revsym -C2 $dbDir/$dbBasename $org2FASTA >$trainFile"
+	echo "time last-train ${LAST_TRAIN_ARGS[*]} $dbDir/$dbBasename $org2FASTA >$trainFile"
 	trainTmp="${trainFile}.tmp.$$"
-	if time last-train -P"${threadNum}" --revsym -C2 "$dbDir/$dbBasename" "$org2FASTA" >"$trainTmp" \
+	if time last-train "${LAST_TRAIN_ARGS[@]}" "$dbDir/$dbBasename" "$org2FASTA" >"$trainTmp" \
 			&& [ -s "$trainTmp" ]; then
 		mv "$trainTmp" "$trainFile"
 	else
@@ -87,9 +82,9 @@ o2omaf_sorted="${o2omaf_dir}/${o2omaf_base}_sorted.maf"
 if [ ! -e "$o2omaf" ] && [ ! -e "$o2omaf_sorted" ]; then
 	o2omaf_tmp="${o2omaf}.raw"
 	lastal_stderr="${o2omaf}.lastal.stderr.$$"
-	echo "time lastal -P${threadNum} -i $queryBatchSize -H1 -C2 --split-f=MAF+ --split-b=$splitMemory -p $trainFile $alignmentDbDir/$alignmentDbBasename $org2FASTA | last-split -r >$o2omaf_tmp"
-	if ! { time lastal -P"${threadNum}" -i "$queryBatchSize" -H1 -C2 --split-f=MAF+ --split-b="$splitMemory" -p "$trainFile" "$alignmentDbDir/$alignmentDbBasename" "$org2FASTA" \
-			| last-split -r >"$o2omaf_tmp"; } 2>"$lastal_stderr"; then
+	echo "time lastal -p $trainFile ${LASTAL_ARGS[*]} $alignmentDbDir/$alignmentDbBasename $org2FASTA | last-split ${LAST_SPLIT_ARGS[*]} >$o2omaf_tmp"
+	if ! { time lastal -p "$trainFile" "${LASTAL_ARGS[@]}" "$alignmentDbDir/$alignmentDbBasename" "$org2FASTA" \
+			| last-split "${LAST_SPLIT_ARGS[@]}" >"$o2omaf_tmp"; } 2>"$lastal_stderr"; then
 		cat "$lastal_stderr" >&2
 		rm -f "$lastal_stderr"
 		rm -f "$o2omaf_tmp"

@@ -25,6 +25,7 @@ stub_bin="$tmp_dir/bin"
 mkdir -p "$fixture_repo/src/select" "$fixture_repo/src/lib" "$fixture_repo/config" "$stub_bin"
 cp "$ROOT_DIR/src/sbst_fromDwl.sh" "$fixture_repo/src/sbst_fromDwl.sh"
 cp "$ROOT_DIR/src/lib/train_cache.sh" "$fixture_repo/src/lib/train_cache.sh"
+cp "$ROOT_DIR/src/lib/last_options.sh" "$ROOT_DIR/src/lib/last_options.py" "$fixture_repo/src/lib/"
 cp "$ROOT_DIR/config/dwl_config.yaml" "$fixture_repo/config/dwl_config.yaml"
 
 cat > "$stub_bin/Rscript" <<'EOF'
@@ -32,6 +33,7 @@ cat > "$stub_bin/Rscript" <<'EOF'
 script="$1"
 shift
 printf '%s\n' "$script" "$@" > "$R_ARGS_LOG"
+printf '%s\n' "$EVOSUBSTER_LAST_OPTIONS" > "$R_ARGS_LOG.env"
 if [ "${SELECTOR_FAIL:-0}" -eq 1 ]; then
     exit 42
 fi
@@ -93,6 +95,7 @@ EOF
 cat > "$fixture_repo/src/sbst.sh" <<'EOF'
 #!/bin/bash
 printf '%s\n' "$*" >> "$SBST_ARGS_LOG"
+printf '%s\n' "$EVOSUBSTER_LAST_OPTIONS" > "$SBST_ARGS_LOG.env"
 EOF
 
 chmod +x \
@@ -284,6 +287,20 @@ check "single-trio wrapper preserves support for unversioned requested accession
 check "single-trio wrapper forwards resolved versioned accessions" \
     grep -Fq -- "--accession-ids GCA_000000011.9 GCA_000000022.9 GCA_000000033.9" \
     "$unversioned_log"
+
+PATH="$stub_bin:$PATH" \
+R_ARGS_LOG="$tmp_dir/options-r.log" \
+SBST_ARGS_LOG="$tmp_dir/options-sbst.log" \
+bash "$fixture_repo/src/sbst_fromDwl.sh" --tree "$tree_file" 20260723 \
+    --genome-dir "$tmp_dir/options-genomes" --out-dir "$tmp_dir/options-out" \
+    --lastdb-options '-uRY4' --lastal-options '-H2 -C1' \
+    --last-train-options '--sample-number=1000' --last-split-options '-m0.1' \
+    > "$tmp_dir/options-wrapper.log" 2>&1
+check "tree mode accepts all four LAST argument strings" test "$?" -eq 0
+check "tree selection and each trio inherit identical LAST settings" \
+    cmp "$tmp_dir/options-r.log.env" "$tmp_dir/options-sbst.log.env"
+check "LAST settings preserve the complete argument string" \
+    grep -Fq -- '"lastal": "-H2 -C1"' "$tmp_dir/options-r.log.env"
 
 if [ "$fail" -gt 0 ]; then
     echo
