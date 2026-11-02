@@ -1,7 +1,10 @@
 import json
+import shutil
 import subprocess
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
 
 
@@ -11,6 +14,39 @@ RENDER_REPORT = ROOT / "src" / "report" / "render_report.sh"
 
 
 class ReportCliTest(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("Rscript") and shutil.which("pandoc"),
+                         "DOCX rendering requires Rscript and pandoc")
+    def test_word_report_contains_coding_percentages_and_missing_placeholder(self):
+        dependencies = self.run_command(
+            "Rscript", "--vanilla", "-e",
+            'p <- c("rmarkdown", "jsonlite", "dplyr", "purrr", "tidyr", '
+            '"stringr", "glue", "knitr"); '
+            'quit(status=if(all(vapply(p, requireNamespace, logical(1), quietly=TRUE))) 0 else 1)',
+        )
+        if dependencies.returncode:
+            self.skipTest("R report packages unavailable")
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = Path(tmp) / "summary.json"
+            output = Path(tmp) / "summary.docx"
+            summary.write_text(json.dumps({"datasets": [{
+                "dataset": "CodingTest", "latest_run": "20260101",
+                "species1": {"coding_region_percentage": ["Coding region percentage: 25.00%"]},
+                "species2": {"coding_region_percentage": ["Coding region percentage: 12.34%"]},
+                "species3": {}, "idt_12": "90%", "idt_13": "91%", "idt_23": "97%",
+            }]}))
+            result = self.run_command("bash", str(RENDER_REPORT), "-j", str(summary),
+                                      "-o", str(output))
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            with zipfile.ZipFile(output) as archive:
+                document = ET.fromstring(archive.read("word/document.xml"))
+            ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+            table = document.find(".//w:tbl", ns)
+            rows = [["".join(cell.itertext()) for cell in row.findall("w:tc", ns)]
+                    for row in table.findall("w:tr", ns)]
+            self.assertIn("Coding Region (%)", rows[0])
+            self.assertEqual([row[-1] for row in rows[1:]], ["25.00%", "12.34%", "—"])
+            self.assertIn("including N", "".join(document.itertext()))
+
     def run_command(self, *args):
         return subprocess.run(
             args,

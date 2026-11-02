@@ -23,6 +23,8 @@ Positional arguments:
 
 Options:
   --out-dir PATH              Output directory (default: ./results)
+  --org2-gff PATH             Ingroup 2 GFF (default: genomic.gff beside its FASTA)
+  --org3-gff PATH             Ingroup 3 GFF (default: genomic.gff beside its FASTA)
   --train-cache-dir PATH      Directory containing cached last-train files
   --accession-ids A1 A2 A3   Exact NCBI accessions for cache keys; normally supplied by sbst_fromDwl.sh
   --thread N                  Number of threads for LAST alignment (default: 8)
@@ -99,9 +101,32 @@ TRAIN_CACHE_DIR=""
 ACCESSION_IDS=()
 IDT_ONLY=0
 THREAD_NUM_OVERRIDE=8
+org2GFF=""
+org3GFF=""
 POSITIONAL_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --org2-gff|--org3-gff|--org2-gff=*|--org3-gff=*)
+            gff_option="${1%%=*}"
+            if [[ "$1" == *=* ]]; then
+                gff_value="${1#*=}"
+                shift
+            else
+                gff_value="${2:-}"
+                shift
+                if [ "$#" -gt 0 ]; then shift; fi
+            fi
+            if [[ -z "$gff_value" || "$gff_value" == -* ]]; then
+                echo "Error: $gff_option requires a non-empty GFF path." >&2
+                exit 1
+            fi
+            if [ "$gff_option" = "--org2-gff" ]; then
+                org2GFF="$gff_value"
+            else
+                org3GFF="$gff_value"
+            fi
+            continue
+            ;;
         --idt-only)
             IDT_ONLY=1
             shift
@@ -267,6 +292,29 @@ org2FASTA=$3
 org3FASTA=$4
 org1GFF=$5
 
+# Resolve annotations before changing into the output directory. The outgroup
+# sentinel remains authoritative; only omitted ingroup paths are auto-detected.
+gff_fastas=("$org1FASTA" "$org2FASTA" "$org3FASTA")
+gff_paths=("$org1GFF" "$org2GFF" "$org3GFF")
+for i in 0 1 2; do
+    if [ "$i" -gt 0 ] && [ -z "${gff_paths[$i]}" ]; then
+        candidate="$(dirname "${gff_fastas[$i]}")/genomic.gff"
+        if [ -f "$candidate" ]; then
+            gff_paths[$i]="$candidate"
+        else
+            gff_paths[$i]="NO_GFF_FILE"
+        fi
+    fi
+    if [ "${gff_paths[$i]}" != "NO_GFF_FILE" ]; then
+        if [ ! -f "${gff_paths[$i]}" ] || [ ! -r "${gff_paths[$i]}" ]; then
+            echo "Error: GFF file is not readable: ${gff_paths[$i]}" >&2
+            exit 1
+        fi
+        gff_paths[$i]="$(cd "$(dirname "${gff_paths[$i]}")" && pwd)/$(basename "${gff_paths[$i]}")"
+    fi
+done
+org1GFF="${gff_paths[0]}"
+
 # Propagate thread count to child scripts (last_train.sh / one2one.sh).
 threadNum="$THREAD_NUM_OVERRIDE"
 export THREAD_NUM="$threadNum"
@@ -275,9 +323,9 @@ if [ -n "$TRAIN_CACHE_DIR" ]; then
 fi
 
 # Extract the name of the parent directory of $org1FASTA
-org1DirName="$(basename $(dirname $org1FASTA))"
-org2DirName="$(basename $(dirname $org2FASTA))"
-org3DirName="$(basename $(dirname $org3FASTA))"
+org1DirName="$(basename "$(dirname "$org1FASTA")")"
+org2DirName="$(basename "$(dirname "$org2FASTA")")"
+org3DirName="$(basename "$(dirname "$org3FASTA")")"
 
 org1FullName="${org1DirName}_1"
 org2FullName="${org2DirName}_2"
@@ -434,6 +482,26 @@ time bash "$METRICS_DIR/gc_content.sh" "$org3FASTA" >"$gcContent_org3"
 else
 	echo "$gcContent_org3 already exists"
 fi
+
+# Coding region percentage (all three species, when annotations are available).
+echo "$(get_config '.messages.coding_region_percentage')"
+coding_pattern=$(get_config '.patterns.coding_region_percentage')
+coding_short_names=("$org1ShortName" "$org2ShortName" "$org3ShortName")
+for i in 0 1 2; do
+    if [ "${gff_paths[$i]}" = "NO_GFF_FILE" ]; then
+        echo "No GFF for ${coding_short_names[$i]}; skipping coding region percentage."
+        continue
+    fi
+    coding_filename="${coding_pattern//\{org_short\}/${coding_short_names[$i]}}"
+    coding_filename="${coding_filename//\{date\}/$DATE}"
+    coding_output="$stat_misc/$coding_filename"
+    if [ -s "$coding_output" ]; then
+        echo "$coding_output already exists"
+    else
+        python3 "$METRICS_DIR/coding_region_percentage.py" \
+            "${gff_fastas[$i]}" "${gff_paths[$i]}" --output "$coding_output" || exit 1
+    fi
+done
 
 # Run last-train to check substitution percent identity between org1 and org2
 echo "$(get_config '.options.checkIdt.enabled_message')"

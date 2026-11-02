@@ -630,19 +630,21 @@ fi
 run_date_dir="$(cd "$run_dir_root/$DATE" && pwd)"
 metadata_dir="$run_date_dir/metadata"
 
-# Check if GFF file exists in org1 (auto-detect)
-gffFilePath="$base_genomes/$org1FullName/genomic.gff"
-
-if [ -e "$gffFilePath" ]; then
-    org1GFF="$gffFilePath" # set $org1GFF as the path to the gff file
-    echo "GFF file found: $org1GFF"
-else
-    org1GFF="NO_GFF_FILE" # set a special flag to $org1GFF
-    echo "No GFF file found for $org1FullName. Please download the GFF file manually."
-fi
+# Detect available annotations for each species; downloads may have been cached.
+declare -a gff_paths=()
+for fasta_path in "$org1FASTA" "$org2FASTA" "$org3FASTA"; do
+    gffFilePath="$(dirname "$fasta_path")/genomic.gff"
+    if [ -f "$gffFilePath" ]; then
+        gff_paths+=("$gffFilePath")
+        echo "GFF file found: $gffFilePath"
+    else
+        gff_paths+=("NO_GFF_FILE")
+        echo "No GFF file found beside $fasta_path."
+    fi
+done
+org1GFF="${gff_paths[0]}"
 
 echo "--- Preparing metadata artifacts in $metadata_dir"
-declare -a gff_paths=("$org1GFF" "" "")
 declare -a metadata_json_copies=("" "" "")
 
 for i in {0..2}; do
@@ -749,6 +751,7 @@ if [ -n "$TRAIN_CACHE_DIR_OVERRIDE" ]; then
 fi
 trisbst_args+=("--accession-ids" "$resolvedOrg1ID" "$resolvedOrg2ID" "$resolvedOrg3ID")
 trisbst_args+=("--thread" "$THREAD_NUM_OVERRIDE")
+trisbst_args+=("--org2-gff" "${gff_paths[1]}" "--org3-gff" "${gff_paths[2]}")
 if [ "$IDT_ONLY" -eq 1 ]; then
     trisbst_args+=("--idt-only")
 fi

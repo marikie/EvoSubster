@@ -9,6 +9,7 @@ settings:
 # Messages
 messages:
   gc_content: "--- calculating GC content"
+  coding_region_percentage: "--- calculating coding region percentage"
   one2one: "--- running one2one for {org1_short}-{org2_short}"
   maf_join: "--- maf-join the two .maf files"
   make_dir: "--- making {dir_path}"
@@ -35,6 +36,7 @@ options:
 # File patterns and suffixes
 patterns:
   gc_content: "{org_short}_gcContent_{date}.out"
+  coding_region_percentage: "{org_short}_codingRegionPercentage_{date}.out"
   sbst_ratio: "sbstRatio_{date}.out"
   one2one: "{org1_short}2{org2_short}_one2one_{date}.maf"
   train: "{org1_short}2{org2_short}_{date}.train"

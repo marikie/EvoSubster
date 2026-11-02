@@ -90,6 +90,9 @@ fasta="$org_dir/${resolved_acc}_genomic.fna"
 summary="$org_dir/summary.json"
 taxonomy="$org_dir/taxonomy.json"
 printf '>seq\nACGT\n' > "$fasta"
+if [[ "$resolved_acc" != GCA_000000022.* ]]; then
+    printf 'seq\ttest\tCDS\t1\t2\t.\t+\t0\tID=cds\n' > "$org_dir/genomic.gff"
+fi
 printf '{"reports":[{"accession":"%s"}]}\n' "$resolved_acc" > "$summary"
 printf '{}\n' > "$taxonomy"
 printf '%s|%s|%s|%s|%s|%s\n' \
@@ -168,6 +171,20 @@ check "default cache path is forwarded to the downstream pipeline" \
 check "selected accessions are forwarded explicitly to sbst.sh" \
     grep -Fq -- "--accession-ids GCA_000000011.1 GCA_000000022.1 GCA_000000033.1" \
     "$default_sbst_log"
+check "available ingroup GFF and missing annotation sentinel are forwarded" \
+    grep -Fq -- "--org2-gff NO_GFF_FILE --org3-gff $tmp_dir/genomes/Species_GCA_000000033_1/genomic.gff" \
+    "$default_sbst_log"
+check "metadata records available GFF paths for all three slots" \
+    python3 - "$default_out" <<'PY'
+import json
+import pathlib
+import sys
+manifest_path = next(pathlib.Path(sys.argv[1]).rglob("metadata_manifest.json"))
+organisms = json.loads(manifest_path.read_text())["organisms"]
+assert organisms[0]["gff_path"].endswith("Species_GCA_000000011_1/genomic.gff")
+assert organisms[1]["gff_path"] is None
+assert organisms[2]["gff_path"].endswith("Species_GCA_000000033_1/genomic.gff")
+PY
 
 custom_out="$tmp_dir/custom-out"
 custom_cache="$tmp_dir/custom-cache"

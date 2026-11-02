@@ -99,14 +99,15 @@ def validate_summary(payload: object) -> Tuple[List[str], List[str]]:
                     errors.append(
                         f"{name}.{species_key}.{object_key} must be an object."
                     )
-            gc_content = species.get("gc_content")
-            if gc_content is not None and (
-                not isinstance(gc_content, list)
-                or not all(isinstance(value, str) for value in gc_content)
-            ):
-                errors.append(
-                    f"{name}.{species_key}.gc_content must be an array of strings."
-                )
+            for metric_key in ("gc_content", "coding_region_percentage"):
+                metric = species.get(metric_key)
+                if metric is not None and (
+                    not isinstance(metric, list)
+                    or not all(isinstance(value, str) for value in metric)
+                ):
+                    errors.append(
+                        f"{name}.{species_key}.{metric_key} must be an array of strings."
+                    )
             pdfs = species.get("pdfs")
             if pdfs is not None:
                 if not isinstance(pdfs, dict):

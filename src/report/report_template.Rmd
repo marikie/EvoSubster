@@ -231,6 +231,14 @@ if (length(summary_data$datasets) == 0) {
           } else {
             paste(gc_vals, collapse = "\n")
           }
+        }),
+        coding_region_percentage = map_chr(slot, ~ {
+          coding_vals <- get_species_entry(.x)$coding_region_percentage %||% character()
+          if (length(coding_vals) == 0) {
+            NA_character_
+          } else {
+            sub("^Coding region percentage: ", "", paste(coding_vals, collapse = "\n"))
+          }
         })
       )
 
@@ -243,7 +251,8 @@ if (length(summary_data$datasets) == 0) {
           accession = missing_placeholder,
           organism = missing_placeholder,
           substitution_ratio = missing_placeholder,
-          gc_content = missing_placeholder
+          gc_content = missing_placeholder,
+          coding_region_percentage = missing_placeholder
         )
       ) %>%
       mutate(
@@ -263,11 +272,13 @@ if (length(summary_data$datasets) == 0) {
           "Accession",
           "Organism",
           "Substitution Ratio",
-          "GC Content"
+          "GC Content",
+          "Coding Region (%)"
         )
       )
     )
     cat("\n")
+    cat("Coding region percentage = union length of GFF CDS regions / whole genome FASTA length (including N) x 100. Overlapping CDS annotations are counted once.\n\n")
 
     short_labels <- ifelse(
       is.na(species_rows$short_name) | species_rows$short_name == "",

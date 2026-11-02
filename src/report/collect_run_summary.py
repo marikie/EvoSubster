@@ -330,6 +330,16 @@ def process_species(
             f"{slot}: No GC content file found in supported layouts."
         )
 
+    coding_path = resolver.find_first(
+        [f"statistics/misc/*{short_name}_codingRegionPercentage*.out",
+         f"*{short_name}_codingRegionPercentage*.out"],
+        short_name=short_name,
+    )
+    if coding_path:
+        data["coding_region_percentage_file"] = str(coding_path)
+        data["coding_region_percentage"] = read_file_lines(coding_path)
+    # Optional for species without annotations and runs predating this metric.
+
     if include_pdfs:
         pdfs: Dict[str, List[str]] = {}
         for key, subdirectory, suffix, excluded_fragments, required_description in PDF_ARTIFACT_SPECS:

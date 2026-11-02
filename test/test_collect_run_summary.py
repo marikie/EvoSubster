@@ -101,6 +101,35 @@ def create_run(dataset_dir, layout, date="20260101", stale_metadata=False):
 
 
 class BuildSummaryCompatibilityTest(unittest.TestCase):
+    def test_coding_region_percentage_is_optional_and_collected_for_all_species(self):
+        for layout in ("current", "legacy"):
+            with self.subTest(layout=layout), tempfile.TemporaryDirectory() as tmp:
+                dataset_dir = Path(tmp) / "TrioA"
+                run_dir = create_run(dataset_dir, layout)
+                artifact_root = run_dir / "statistics/misc" if layout == "current" else run_dir
+                for _, short_name, _, _ in SLOTS:
+                    write_file(artifact_root / f"{short_name}_codingRegionPercentage_20260101.out",
+                               "Coding region percentage: 25.00%\n")
+                summary, _ = script.build_summary(dataset_dir, 80.0)
+                entry = summary["datasets"][0]
+                for slot in ("species1", "species2", "species3"):
+                    self.assertEqual(entry[slot]["coding_region_percentage"],
+                                     ["Coding region percentage: 25.00%"])
+                    self.assertTrue(Path(entry[slot]["coding_region_percentage_file"]).is_file())
+                self.assertEqual(summary["issues"], [])
+                self.assertEqual(report_contract.validate_summary(summary)[1], [])
+
+    def test_coding_region_percentage_contract_rejects_wrong_type(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dataset_dir = Path(tmp) / "TrioA"
+            create_run(dataset_dir, "current")
+            summary, _ = script.build_summary(dataset_dir, 80.0)
+            self.assertEqual(report_contract.validate_summary(summary)[1], [])
+            for value in (25.0, "25%", [25.0]):
+                summary["datasets"][0]["species1"]["coding_region_percentage"] = value
+                self.assertTrue(any("coding_region_percentage" in error
+                                    for error in report_contract.validate_summary(summary)[1]))
+
     def test_reads_current_layout_and_rebases_stale_metadata_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
             dataset_dir = Path(tmp) / "TrioA"

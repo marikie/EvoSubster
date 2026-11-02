@@ -53,7 +53,7 @@ During execution the wrapper:
 
 - Downloads each accession via `datasets` (includes: `genome`, `gff3`, `rna`, `cds`, `protein`, `seq-report`). If a genomic FASTA is already present and passes a basic validity check (non-empty, starts with `>`), the download is skipped. If the file fails validation (e.g. truncated from a previous interrupted download), it is re-downloaded automatically. Pass `--force` to bypass the check and re-download unconditionally.
 - Unpacks the archives, prunes helper directories, and moves FASTA/GFF assets into the genome directory.
-- Detects `genomic.gff` for the outgroup; if missing, downstream steps receive `NO_GFF_FILE`.
+- Detects `genomic.gff` for each species; if missing, downstream steps receive `NO_GFF_FILE`.
 - Resolves FASTA paths and invokes `sbst.sh` with the appropriate arguments.
 
 ### Select trios from a Newick tree
@@ -272,7 +272,7 @@ behind.
 ### Use FASTA files of your choice
 
 ```bash
-./src/sbst.sh <DATE> <ORG1_FASTA> <ORG2_FASTA> <ORG3_FASTA> <ORG1_GFF|NO_GFF_FILE> [--out-dir PATH] [--train-cache-dir PATH] [--accession-ids ACC1 ACC2 ACC3] [--thread N] [--idt-only]
+./src/sbst.sh <DATE> <ORG1_FASTA> <ORG2_FASTA> <ORG3_FASTA> <ORG1_GFF|NO_GFF_FILE> [--org2-gff PATH] [--org3-gff PATH] [--out-dir PATH] [--train-cache-dir PATH] [--accession-ids ACC1 ACC2 ACC3] [--thread N] [--idt-only]
 ```
 
 - Provide paths to the FASTA files.
@@ -281,11 +281,25 @@ behind.
   reuse is enabled only when all three filenames begin with a versioned
   `GCA_...` or `GCF_...` accession.
 - Supply the outgroup GFF path or use `NO_GFF_FILE`.
+- Ingroup annotations default to `genomic.gff` beside each FASTA. Use
+  `--org2-gff PATH` / `--org3-gff PATH` to specify another file, or
+  `NO_GFF_FILE` as the option value to skip that species explicitly.
 - `--out-dir`, `--thread`, and `--idt-only` behave the same as in the download wrapper.
 
 This script:
 
 - Computes GC content for all three genomes.
+- Computes coding region percentage for each genome with a GFF annotation:
+  the union length of CDS regions divided by the whole FASTA length (including
+  N and unannotated contigs), multiplied by 100. Overlapping annotations,
+  including alternative isoforms and opposite strands, count each position once.
+  FASTA IDs (the first whitespace-delimited header token) must match GFF IDs;
+  invalid CDS coordinates or missing IDs stop the pipeline.
+  Results are written to
+  `statistics/misc/{org_short}_codingRegionPercentage_{date}.out`, including
+  in `--idt-only` mode. Non-empty results are reused on reruns; absent GFFs are
+  skipped. This metric can also be run independently:
+  `python3 src/metrics/coding_region_percentage.py genome.fna genomic.gff`.
 - Runs `last_train.sh` on every pair of the three species to calculate their substitution percent identity.
 - Produces paired `one2one` alignments for `org1` vs `org2` and `org1` vs `org3`.
 - Builds a separate `RY128` LAST database for these close-genome alignments,
@@ -444,6 +458,10 @@ runs into a single rendered report (Word, PDF, or HTML).
 gathers run metadata into a JSON summary (default:
 `<input_dir>/<name>_summary.json`), then `render_report.sh`, which renders it
 via R Markdown.
+
+The species overview includes **Coding Region (%)** when the metric is
+available; missing annotations and older runs display `—`. To include newly
+calculated metrics, run `run_report.sh` again to refresh the JSON summary.
 
 - `--idt-threshold` filters trios by percent identity (default: `80.0`).
 - `--use-filtered` renders from the identity-filtered JSON
