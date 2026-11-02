@@ -62,7 +62,7 @@ usage <- function() {
     "  --genome-dir DIR        Genome storage (default: ./genomes).",
     "  --out-dir DIR           Output directory (default: ./results/trio_selection).",
     "  --train-cache-dir DIR   Directory for cached last-train files (default: <out-dir>/train_cache).",
-    "  --date YYYYMMDD         Run date, used in cache filenames (default: today).",
+    "  --date YYYYMMDD         Run date recorded in execution settings (default: today).",
     "  --threads N             Threads for lastdb/last-train (default: 8).",
     "  --dry-run               Enumerate ingroup pairs + candidate-outgroup order only;",
     "                          download nothing and run no last-train.",

@@ -1,7 +1,12 @@
 #!/bin/bash
 
+date_free_cache=false
+if [ "${!#}" = "--date-free-cache" ]; then
+    date_free_cache=true
+    set -- "${@:1:$#-1}"
+fi
 if [ $# -lt 5 ] || [ $# -gt 6 ]; then
-    echo "Usage: $0 <Today's Date> <org2FASTA> <org3FASTA> <org2ShortName> <org3ShortName> [out_dir]"
+    echo "Usage: $0 <Today's Date> <org2FASTA> <org3FASTA> <org2ShortName> <org3ShortName> [out_dir] [--date-free-cache]"
     exit 1
 fi
 # Get arguments
@@ -12,9 +17,13 @@ org2ShortName=$4
 org3ShortName=$5
 out_dir="${6:-.}"
 
-dbBasename="${org2ShortName}db_${DATE}"
+suffix="_${DATE}"
+if [ "$date_free_cache" = true ]; then
+    suffix=""
+fi
+dbBasename="${org2ShortName}db${suffix}"
 dbDir="${out_dir}/${dbBasename}"
-trainFile="${out_dir}/${org2ShortName}2${org3ShortName}_${DATE}.train"
+trainFile="${out_dir}/${org2ShortName}2${org3ShortName}${suffix}.train"
 
 # Validate settings before reusing a DB or profile.
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/last_options.sh"

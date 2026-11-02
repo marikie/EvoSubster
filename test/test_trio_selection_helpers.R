@@ -68,10 +68,9 @@ check(
     train_file_path(
       "/tmp/cache",
       "GCA_000000001.1",
-      "GCF_000000002.2",
-      "20260723"
+      "GCF_000000002.2"
     ),
-    "/tmp/cache/GCA_000000001.12GCF_000000002.2_20260723.train"
+    "/tmp/cache/GCA_000000001.12GCF_000000002.2.train"
   ),
   "train cache filename is keyed by the complete accession pair"
 )
@@ -383,7 +382,7 @@ fake_fasta <- file.path(cache_root, "genome.fna")
 writeLines(c(">seq", "ACGT"), fake_fasta)
 acc_a <- "GCA_000000001.1"
 acc_b <- "GCA_000000002.1"
-cache_file <- train_file_path(cache_root, acc_a, acc_b, "20260723")
+cache_file <- train_file_path(cache_root, acc_a, acc_b)
 writeLines(
   c(
     "# substitution percent identity: 91.0",
@@ -438,7 +437,8 @@ run <- function(command, args, quiet_stderr = FALSE) {
     return(paste("Genus_species", fake_fasta, "", "", "", "", sep = "|"))
   }
   if (grepl("last_train[.]sh", args[1])) {
-    dir.create(file.path(cache_root, paste0(acc_a, "db_20260723")))
+    stopifnot(tail(args, 1) == "--date-free-cache")
+    dir.create(file.path(cache_root, paste0(acc_a, "db")))
     write_complete_train(cache_file, 88.5)
     return(character())
   }
@@ -458,6 +458,14 @@ fetch <- make_fetchers(
   )
 )
 identity <- fetch$get_identity(acc_a, acc_b)
+next_day <- make_fetchers(data.frame(), modifyList(defaults, list(
+  train_cache_dir = cache_root, genome_dir = cache_root, date = "20260724"
+)))
+check(identical(next_day$get_identity(acc_b, acc_a), 88.5) &&
+        identical(next_day$counters$trains, 0L) &&
+        identical(next_day$counters$downloads, 0L) &&
+        nrow(next_day$get_owned_artifacts()) == 0,
+      "another run date reuses the complete pair cache without training or claiming ownership")
 run <- real_run
 
 check(
@@ -483,7 +491,7 @@ check(
       owned_after_replacement$artifact_type == "directory_tree" &
       owned_after_replacement$accession_1 == acc_a &
       owned_after_replacement$accession_2 == "" &
-      owned_after_replacement$relative_path == paste0(acc_a, "db_20260723")
+      owned_after_replacement$relative_path == paste0(acc_a, "db")
   ),
   "a current-run LAST database directory is owned by its reference accession"
 )

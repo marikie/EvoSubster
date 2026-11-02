@@ -118,7 +118,7 @@ reuse_cached_train() {
         return 0
     fi
 
-    local cached="${cache_dir}/${ref_acc}2${query_acc}_${date}.train"
+    local cached="${cache_dir}/${ref_acc}2${query_acc}.train"
     if ! is_valid_train_file "$cached"; then
         if [ -e "$cached" ] || [ -L "$cached" ]; then
             echo "Train-cache miss: invalid or incomplete file at $cached" >&2

@@ -69,4 +69,21 @@ PATH="$stub_bin:$PATH" THREAD_NUM=1 \
 test -s "$success_dir/Refdb_20260809/Refdb_20260809.prj"
 test -s "$success_dir/Ref2Qry_20260809.train"
 
+cache_dir="$tmp_dir/cache"
+PATH="$stub_bin:$PATH" THREAD_NUM=1 \
+    bash "$ROOT_DIR/src/align/last_train.sh" 20260809 "$reference" "$query" Ref Qry "$cache_dir" --date-free-cache \
+    > "$tmp_dir/cache.log" 2>&1
+test -s "$cache_dir/Refdb/Refdb.prj"
+test -s "$cache_dir/Ref2Qry.train"
+test ! -e "$cache_dir/Ref2Qry_20260809.train"
+
+# Fail if either tool is called on a second date: both products must be reused.
+printf '#!/bin/bash\nexit 99\n' > "$stub_bin/lastdb"
+printf '#!/bin/bash\nexit 99\n' > "$stub_bin/last-train"
+PATH="$stub_bin:$PATH" THREAD_NUM=1 \
+    bash "$ROOT_DIR/src/align/last_train.sh" 20260810 "$reference" "$query" Ref Qry "$cache_dir" --date-free-cache \
+    > "$tmp_dir/cache-reuse.log" 2>&1
+test -s "$cache_dir/Refdb/Refdb.prj"
+test -s "$cache_dir/Ref2Qry.train"
+
 echo "ok: last_train publishes databases and parameter files only after successful completion"

@@ -64,7 +64,14 @@ During execution the wrapper:
 
 Tree mode selects assemblies and candidate outgroups, downloads genomes and
 builds `last-train` caches on demand, then runs the pipeline for each selected
-trio. Identity conditions can be configured independently:
+trio.
+
+Training caches use date-free accession-pair names (`<ACC1>2<ACC2>.train`) and
+LAST database directories (`<ACC>db/`), so the same `--train-cache-dir` can be
+reused across run dates. Older date-suffixed cache entries are left intact and
+are not reused automatically. Ordinary pipeline result filenames retain the run date.
+
+Identity conditions can be configured independently:
 
 | Option | Default | Requirement |
 | --- | --- | --- |

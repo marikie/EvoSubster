@@ -74,18 +74,21 @@ dest_dir="$tmp_dir/dest"
 mkdir -p "$cache_dir" "$dest_dir"
 
 # Forward-orientation reuse copies validated content and survives cache cleanup.
-forward_cache="$cache_dir/GCA_000000001.12GCA_000000002.1_20260723.train"
+forward_cache="$cache_dir/GCA_000000001.12GCA_000000002.1.train"
 forward_dest="$dest_dir/forward.train"
 write_valid_train "$forward_cache"
 reuse_cached_train "$cache_dir" "20260723" \
     "GCA_000000001.1" "GCA_000000002.1" "$forward_dest"
 check "reuses a forward-orientation cache entry" test -f "$forward_dest"
 check "materializes a regular file instead of a symlink" test ! -L "$forward_dest"
+reuse_cached_train "$cache_dir" "20260724" \
+    "GCA_000000001.1" "GCA_000000002.1" "$dest_dir/next-day.train"
+check "reuses the same cache on another run date" is_valid_train_file "$dest_dir/next-day.train"
 rm -f "$forward_cache"
 check "reused output remains valid after cache cleanup" is_valid_train_file "$forward_dest"
 
 # Reverse orientation must not use parameters trained in the opposite direction.
-reverse_cache="$cache_dir/GCA_000000001.12GCA_000000002.1_20260723.train"
+reverse_cache="$cache_dir/GCA_000000001.12GCA_000000002.1.train"
 reverse_dest="$dest_dir/reverse.train"
 write_valid_train "$reverse_cache"
 reuse_cached_train "$cache_dir" "20260723" \
@@ -102,7 +105,7 @@ check "recovered destination is no longer a symlink" test ! -L "$dangling_dest"
 
 # A valid symlink created by the previous implementation is converted in place
 # so upgrading the code also makes existing outputs independent of the cache.
-legacy_cache="$cache_dir/GCA_000000005.12GCA_000000006.1_20260723.train"
+legacy_cache="$cache_dir/GCA_000000005.12GCA_000000006.1.train"
 legacy_dest="$dest_dir/legacy.train"
 write_valid_train "$legacy_cache"
 ln -s "$legacy_cache" "$legacy_dest"
@@ -113,7 +116,7 @@ check "materializes a valid legacy cache symlink" test ! -L "$legacy_dest"
 check "materialized legacy output survives cache cleanup" is_valid_train_file "$legacy_dest"
 
 # Partial cache files must not be reused or leave a destination that makes last_train skip.
-invalid_cache="$cache_dir/GCA_000000003.12GCA_000000004.1_20260723.train"
+invalid_cache="$cache_dir/GCA_000000003.12GCA_000000004.1.train"
 invalid_dest="$dest_dir/invalid.train"
 write_truncated_train "$invalid_cache"
 printf 'partial destination\n' > "$invalid_dest"
@@ -191,9 +194,9 @@ printf '>c\nACGT\n' > "$fasta3"
 acc1="GCA_000000011.1"
 acc2="GCA_000000022.1"
 acc3="GCA_000000033.1"
-write_valid_train "$pipeline_cache/${acc1}2${acc2}_20260723.train" 91
-write_valid_train "$pipeline_cache/${acc1}2${acc3}_20260723.train" 92
-write_valid_train "$pipeline_cache/${acc2}2${acc3}_20260723.train" 93
+write_valid_train "$pipeline_cache/${acc1}2${acc2}.train" 91
+write_valid_train "$pipeline_cache/${acc1}2${acc3}.train" 92
+write_valid_train "$pipeline_cache/${acc2}2${acc3}.train" 93
 
 PATH="$stub_bin:$PATH" \
 ALIGN_DIR_OVERRIDE="$stub_align" \

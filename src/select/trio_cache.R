@@ -2,8 +2,8 @@
 
 IDENTITY_PREFIX <- "# substitution percent identity:"
 
-train_file_path <- function(cache_dir, acc_a, acc_b, date) {
-  file.path(cache_dir, sprintf("%s2%s_%s.train", acc_a, acc_b, date))
+train_file_path <- function(cache_dir, acc_a, acc_b) {
+  file.path(cache_dir, sprintf("%s2%s.train", acc_a, acc_b))
 }
 
 parse_train_identity <- function(path) {
@@ -169,18 +169,18 @@ make_fetchers <- function(leaves, opts) {
     hit <- idt_cache[[key]]
     if (!is.null(hit)) return(hit)
 
-    train <- train_file_path(cache_dir, a1, a2, opts$date)
+    train <- train_file_path(cache_dir, a1, a2)
     val <- parse_train_identity(train)
     if (is.na(val)) {
       # last_train.sh treats every existing path as complete. Remove partial
       # files and dangling links first so interrupted cache writes can recover.
       remove_invalid_train_cache(train)
       fa1 <- get_fasta(a1); fa2 <- get_fasta(a2)
-      db_relative <- paste0(a1, "db_", opts$date)
+      db_relative <- paste0(a1, "db")
       db_path <- file.path(cache_dir, db_relative)
       db_preexisting <- path_exists_without_following(db_path)
       run("bash", c(shQuote(LAST_TRAIN), opts$date, shQuote(fa1), shQuote(fa2),
-                    a1, a2, shQuote(cache_dir)))
+                    a1, a2, shQuote(cache_dir), "--date-free-cache"))
       counters$trains <- counters$trains + 1L
       val <- parse_train_identity(train)
       if (!opts$keep_unused_species_data) {
