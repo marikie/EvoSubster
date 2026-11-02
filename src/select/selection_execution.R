@@ -50,6 +50,7 @@ execution_info_lines <- function(execution_info) {
   for (section in unique(execution_info$settings$section)) {
     lines <- c(lines, "", paste0(section, ":"))
     rows <- execution_info$settings[execution_info$settings$section == section, , drop = FALSE]
+    rows <- rows[rows$key != "idt_threshold", , drop = FALSE]
     for (i in seq_len(nrow(rows))) {
       key <- rows$key[i]
       value <- rows$value[i]

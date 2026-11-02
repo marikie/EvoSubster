@@ -58,6 +58,16 @@ for (options in list(c("--idt-threshold", "85", "--outgroup-idt-threshold", "80"
 }
 stopifnot(identical(execution_info_lines(NULL),
                     c("Command: not recorded", "Effective settings: not recorded")))
+for (options in list(character(), c("--idt-threshold", "85"),
+                     c("--idt-threshold", "85", "--ingroup-idt-threshold", "90"))) {
+  argv <- c("--tree", "input.nwk", options)
+  recorded <- record_selection_execution(parse_args(argv), argv, "trio_selection.R")
+  rendered <- execution_info_lines(recorded)
+  stopifnot(!any(grepl("Common identity threshold", rendered, fixed = TRUE)),
+            sum(grepl("  Ingroup identity >", rendered, fixed = TRUE)) == 1,
+            sum(grepl("  Outgroup-ingroup identity >", rendered, fixed = TRUE)) == 1,
+            nrow(entry(recorded, "idt_threshold")) == 1)
+}
 cat("ok: all effective values, option provenance and shell quoting\n")
 
 if (!requireNamespace("ape", quietly = TRUE)) stop("PDF tests require ape")
@@ -79,7 +89,8 @@ for (phrase in c("Command:", "Rscript", "--min-idt-gap-between-out-in", "Effecti
                  "Gap exemption:", "Runtime:", "Paths:", "Threads: 8 [specified]", "T1 97% 98% 98%")) {
   stopifnot(grepl(phrase, contents, fixed = TRUE))
 }
-stopifnot(!grepl("idt-threshold:", contents, fixed = TRUE))
+stopifnot(!grepl("idt-threshold:", contents, fixed = TRUE),
+          !grepl("Common identity threshold", contents, fixed = TRUE))
 short_pdf <- file.path(work, "short.pdf")
 file.copy(files[["pdf"]], short_pdf)
 
