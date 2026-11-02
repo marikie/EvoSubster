@@ -276,6 +276,71 @@ files left by a previous run in the same directory are removed, so a `--dry-run`
 or a run selecting zero trios never leaves stale `selected_trios.nwk`/`.pdf`
 behind.
 
+### Run previously selected trios
+
+Pass a selection table directly to run its trios through alignment, substitution
+counting, and graph generation, without repeating tree selection:
+
+```bash
+rtk proxy bash src/sbst_fromDwl.sh \
+  --trios results/example/trio_selection/selected_trios.tsv
+```
+
+Successful tree selections now save `selection_run.json` beside the TSV. This
+also works when running `src/select/trio_selection.R` directly. The record stores
+the date, absolute genome/output/cache paths, thread count, all four LAST option
+strings, and the effective defaults for `LASTDB_ALIGNMENT_SEED`,
+`LASTAL_QUERY_BATCH_SIZE`, and `LASTAL_SPLIT_MEMORY`. For a standalone selector,
+the pipeline output root is the parent of its selection output directory.
+Failed selection or cleanup, and `--dry-run`, leave no resume record from that
+attempt or a previous attempt.
+
+`--trios` automatically loads `selection_run.json` from the TSV's directory.
+Explicit CLI arguments override saved settings; saved settings override the
+current environment and ordinary defaults. The resolved paths, date, thread
+count, and configuration source are printed at startup. `--force` and
+`--idt-only` are never restored automatically; request them explicitly if needed.
+
+The table requires the named columns `out_acc`, `in1_acc`, and `in2_acc`, in any
+order, containing versioned GCA/GCF accessions. Other columns are ignored, so both
+the full selection report and a hand-written three-column TSV work. Detailed
+identity and decision columns remain in the selection report for inspection;
+they do not trigger re-selection. Each row must contain three distinct accessions.
+All rows are checked before running any trio. Blank lines are ignored, and an
+empty table finishes successfully without running analysis.
+
+For an older TSV without saved settings, specify a run date and paths (use the
+original date to resume existing pipeline outputs):
+
+```bash
+rtk proxy bash src/sbst_fromDwl.sh --trios path/to/selected_trios.tsv 20260818 \
+  --genome-dir genomes --out-dir results/example \
+  --train-cache-dir results/example/trio_selection/train_cache --thread 8
+```
+
+The date is required without saved settings to choose the pipeline output run.
+Training caches use date-free accession-pair names and can be reused across dates.
+Supply any original custom LAST options as well. Missing or direction-incompatible
+training caches are recomputed by the existing pipeline.
+
+To use a moved configuration or override settings explicitly:
+
+```bash
+rtk proxy bash src/sbst_fromDwl.sh --trios path/to/subset.tsv \
+  --selection-config results/example/trio_selection/selection_run.json \
+  --out-dir results/new-run
+```
+
+Saved paths remain absolute when a TSV/configuration is moved; override directory
+options if the data have moved too. Malformed configuration files are errors.
+Existing LAST compatibility checks still apply: changing thread counts or LAST
+settings may require separate output and training-cache directories.
+Trio runs execute sequentially and continue after a failure. The final summary
+lists each trio as `OK` or `FAILED`; any failed trio makes the command exit nonzero.
+Graphs are written under `<out-dir>/<trio>/<DATE>/figs/`. Multi-trio aggregate
+reports remain a separate command. `--trios` cannot be combined with `--tree` or
+the three positional accessions; `--selection-config` requires `--trios`.
+
 ### Use FASTA files of your choice
 
 ```bash

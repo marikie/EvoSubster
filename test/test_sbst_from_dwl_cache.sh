@@ -27,6 +27,7 @@ mkdir -p "$fixture_repo/src/select" "$fixture_repo/src/lib" "$fixture_repo/confi
 cp "$ROOT_DIR/src/sbst_fromDwl.sh" "$fixture_repo/src/sbst_fromDwl.sh"
 cp "$ROOT_DIR/src/lib/train_cache.sh" "$fixture_repo/src/lib/train_cache.sh"
 cp "$ROOT_DIR/src/lib/last_options.sh" "$ROOT_DIR/src/lib/last_options.py" "$fixture_repo/src/lib/"
+cp "$ROOT_DIR/src/lib/selection_run.py" "$fixture_repo/src/lib/"
 cp "$ROOT_DIR/config/dwl_config.yaml" "$fixture_repo/config/dwl_config.yaml"
 
 cat > "$stub_bin/Rscript" <<'EOF'
@@ -103,6 +104,8 @@ cat > "$fixture_repo/src/sbst.sh" <<'EOF'
 #!/bin/bash
 printf '%s\n' "$*" >> "$SBST_ARGS_LOG"
 printf '%s\n' "$EVOSUBSTER_LAST_OPTIONS" > "$SBST_ARGS_LOG.env"
+printf '%s\n' "$LASTDB_ALIGNMENT_SEED|$LASTAL_QUERY_BATCH_SIZE|$LASTAL_SPLIT_MEMORY" > "$SBST_ARGS_LOG.defaults"
+if [[ "${FAIL_ACCESSION:-}" != "" && "$*" == *"$FAIL_ACCESSION"* ]]; then exit 42; fi
 EOF
 
 chmod +x \
@@ -364,6 +367,7 @@ done
 PATH="$stub_bin:$PATH" \
 R_ARGS_LOG="$tmp_dir/options-r.log" \
 SBST_ARGS_LOG="$tmp_dir/options-sbst.log" \
+LASTDB_ALIGNMENT_SEED=RY4 LASTAL_QUERY_BATCH_SIZE=8K LASTAL_SPLIT_MEMORY=94G \
 bash "$fixture_repo/src/sbst_fromDwl.sh" --tree "$tree_file" 20260723 \
     --genome-dir "$tmp_dir/options-genomes" --out-dir "$tmp_dir/options-out" \
     --lastdb-options '-uRY4' --lastal-options '-H2 -C1' \
@@ -374,6 +378,79 @@ check "tree selection and each trio inherit identical LAST settings" \
     cmp "$tmp_dir/options-r.log.env" "$tmp_dir/options-sbst.log.env"
 check "LAST settings preserve the complete argument string" \
     grep -Fq -- '"lastal": "-H2 -C1"' "$tmp_dir/options-r.log.env"
+
+
+# A saved tree selection can be resumed with no date or path arguments.
+resume_tsv="$tmp_dir/options-out/trio_selection/selected_trios.tsv"
+PATH="$stub_bin:$PATH" SELECTOR_FAIL=1 R_ARGS_LOG="$tmp_dir/unexpected-selector.log" \
+SBST_ARGS_LOG="$tmp_dir/resume-sbst.log" \
+LASTDB_ALIGNMENT_SEED=RY128 LASTAL_QUERY_BATCH_SIZE=1M LASTAL_SPLIT_MEMORY=8T \
+bash "$fixture_repo/src/sbst_fromDwl.sh" --trios "$resume_tsv" > "$tmp_dir/resume.log" 2>&1
+check "saved TSV resumes without invoking selection" \
+    sh -c 'test "$1" -eq 0 && test ! -e "$2"' sh "$?" "$tmp_dir/unexpected-selector.log"
+check "resume restores LAST options" cmp "$tmp_dir/options-sbst.log.env" "$tmp_dir/resume-sbst.log.env"
+check "resume restores LAST environment defaults over the current environment" \
+    cmp "$tmp_dir/options-sbst.log.defaults" "$tmp_dir/resume-sbst.log.defaults"
+check "resume restores date and cache path" \
+    sh -c 'grep -Fq 20260723 "$1" && grep -Fq -- "$2" "$1"' \
+    sh "$tmp_dir/resume-sbst.log" "$tmp_dir/options-out/trio_selection/train_cache"
+check "resume does not inherit idt-only" sh -c '! grep -q -- --idt-only "$1"' sh "$tmp_dir/resume-sbst.log"
+
+# LAST overrides should still go through the existing output compatibility guard.
+PATH="$stub_bin:$PATH" SBST_ARGS_LOG="$tmp_dir/conflict-sbst.log" \
+bash "$fixture_repo/src/sbst_fromDwl.sh" --trios="$resume_tsv" --lastal-options=-H3 \
+    > "$tmp_dir/conflict.log" 2>&1
+check "conflicting settings preserve existing output and fail" \
+    sh -c 'test "$1" -ne 0 && test ! -s "$2" && grep -q "LAST settings differ" "$3"' \
+    sh "$?" "$tmp_dir/conflict-sbst.log" "$tmp_dir/conflict.log"
+
+PATH="$stub_bin:$PATH" SBST_ARGS_LOG="$tmp_dir/override-resume.log" \
+bash "$fixture_repo/src/sbst_fromDwl.sh" --trios="$resume_tsv" newdate \
+    --out-dir "$tmp_dir/new resume output" --thread 4 --lastal-options=-H3 \
+    > "$tmp_dir/override-resume-wrapper.log" 2>&1
+check "explicit settings override saved settings into a new output" test "$?" -eq 0
+check "date and thread overrides reach downstream" \
+    sh -c 'grep -q newdate "$1" && grep -q -- "--thread 4" "$1"' sh "$tmp_dir/override-resume.log"
+check "LAST override reaches downstream" grep -Fq '"lastal": "-H3"' "$tmp_dir/override-resume.log.env"
+
+# Minimal legacy TSVs do not need an accompanying config, but do need DATE.
+legacy="$tmp_dir/legacy.tsv"
+printf 'in2_acc\tnote\tout_acc\tin1_acc\nGCA_000000033.1\textra\tGCA_000000011.1\tGCA_000000022.1\nGCA_000000066.1\textra\tGCA_000000044.1\tGCA_000000055.1\n' > "$legacy"
+PATH="$stub_bin:$PATH" bash "$fixture_repo/src/sbst_fromDwl.sh" --trios "$legacy" \
+    > "$tmp_dir/legacy-missing-date.log" 2>&1
+check "legacy TSV requires an explicit date" test "$?" -ne 0
+PATH="$stub_bin:$PATH" SBST_ARGS_LOG="$tmp_dir/legacy-sbst.log" FAIL_ACCESSION=GCA_000000011.1 \
+bash "$fixture_repo/src/sbst_fromDwl.sh" --trios "$legacy" 20260723 \
+    --genome-dir "$tmp_dir/legacy-genomes" --out-dir "$tmp_dir/legacy-out" \
+    > "$tmp_dir/legacy.log" 2>&1
+check "one failure makes batch return failure" test "$?" -ne 0
+check "later trios still run and appear in the final summary" \
+    sh -c 'grep -q "FAILED GCA_000000011.1" "$1" && grep -q "OK GCA_000000044.1" "$1" && grep -q "2 trio(s); 1 failed" "$1"' sh "$tmp_dir/legacy.log"
+
+printf 'GCA_000000066.1\textra\tINVALID\tGCA_000000055.1\n' >> "$legacy"
+PATH="$stub_bin:$PATH" SBST_ARGS_LOG="$tmp_dir/invalid-tsv-sbst.log" \
+bash "$fixture_repo/src/sbst_fromDwl.sh" --trios "$legacy" 20260723 \
+    --out-dir "$tmp_dir/invalid-tsv-out" > "$tmp_dir/invalid-tsv.log" 2>&1
+check "all TSV rows are validated before creating outputs or launching a trio" \
+    sh -c 'test "$1" -ne 0 && test ! -e "$2" && test ! -s "$3" && grep -q "line 4" "$4"' \
+    sh "$?" "$tmp_dir/invalid-tsv-out" "$tmp_dir/invalid-tsv-sbst.log" "$tmp_dir/invalid-tsv.log"
+
+for conflict in tree accessions config; do
+    case "$conflict" in
+        tree) args=(--trios "$resume_tsv" --tree "$tree_file") ;;
+        accessions) args=(--trios "$resume_tsv" date GCA_1.1 GCA_2.1 GCA_3.1) ;;
+        config) args=(--selection-config missing.json date GCA_1.1 GCA_2.1 GCA_3.1) ;;
+    esac
+    PATH="$stub_bin:$PATH" bash "$fixture_repo/src/sbst_fromDwl.sh" "${args[@]}" > "$tmp_dir/conflict-$conflict.log" 2>&1
+    check "reject incompatible modes: $conflict" test "$?" -ne 0
+done
+
+# An unsuccessful new selection invalidates the previous resume settings.
+PATH="$stub_bin:$PATH" SELECTOR_FAIL=1 R_ARGS_LOG="$tmp_dir/stale-r.log" \
+bash "$fixture_repo/src/sbst_fromDwl.sh" --tree "$tree_file" 20260723 \
+    --genome-dir "$tmp_dir/genomes" --out-dir "$default_out" > "$tmp_dir/stale.log" 2>&1
+check "failed selection removes stale resume settings" \
+    sh -c 'test "$1" -ne 0 && test ! -e "$2"' sh "$?" "$default_out/trio_selection/selection_run.json"
 
 if [ "$fail" -gt 0 ]; then
     echo

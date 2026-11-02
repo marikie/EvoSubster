@@ -4,6 +4,7 @@ LAST_OPTIONS_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/last_options.
 
 last_options_parse_cli() {
     LAST_REMAINING_ARGS=()
+    LAST_EXPLICIT_NAMES=()
     local name value json
     json="${EVOSUBSTER_LAST_OPTIONS:-}"
     [ -n "$json" ] || json='{}'
@@ -31,6 +32,7 @@ last_options_parse_cli() {
                 fi
                 name="${name#--}"
                 name="${name%-options}"
+                LAST_EXPLICIT_NAMES+=("$name")
                 json=$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); d[sys.argv[2]]=sys.argv[3]; print(json.dumps(d))' "$json" "$name" "$value") || return 1
                 ;;
             --)
@@ -42,7 +44,9 @@ last_options_parse_cli() {
     done
     export EVOSUBSTER_LAST_OPTIONS="$json"
     # Validate before downloading genomes or starting tree selection.
-    python3 "$LAST_OPTIONS_HELPER" validate >/dev/null
+    if [ "${LAST_OPTIONS_DEFER_VALIDATE:-0}" != 1 ]; then
+        python3 "$LAST_OPTIONS_HELPER" validate >/dev/null
+    fi
 }
 
 last_options_load() {

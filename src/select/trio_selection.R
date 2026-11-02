@@ -79,6 +79,13 @@ load_runtime_dependencies <- function() {
 
 main <- function(argv = commandArgs(trailingOnly = TRUE), script_path = NULL) {
   opts <- parse_args(argv)
+  # A failed or dry-run selection must not leave a previous resume record active.
+  resume_file <- file.path(opts$out_dir, "selection_run.json")
+  resume_link <- Sys.readlink(resume_file)
+  if ((file.exists(resume_file) || (!is.na(resume_link) && nzchar(resume_link))) &&
+      unlink(resume_file) != 0) {
+    stop("Could not remove previous selection settings: ", resume_file, call. = FALSE)
+  }
   if (is.null(script_path)) {
     file_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
     if (length(file_arg)) script_path <- sub("^--file=", "", file_arg[1])
@@ -138,6 +145,14 @@ main <- function(argv = commandArgs(trailingOnly = TRUE), script_path = NULL) {
     )
     log_stage("Current-run unused-species cleanup audit ->", cleanup_file)
   }
+  run("python3", c(shQuote(file.path(SRC_DIR, "lib", "selection_run.py")),
+                   "save", shQuote(resume_file),
+                   "--date", shQuote(opts$date),
+                   "--genome-dir", shQuote(opts$genome_dir),
+                   "--out-dir", shQuote(dirname(normalizePath(opts$out_dir))),
+                   "--train-cache-dir", shQuote(resolve_train_cache_dir(opts)),
+                   "--threads", as.character(opts$threads)))
+  invisible(NULL)
 }
 
 if (sys.nframe() == 0) {

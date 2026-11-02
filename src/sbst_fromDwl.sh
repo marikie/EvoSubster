@@ -4,8 +4,9 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$ROOT_DIR/src/lib/last_options.sh"
-last_options_parse_cli "$@" || exit 1
+LAST_OPTIONS_DEFER_VALIDATE=1 last_options_parse_cli "$@" || exit 1
 set -- "${LAST_REMAINING_ARGS[@]}"
+SELECTION_HELPER="$SCRIPT_DIR/lib/selection_run.py"
 
 
 PATH="$SCRIPT_DIR:$PATH"
@@ -60,9 +61,11 @@ OUT_DIR_OVERRIDE=""
 TRAIN_CACHE_DIR_OVERRIDE=""
 BASE_GENOMES_OVERRIDE=""
 IDT_ONLY=0
-THREAD_NUM_OVERRIDE=8
+THREAD_NUM_OVERRIDE=""
 FORCE_DOWNLOAD=0
 TREE_FILE=""
+TRIOS_FILE=""
+SELECTION_CONFIG=""
 IDT_THRESHOLD=""
 INGROUP_IDT_THRESHOLD=""
 OUTGROUP_IDT_THRESHOLD=""
@@ -82,6 +85,7 @@ while [[ $# -gt 0 ]]; do
 Usage:
   sbst_fromDwl.sh <DATE> <ACC1> <ACC2> <ACC3> [OPTIONS]   # single trio
   sbst_fromDwl.sh --tree <FILE.nwk> [DATE] [OPTIONS]       # select trios from a tree
+  sbst_fromDwl.sh --trios <FILE.tsv> [DATE] [OPTIONS]      # run previously selected trios
 
 Download genomes from NCBI and run the substitution spectrum pipeline.
 
@@ -123,6 +127,12 @@ Tree mode:
                        Off by default; external QC is otherwise audit-only.
 
 Options:
+  --trios FILE.tsv        Run out_acc/in1_acc/in2_acc rows through graph generation;
+                         additional columns are ignored and selection is not repeated.
+                         Reads selection_run.json beside the TSV automatically.
+                         DATE is required when no saved settings are available.
+  --selection-config FILE  Use this saved selection configuration with --trios.
+                         Explicit CLI options override saved settings, then defaults.
   --genome-dir PATH       Genome storage directory (default: ./genomes)
   --out-dir PATH          Output directory (default: ./results)
   --train-cache-dir PATH  Directory containing cached last-train files
@@ -145,6 +155,25 @@ EOF
             IDT_ONLY=1
             shift
             continue
+            ;;
+        --trios|--selection-config|--trios=*|--selection-config=*)
+            _key="${1%%=*}"
+            if [[ "$1" == *=* ]]; then
+                _value="${1#*=}"
+                shift
+            else
+                _value="${2:-}"
+                shift
+                [ "$#" -gt 0 ] && shift
+            fi
+            if [[ -z "$_value" || "$_value" == --* ]]; then
+                echo "Error: $_key requires a file path." >&2
+                exit 1
+            fi
+            case "$_key" in
+                --trios) TRIOS_FILE="$_value" ;;
+                --selection-config) SELECTION_CONFIG="$_value" ;;
+            esac
             ;;
         --force)
             FORCE_DOWNLOAD=1
@@ -398,7 +427,6 @@ sys.exit(0 if valid else 1)
     esac
 done
 set -- "${POSITIONAL_ARGS[@]}"
-export THREAD_NUM="$THREAD_NUM_OVERRIDE"
 
 # Parse positional arguments
 DATE="$1"
@@ -406,10 +434,48 @@ org1ID="$2"
 org2ID="$3"
 org3ID="$4"
 
+if [ -n "$TRIOS_FILE" ]; then
+    if [ -n "$TREE_FILE" ] || [ "${#POSITIONAL_ARGS[@]}" -gt 1 ]; then
+        echo "Error: --trios cannot be combined with --tree or positional accessions." >&2
+        exit 1
+    fi
+    # Validate every row before any downloads or output directories are created.
+    trio_rows=$(python3 "$SELECTION_HELPER" trios "$TRIOS_FILE") || exit 1
+    resolve_args=(resolve --trios "$TRIOS_FILE" --config "$SELECTION_CONFIG"
+        --date "$DATE" --genome-dir "$BASE_GENOMES_OVERRIDE"
+        --out-dir "$OUT_DIR_OVERRIDE" --train-cache-dir "$TRAIN_CACHE_DIR_OVERRIDE"
+        --threads "$THREAD_NUM_OVERRIDE")
+    for name in "${LAST_EXPLICIT_NAMES[@]}"; do
+        resolve_args+=(--explicit-last "$name")
+    done
+    resolution_file=$(mktemp) || exit 1
+    if ! python3 "$SELECTION_HELPER" "${resolve_args[@]}" > "$resolution_file"; then
+        rm -f "$resolution_file"
+        exit 1
+    fi
+    mapfile -d '' -t resolved < "$resolution_file"
+    rm -f "$resolution_file"
+    DATE="${resolved[0]}"
+    BASE_GENOMES_OVERRIDE="${resolved[1]}"
+    OUT_DIR_OVERRIDE="${resolved[2]}"
+    TRAIN_CACHE_DIR_OVERRIDE="${resolved[3]}"
+    THREAD_NUM_OVERRIDE="${resolved[4]}"
+    export EVOSUBSTER_LAST_OPTIONS="${resolved[5]}"
+    export LASTDB_ALIGNMENT_SEED="${resolved[6]}"
+    export LASTAL_QUERY_BATCH_SIZE="${resolved[7]}"
+    export LASTAL_SPLIT_MEMORY="${resolved[8]}"
+    echo "[trios mode] settings: ${resolved[9]}"
+elif [ -n "$SELECTION_CONFIG" ]; then
+    echo "Error: --selection-config requires --trios." >&2
+    exit 1
+fi
+THREAD_NUM_OVERRIDE="${THREAD_NUM_OVERRIDE:-8}"
+export THREAD_NUM="$THREAD_NUM_OVERRIDE"
+python3 "$LAST_OPTIONS_HELPER" validate >/dev/null || exit 1
 
 # Check minimally required arguments (DATE and 3 accessions).
 # Tree mode picks its own trios, so the positional accessions are optional there.
-if [ -z "$TREE_FILE" ] && { [ -z "$DATE" ] || [ -z "$org1ID" ] || [ -z "$org2ID" ] || [ -z "$org3ID" ]; }; then
+if [ -z "$TREE_FILE" ] && [ -z "$TRIOS_FILE" ] && { [ -z "$DATE" ] || [ -z "$org1ID" ] || [ -z "$org2ID" ] || [ -z "$org3ID" ]; }; then
     echo "$(get_config '.errors.arg_count' | sed "s/{arg_num}/$(get_config '.settings.required_args')/g")" >&2
    echo "$(get_config '.errors.usage')" >&2
    exit 1
@@ -464,6 +530,8 @@ if [ -n "$TREE_FILE" ]; then
     DATE="${DATE:-$(date +%Y%m%d)}"
 
     rt_out_dir="$out_dir_base/trio_selection"
+    # Invalidate the resume record before starting another selection attempt.
+    rm -f "$rt_out_dir/selection_run.json" || exit 1
     last_options_guard "$rt_out_dir" selection || exit 1
     r_args=(--tree "$TREE_FILE"
             --genome-dir "$base_genomes"
@@ -490,56 +558,53 @@ if [ -n "$TREE_FILE" ]; then
     fi
 
     selected_file="$rt_out_dir/selected_trios.tsv"
-    _hdr=""
-    if [ -s "$selected_file" ]; then
-        IFS= read -r _hdr < "$selected_file" || true
-    fi
-    if [ -z "$_hdr" ]; then
-        echo "[tree mode] trio_selection.R selected no trios; nothing to run."
+    python3 "$SELECTION_HELPER" save "$rt_out_dir/selection_run.json" \
+        --date "$DATE" --genome-dir "$base_genomes" --out-dir "$out_dir_base" \
+        --train-cache-dir "${TRAIN_CACHE_DIR_OVERRIDE:-$rt_out_dir/train_cache}" \
+        --threads "$THREAD_NUM_OVERRIDE" || exit 1
+    trio_rows=$(python3 "$SELECTION_HELPER" trios "$selected_file") || exit 1
+    TRAIN_CACHE_DIR_OVERRIDE="${TRAIN_CACHE_DIR_OVERRIDE:-$rt_out_dir/train_cache}"
+fi
+
+# Both entry points use the same downstream runner; only tree mode selects.
+if [ -n "$TREE_FILE" ] || [ -n "$TRIOS_FILE" ]; then
+    mode="trios mode"
+    [ -n "$TREE_FILE" ] && mode="tree mode"
+    echo "[$mode] DATE=$DATE genome-dir=$base_genomes out-dir=$out_dir_base"
+    echo "[$mode] train-cache-dir=${TRAIN_CACHE_DIR_OVERRIDE:-(none)} thread=$THREAD_NUM_OVERRIDE"
+    if [ -z "$trio_rows" ]; then
+        echo "[$mode] selected no trios; nothing to run."
         exit 0
     fi
-
-    # Locate the accession columns by name so the table layout can change freely.
-    col_index() {
-        local target="$1" n=0 field
-        local IFS=$'\t'
-        for field in $_hdr; do
-            n=$((n + 1))
-            if [ "$field" = "$target" ]; then echo "$n"; return 0; fi
-        done
-        return 1
-    }
-    out_col=$(col_index out_acc) && in1_col=$(col_index in1_acc) && in2_col=$(col_index in2_acc) || {
-        echo "Error: $selected_file is missing an out_acc/in1_acc/in2_acc column." >&2
-        exit 1
-    }
 
     # Options forwarded to every single-trio run.
     pass_opts=(--genome-dir "$base_genomes" --out-dir "$out_dir_base" --thread "$THREAD_NUM_OVERRIDE")
     if [ -n "$TRAIN_CACHE_DIR_OVERRIDE" ]; then
         pass_opts+=(--train-cache-dir "$TRAIN_CACHE_DIR_OVERRIDE")
-    else
-        pass_opts+=(--train-cache-dir "$rt_out_dir/train_cache")
     fi
     [ "$IDT_ONLY" -eq 1 ] && pass_opts+=(--idt-only)
     [ "$FORCE_DOWNLOAD" -eq 1 ] && pass_opts+=(--force)
 
     trio_count=0
     trio_failures=0
+    trio_results=()
     while IFS=$'\t' read -r out_acc in1_acc in2_acc; do
         if [ -z "$out_acc" ] || [ -z "$in1_acc" ] || [ -z "$in2_acc" ]; then
             continue
         fi
         trio_count=$((trio_count + 1))
-        echo "=== [tree mode] trio $trio_count: outgroup=$out_acc ingroup=$in1_acc,$in2_acc ==="
+        echo "=== [$mode] trio $trio_count: outgroup=$out_acc ingroup=$in1_acc,$in2_acc ==="
         if ! bash "$SCRIPT_DIR/sbst_fromDwl.sh" "$DATE" "$out_acc" "$in1_acc" "$in2_acc" "${pass_opts[@]}"; then
             echo "Warning: pipeline failed for trio $out_acc/$in1_acc/$in2_acc; continuing." >&2
             trio_failures=$((trio_failures + 1))
+            trio_results+=("FAILED $out_acc $in1_acc $in2_acc")
+        else
+            trio_results+=("OK $out_acc $in1_acc $in2_acc")
         fi
-    done < <(awk -F'\t' -v o="$out_col" -v a="$in1_col" -v b="$in2_col" \
-                 'NR > 1 { print $o "\t" $a "\t" $b }' "$selected_file")
+    done <<< "$trio_rows"
 
-    echo "[tree mode] ran pipeline on $trio_count trio(s); $trio_failures failed."
+    printf '%s\n' "${trio_results[@]}"
+    echo "[$mode] ran pipeline on $trio_count trio(s); $trio_failures failed."
     [ "$trio_failures" -gt 0 ] && exit 1
     exit 0
 fi
