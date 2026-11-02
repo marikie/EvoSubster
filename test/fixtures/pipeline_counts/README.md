@@ -1,4 +1,10 @@
-# Historical pipeline counting baseline
+# Pipeline counting baselines
+
+The active frozen regression baseline is [20261031101732](20261031101732/README.md).
+Codex validates its input manifest and compares only that directory's eight TSVs.
+The older `20260420` files below remain unchanged for historical reference.
+
+## Historical 20260420 baseline
 
 These eight TSVs were copied byte-for-byte from
 `test_results/Oikdio1_Oikalb2_Oikvan3/20260420/statistics/` in the source checkout.
@@ -10,8 +16,8 @@ Both whole-genome and non-CDS counts are required for single-base and dinucleoti
 substitutions. The original run used the outgroup's `genomic.gff` annotation.
 Original tool versions and input checksums were not recorded with this baseline.
 
-`scripts/codex_checks.py` compares all eight files exactly, mapping only the run
-date in filenames. It never rewrites these expectations to accommodate a failure.
+The historical files are no longer the active automatic regression expectations.
+The checker never rewrites any expectations to accommodate a failure.
 Genomes, alignments, and training caches are not stored here.
 
 Original SHA-256 checksums:

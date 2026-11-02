@@ -5,10 +5,12 @@ import argparse
 from contextlib import contextmanager
 import difflib
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -21,8 +23,107 @@ UNIT_TESTS = (
     "test_single_sbst_2TSVs", "test_single_sbst_2TSVs_errprob", "test_subRatio"
 )
 ACCESSIONS = ("GCA_907165135.1", "GCA_004367875.1", "GCA_004367855.1")
-COUNT_BASELINE_DATE = "20260420"
+COUNT_BASELINE_DATE = "20261031101732"
 COUNT_TRIO = "Oikdio1_Oikalb2_Oikvan3"
+
+
+def baseline_dir(root):
+    return root / "test" / "fixtures" / "pipeline_counts" / COUNT_BASELINE_DATE
+
+
+def verify_pipeline_inputs(root, log):
+    """Verify frozen input bytes and FASTA record order before any pipeline work."""
+    files = []
+    baseline_files = []
+    with log.open("a") as output:
+        try:
+            manifest = json.loads((baseline_dir(root) / "manifest.json").read_text())
+            inputs = manifest["inputs"]
+            required = {(1, "fasta"), (1, "gff"), (2, "fasta"), (3, "fasta")}
+            if len(inputs) != 4 or {(i["slot"], i["kind"]) for i in inputs} != required:
+                raise ValueError("Manifest must identify three FASTAs and the outgroup GFF")
+            if manifest["baseline_date"] != COUNT_BASELINE_DATE:
+                raise ValueError("Manifest baseline date mismatch")
+            for item in inputs:
+                if item["accession"] != ACCESSIONS[item["slot"] - 1]:
+                    raise ValueError("Manifest accession mismatch")
+                relative = Path(item["path"])
+                if relative.is_absolute() or ".." in relative.parts:
+                    raise ValueError("Input paths must be repository-relative")
+                path = root / relative
+                path.resolve().relative_to(root.resolve())
+                record = dict(path=str(relative), slot=item["slot"], kind=item["kind"])
+                errors = []
+                try:
+                    if path.is_symlink():
+                        raise ValueError("Frozen input must be an independent regular file")
+                    digest = hashlib.sha256()
+                    with path.open("rb") as handle:
+                        for block in iter(lambda: handle.read(1024 * 1024), b""):
+                            digest.update(block)
+                    record["sha256"] = digest.hexdigest()
+                    if record["sha256"] != item["sha256"]:
+                        errors.append("SHA256 mismatch")
+                    if item["kind"] == "fasta":
+                        with path.open("rb") as handle:
+                            ids = [line[1:].split()[0].decode("utf-8")
+                                   for line in handle if line.startswith(b">")]
+                        record["fasta_record_count"] = len(ids)
+                        record["order_match"] = ids == item["fasta_ids"]
+                        if ids != item["fasta_ids"]:
+                            errors.append("FASTA record order mismatch")
+                            expected_ids = item["fasta_ids"]
+                            index = next((i for i, pair in enumerate(zip(ids, expected_ids))
+                                          if pair[0] != pair[1]), min(len(ids), len(expected_ids)))
+                            record["first_order_difference"] = dict(
+                                index=index,
+                                expected=expected_ids[index] if index < len(expected_ids) else None,
+                                actual=ids[index] if index < len(ids) else None)
+                except (OSError, ValueError, IndexError) as error:
+                    errors.append(str(error))
+                record.update(status="failed" if errors else "passed", errors=errors)
+                files.append(record)
+                output.write("Input verification: " + json.dumps(record) + "\n")
+            expected_tsvs = manifest["expected_tsvs"]
+            required_tsvs = {str(path) for path in counting_tsv_paths(COUNT_BASELINE_DATE)}
+            if len(expected_tsvs) != 8 or {i["path"] for i in expected_tsvs} != required_tsvs:
+                raise ValueError("Manifest must identify exactly the eight expected TSVs")
+            for item in expected_tsvs:
+                record = dict(path=item["path"])
+                try:
+                    record["sha256"] = hashlib.sha256(
+                        (baseline_dir(root) / item["path"]).read_bytes()).hexdigest()
+                    if record["sha256"] != item["sha256"]:
+                        raise ValueError("Expected TSV SHA256 mismatch")
+                    record["status"] = "passed"
+                except (OSError, ValueError) as error:
+                    record.update(status="failed", error=str(error))
+                baseline_files.append(record)
+                output.write("Baseline verification: " + json.dumps(record) + "\n")
+        except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
+            output.write("Input manifest verification FAILED: " + str(error) + "\n")
+            return dict(status="failed", error=str(error), files=files,
+                        baseline_files=baseline_files), {}
+    status = "passed" if all(i["status"] == "passed" for i in files + baseline_files) else "failed"
+    paths = {(i["slot"], i["kind"]): str((root / i["path"]).resolve()) for i in inputs}
+    return dict(status=status, files=files, baseline_files=baseline_files), paths
+
+
+def log_environment(log):
+    with log.open("a") as output:
+        output.write("Interpreter: {} ({})\nVIRTUAL_ENV: {}\n".format(
+            sys.executable, sys.version.replace("\n", " "), os.environ.get("VIRTUAL_ENV")))
+        for tool in ("lastdb", "lastal", "last-train", "Rscript"):
+            output.write("Tool {}: {}\n".format(tool, shutil.which(tool)))
+            if tool == "last-train":
+                # LAST 1648 has no last-train --version; lastdb/lastal report it.
+                continue
+            try:
+                result = subprocess.run([tool, "--version"], capture_output=True,
+                                        text=True, timeout=5)
+                output.write((result.stdout + result.stderr)[:2000] + "\n")
+            except (OSError, subprocess.TimeoutExpired) as error:
+                output.write(str(error) + "\n")
 
 
 def counting_tsv_paths(date):
@@ -36,7 +137,7 @@ def counting_tsv_paths(date):
 
 def compare_counting_tsvs(root, results_dir, date, log):
     """Compare bytes against the saved historical TSVs, without normalization."""
-    baseline = root / "test" / "fixtures" / "pipeline_counts"
+    baseline = baseline_dir(root)
     statistics = results_dir / COUNT_TRIO / date / "statistics"
     files = []
     with log.open("ab") as output:
@@ -151,7 +252,7 @@ def needs_pipeline(paths):
 
 def run_command(command, cwd, log, timeout):
     """Terminate the whole child process group on timeout, including LAST jobs."""
-    with log.open("w") as output:
+    with log.open("a") as output:
         output.write("Command: " + repr(command) + "\n")
         output.flush()
         try:
@@ -220,7 +321,7 @@ def pipeline_worker(root, lock_fd):
             with state_lock(root):
                 state = read_state(root)
                 generation = state["requested"]
-                for key in ("exit_code", "pipeline_exit_code", "counting_comparison",
+                for key in ("exit_code", "pipeline_exit_code", "counting_comparison", "input_verification",
                             "finished_at", "error"):
                     state.pop(key, None)
                 run_dir = Path(tempfile.mkdtemp(prefix="pipeline-", dir=str(state_dir(root))))
@@ -229,23 +330,33 @@ def pipeline_worker(root, lock_fd):
                              run_dir=str(run_dir), started_at=time.time())
                 write_state(root, state)
             date = time.strftime("%Y%m%d%H%M%S")
-            command = ["rtk", "proxy", "bash", str(root / "src" / "sbst_fromDwl.sh"),
-                       date, *ACCESSIONS,
-                       "--genome-dir", str(run_dir / "genomes"),
-                       "--out-dir", str(run_dir / "results"),
-                       "--train-cache-dir", str(run_dir / "train-cache")]
-            code = run_command(command, root, log, 600)
-            pipeline_code = code
+            verification, inputs = verify_pipeline_inputs(root, log)
+            log_environment(log)
+            pipeline_code = None
+            if verification["status"] == "passed":
+                command = ["rtk", "proxy", "bash", str(root / "src" / "sbst.sh"),
+                           date, inputs[(1, "fasta")], inputs[(2, "fasta")], inputs[(3, "fasta")],
+                           inputs[(1, "gff")],
+                           "--org2-gff", "NO_GFF_FILE", "--org3-gff", "NO_GFF_FILE",
+                           "--accession-ids", *ACCESSIONS, "--thread", "8",
+                           "--out-dir", str(run_dir / "results"),
+                           "--train-cache-dir", str(run_dir / "train-cache"),
+                           "--lastdb-options", "-uRY4"]
+                pipeline_code = run_command(command, root, log, 600)
+            code = pipeline_code if pipeline_code is not None else 1
             if code == 0:
                 comparison = compare_counting_tsvs(root, run_dir / "results", date, log)
                 if comparison["status"] != "passed":
                     code = 1
             else:
-                comparison = dict(status="skipped", reason="Pipeline did not exit successfully")
+                comparison = dict(status="skipped", reason=(
+                    "Input verification failed; pipeline was not launched" if pipeline_code is None
+                    else "Pipeline did not exit successfully"))
                 with log.open("a") as output:
                     output.write("Counting TSV comparison SKIPPED: pipeline exit {}\n".format(code))
             result = dict(generation=generation, exit_code=code,
                           pipeline_exit_code=pipeline_code, counting_comparison=comparison,
+                          input_verification=verification,
                           log=str(log),
                           status="passed" if code == 0 else "failed", finished_at=time.time())
             with log.open("a") as output:

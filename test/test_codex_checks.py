@@ -1,3 +1,4 @@
+import hashlib
 import importlib.util
 import json
 import os
@@ -17,6 +18,21 @@ checks = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(checks)
 
 
+def create_test_inputs(root):
+    manifest_path = root / "test/fixtures/pipeline_counts/20261031101732/manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    for item in manifest["inputs"]:
+        path = root / item["path"]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        content = b">first\nACGT\n>second\nTTAA\n" if item["kind"] == "fasta" else b"first\ttest\tCDS\t1\t2\t.\t+\t0\tID=x\n"
+        path.write_bytes(content)
+        item["sha256"] = hashlib.sha256(content).hexdigest()
+        if item["kind"] == "fasta":
+            item["fasta_ids"] = ["first", "second"]
+    manifest_path.write_text(json.dumps(manifest))
+    return manifest
+
+
 class CodexChecksTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="codex checks ")
@@ -26,6 +42,7 @@ class CodexChecksTests(unittest.TestCase):
         (self.root / "test").mkdir()
         shutil.copytree(REPO / "test/fixtures/pipeline_counts",
                         self.root / "test/fixtures/pipeline_counts")
+        self.manifest = create_test_inputs(self.root)
 
     def event(self, patch_text):
         return {"hook_event_name": "PostToolUse", "tool_name": "apply_patch",
@@ -116,19 +133,19 @@ class CodexChecksTests(unittest.TestCase):
 
     def test_background_worker_coalesces_and_preserves_existing_genomes(self):
         existing = self.root / "test_genomes"
-        existing.mkdir()
+        existing.mkdir(exist_ok=True)
         (existing / "keep").write_text("existing data")
         # A real child process exercises inherited flock descriptors through RTK.
-        (self.root / "src/sbst_fromDwl.sh").write_text(
+        (self.root / "src/sbst.sh").write_text(
             "#!/bin/bash\npython3 - \"$@\" <<'PY'\n"
             "from pathlib import Path\nimport time\n"
             "import shutil\nimport sys\n"
             "date = sys.argv[1]\n"
             "results = Path(sys.argv[sys.argv.index('--out-dir') + 1])\n"
             "statistics = results / 'Oikdio1_Oikalb2_Oikvan3' / date / 'statistics'\n"
-            "shutil.copytree('test/fixtures/pipeline_counts', statistics)\n"
+            "shutil.copytree('test/fixtures/pipeline_counts/20261031101732', statistics)\n"
             "for path in statistics.glob('*/*/*.tsv'):\n"
-            "    path.rename(path.with_name(path.name.replace('20260420', date)))\n"
+            "    path.rename(path.with_name(path.name.replace('20261031101732', date)))\n"
             "p = Path('runs')\nn = int(p.read_text()) + 1 if p.exists() else 1\n"
             "p.write_text(str(n))\n"
             "if n == 1:\n"
@@ -152,13 +169,15 @@ class CodexChecksTests(unittest.TestCase):
         self.assertEqual(len(logs), 2)
         for log in logs:
             self.assertIn("EXIT CODE: 0", log.read_text())
-            self.assertIn(str(log.parent / "genomes"), log.read_text())
+            self.assertIn(str(log.parent / "results"), log.read_text())
+            self.assertIn(str(log.parent / "train-cache"), log.read_text())
+            self.assertIn(str(existing / "regression-20261031"), log.read_text())
             self.assertIn("Counting TSVs: 8/8 match", log.read_text())
             result = json.loads((log.parent / "result.json").read_text())
             self.assertEqual(result["counting_comparison"]["status"], "passed")
 
     def test_worker_rejects_successful_pipeline_without_tsvs(self):
-        (self.root / "src/sbst_fromDwl.sh").write_text("#!/bin/bash\nexit 0\n")
+        (self.root / "src/sbst.sh").write_text("#!/bin/bash\nexit 0\n")
         checks.enqueue_pipeline(self.root)
         self.wait_for(lambda: checks.read_state(self.root).get("status") == "failed")
         state = checks.read_state(self.root)
@@ -166,6 +185,93 @@ class CodexChecksTests(unittest.TestCase):
         self.assertEqual(state["exit_code"], 1)
         self.assertEqual(state["counting_comparison"]["matched_count"], 0)
         self.assertEqual(len(state["counting_comparison"]["files"]), 8)
+
+    def test_environment_logging_avoids_unsupported_last_train_version(self):
+        log = self.root / "environment.log"
+        with patch.object(checks.shutil, "which", return_value="/tools/executable"), \
+                patch.object(checks.subprocess, "run") as run:
+            run.return_value.stdout = "version information\n"
+            run.return_value.stderr = ""
+            checks.log_environment(log)
+        self.assertEqual([call.args[0] for call in run.call_args_list], [
+            ["lastdb", "--version"], ["lastal", "--version"], ["Rscript", "--version"]])
+        self.assertIn("Tool last-train: /tools/executable", log.read_text())
+
+    def test_fixed_inputs_are_verified_before_direct_pipeline_launch(self):
+        checks.write_state(self.root, dict(requested=1))
+        lock_fd = os.open(checks.state_dir(self.root) / "worker.lock",
+                          os.O_CREAT | os.O_WRONLY, 0o600)
+        with patch.object(checks, "run_command", return_value=7) as run:
+            checks.pipeline_worker(self.root, lock_fd)
+        command = run.call_args.args[0]
+        self.assertEqual(command[3], str(self.root / "src/sbst.sh"))
+        self.assertNotIn("--genome-dir", command)
+        fastas = [str(self.root / item["path"]) for item in self.manifest["inputs"] if item["kind"] == "fasta"]
+        self.assertEqual(command[5:8], fastas)
+        self.assertEqual(command[8], str(self.root / self.manifest["inputs"][1]["path"]))
+        for option, value in (("--org2-gff", "NO_GFF_FILE"), ("--org3-gff", "NO_GFF_FILE"),
+                              ("--thread", "8"), ("--lastdb-options", "-uRY4")):
+            self.assertEqual(command[command.index(option) + 1], value)
+        index = command.index("--accession-ids")
+        self.assertEqual(command[index + 1:index + 4], list(checks.ACCESSIONS))
+        state = checks.read_state(self.root)
+        self.assertEqual(state["input_verification"]["status"], "passed")
+        self.assertIn("Interpreter:", Path(state["log"]).read_text())
+
+    def test_invalid_fixed_inputs_prevent_pipeline_launch_and_record_failure(self):
+        for case in ("missing", "nucleotide", "gff", "record_order", "baseline"):
+            with self.subTest(case=case):
+                self.manifest = create_test_inputs(self.root)
+                entry = self.manifest["inputs"][1 if case == "gff" else 0]
+                path = self.root / entry["path"]
+                if case == "baseline":
+                    entry = self.manifest["expected_tsvs"][0]
+                    path = checks.baseline_dir(self.root) / entry["path"]
+                    path.write_bytes(path.read_bytes() + b"\n")
+                elif case == "missing":
+                    path.unlink()
+                elif case == "record_order":
+                    path.write_bytes(b">second\nTTAA\n>first\nACGT\n")
+                elif case == "gff":
+                    path.write_bytes(path.read_bytes().replace(b"CDS", b"cds"))
+                else:
+                    path.write_bytes(path.read_bytes().replace(b"ACGT", b"ACGA"))
+                checks.write_state(self.root, dict(requested=1))
+                lock_fd = os.open(checks.state_dir(self.root) / "worker.lock",
+                                  os.O_CREAT | os.O_WRONLY, 0o600)
+                with patch.object(checks, "run_command", return_value=7) as run:
+                    checks.pipeline_worker(self.root, lock_fd)
+                run.assert_not_called()
+                state = checks.read_state(self.root)
+                self.assertEqual(state["status"], "failed")
+                self.assertEqual(state["input_verification"]["status"], "failed")
+                self.assertIsNone(state["pipeline_exit_code"])
+                recorded = json.loads((Path(state["run_dir"]) / "result.json").read_text())
+                self.assertEqual(recorded["input_verification"], state["input_verification"])
+                log = Path(state["log"]).read_text()
+                self.assertIn(entry["path"], log)
+                if case == "record_order":
+                    self.assertIn("FASTA record order mismatch", log)
+                    self.assertEqual(state["input_verification"]["files"][0]["first_order_difference"],
+                                     dict(index=0, expected="first", actual="second"))
+                elif case == "baseline":
+                    self.assertIn("Expected TSV SHA256 mismatch", log)
+                self.assertNotIn('"fasta_ids"', log)
+
+    def test_worker_always_passes_ry4_lastdb_override(self):
+        checks.write_state(self.root, dict(requested=1))
+        lock_fd = os.open(checks.state_dir(self.root) / "worker.lock",
+                          os.O_CREAT | os.O_WRONLY, 0o600)
+
+        with patch.object(checks, "run_command", return_value=7) as run:
+            checks.pipeline_worker(self.root, lock_fd)
+
+        run.assert_called_once()
+        command, cwd, log, limit = run.call_args.args
+        self.assertEqual(command.count("--lastdb-options"), 1)
+        self.assertEqual(command[command.index("--lastdb-options") + 1], "-uRY4")
+        self.assertEqual(cwd, self.root)
+        self.assertEqual(limit, 600)
 
     def test_worker_timeout_skips_comparison_and_preserves_exit_code(self):
         with checks.state_lock(self.root):
@@ -197,9 +303,9 @@ class CodexChecksTests(unittest.TestCase):
             date = command[4]
             results = Path(command[command.index("--out-dir") + 1])
             statistics = results / checks.COUNT_TRIO / date / "statistics"
-            shutil.copytree(self.root / "test/fixtures/pipeline_counts", statistics)
+            shutil.copytree(checks.baseline_dir(self.root), statistics)
             for path in statistics.glob("*/*/*.tsv"):
-                path.rename(path.with_name(path.name.replace("20260420", date)))
+                path.rename(path.with_name(path.name.replace(checks.COUNT_BASELINE_DATE, date)))
             actual = sorted(statistics.glob("*/*/*.tsv"))[0]
             actual.write_bytes(actual.read_bytes() + b"\n")
             log.write_text("EXIT CODE: 0\n")
@@ -218,7 +324,7 @@ class CodexChecksTests(unittest.TestCase):
         self.assertIn("PIPELINE CHECK: FAILED", Path(state["log"]).read_text())
 
     def test_worker_failure_recorded(self):
-        (self.root / "src/sbst_fromDwl.sh").write_text("#!/bin/bash\nexit 7\n")
+        (self.root / "src/sbst.sh").write_text("#!/bin/bash\nexit 7\n")
         checks.enqueue_pipeline(self.root)
         self.wait_for(lambda: checks.read_state(self.root).get("status") == "failed")
         self.assertEqual(checks.read_state(self.root)["exit_code"], 7)
@@ -282,15 +388,15 @@ class CountingComparisonTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="counting comparison ")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        self.baseline = self.root / "test/fixtures/pipeline_counts"
-        shutil.copytree(REPO / "test/fixtures/pipeline_counts", self.baseline)
+        self.baseline = checks.baseline_dir(self.root)
+        shutil.copytree(checks.baseline_dir(REPO), self.baseline)
         self.results = self.root / "results"
         self.date = "20990102030405"
         statistics = self.results / checks.COUNT_TRIO / self.date / "statistics"
         shutil.copytree(self.baseline, statistics)
         self.actuals = []
         for path in sorted(statistics.glob("*/*/*.tsv")):
-            actual = path.with_name(path.name.replace("20260420", self.date))
+            actual = path.with_name(path.name.replace(checks.COUNT_BASELINE_DATE, self.date))
             path.rename(actual)
             self.actuals.append(actual)
         self.log = self.root / "pipeline.log"
