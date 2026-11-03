@@ -27,7 +27,7 @@ mkdir -p "$fixture_repo/src/select" "$fixture_repo/src/lib" "$fixture_repo/confi
 cp "$ROOT_DIR/src/sbst_fromDwl.sh" "$fixture_repo/src/sbst_fromDwl.sh"
 cp "$ROOT_DIR/src/lib/train_cache.sh" "$fixture_repo/src/lib/train_cache.sh"
 cp "$ROOT_DIR/src/lib/last_options.sh" "$ROOT_DIR/src/lib/last_options.py" "$fixture_repo/src/lib/"
-cp "$ROOT_DIR/src/lib/selection_run.py" "$fixture_repo/src/lib/"
+cp "$ROOT_DIR/src/lib/selection_run.py" "$ROOT_DIR/src/lib/run_manifest.py" "$fixture_repo/src/lib/"
 cp "$ROOT_DIR/config/dwl_config.yaml" "$fixture_repo/config/dwl_config.yaml"
 
 cat > "$stub_bin/Rscript" <<'EOF'
@@ -96,6 +96,7 @@ if [[ "$resolved_acc" != GCA_000000022.* ]]; then
 fi
 printf '{"reports":[{"accession":"%s"}]}\n' "$resolved_acc" > "$summary"
 printf '{}\n' > "$taxonomy"
+python3 "$(dirname "$0")/lib/run_manifest.py" bundle-save "$org_dir" "$resolved_acc" "$fasta" || exit 1
 printf '%s|%s|%s|%s|%s|%s\n' \
     "$org_name" "$fasta" "$summary" "$org_name" "$org_name" "$taxonomy"
 EOF
@@ -104,6 +105,7 @@ cat > "$fixture_repo/src/sbst.sh" <<'EOF'
 #!/bin/bash
 printf '%s\n' "$*" >> "$SBST_ARGS_LOG"
 printf '%s\n' "$EVOSUBSTER_LAST_OPTIONS" > "$SBST_ARGS_LOG.env"
+cp "$EVOSUBSTER_METADATA_INPUT" "$SBST_ARGS_LOG.metadata-input"
 printf '%s\n' "$LASTDB_ALIGNMENT_SEED|$LASTAL_QUERY_BATCH_SIZE|$LASTAL_SPLIT_MEMORY" > "$SBST_ARGS_LOG.defaults"
 if [[ "${FAIL_ACCESSION:-}" != "" && "$*" == *"$FAIL_ACCESSION"* ]]; then exit 42; fi
 EOF
@@ -177,17 +179,14 @@ check "selected accessions are forwarded explicitly to sbst.sh" \
 check "available ingroup GFF and missing annotation sentinel are forwarded" \
     grep -Fq -- "--org2-gff NO_GFF_FILE --org3-gff $tmp_dir/genomes/Species_GCA_000000033_1/genomic.gff" \
     "$default_sbst_log"
-check "metadata records available GFF paths for all three slots" \
-    python3 - "$default_out" <<'PY'
-import json
-import pathlib
-import sys
-manifest_path = next(pathlib.Path(sys.argv[1]).rglob("metadata_manifest.json"))
-organisms = json.loads(manifest_path.read_text())["organisms"]
-assert organisms[0]["gff_path"].endswith("Species_GCA_000000011_1/genomic.gff")
-assert organisms[1]["gff_path"] is None
-assert organisms[2]["gff_path"].endswith("Species_GCA_000000033_1/genomic.gff")
-PY
+check "wrapper supplies metadata without prewriting an unverified run" \
+    python3 - "$default_out" "$default_sbst_log.metadata-input" <<'PYTEST'
+import json, pathlib, sys
+assert not list(pathlib.Path(sys.argv[1]).rglob("metadata_manifest.json"))
+organisms = json.loads(pathlib.Path(sys.argv[2]).read_text())
+assert len(organisms) == 3
+assert all(entry["short_name"] and entry["metadata_json"] for entry in organisms)
+PYTEST
 
 custom_out="$tmp_dir/custom-out"
 custom_cache="$tmp_dir/custom-cache"
@@ -400,9 +399,7 @@ check "resume does not inherit idt-only" sh -c '! grep -q -- --idt-only "$1"' sh
 PATH="$stub_bin:$PATH" SBST_ARGS_LOG="$tmp_dir/conflict-sbst.log" \
 bash "$fixture_repo/src/sbst_fromDwl.sh" --trios="$resume_tsv" --lastal-options=-H3 \
     > "$tmp_dir/conflict.log" 2>&1
-check "conflicting settings preserve existing output and fail" \
-    sh -c 'test "$1" -ne 0 && test ! -s "$2" && grep -q "LAST settings differ" "$3"' \
-    sh "$?" "$tmp_dir/conflict-sbst.log" "$tmp_dir/conflict.log"
+check "changed settings reach downstream keyed run allocation" test "$?" -eq 0
 
 PATH="$stub_bin:$PATH" SBST_ARGS_LOG="$tmp_dir/override-resume.log" \
 bash "$fixture_repo/src/sbst_fromDwl.sh" --trios="$resume_tsv" newdate \

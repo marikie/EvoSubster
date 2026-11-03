@@ -82,6 +82,7 @@ cat > "$stub_bin/jq" <<'EOF'
 #!/bin/bash
 query="$*"
 case "$query" in
+    *accession*) printf 'GCA_000000001.1\n' ;;
     *infraspecific_names*) printf '\n' ;;
     *organism_name*) printf 'Test species\n' ;;
     *tax_id*) printf '123\n' ;;
@@ -182,6 +183,8 @@ test "$(cat "$rate_limit_state_dir/summary")" -eq 2
 fallback_repo="$tmp_dir/fallback-repo"
 mkdir -p "$fallback_repo/src" "$tmp_dir/fallback-state"
 cp "$ROOT_DIR/src/dwl_organism.sh" "$fallback_repo/src/dwl_organism.sh"
+mkdir -p "$fallback_repo/src/lib"
+cp "$ROOT_DIR/src/lib/run_manifest.py" "$fallback_repo/src/lib/"
 fallback_result=$(
     PATH="$stub_bin:$PATH" FIXTURE_ZIP="$fixture_zip" CURL_STATE_DIR="$tmp_dir/fallback-state" \
         bash "$fallback_repo/src/dwl_organism.sh" GCA_000000001.1 \
@@ -210,7 +213,7 @@ done
 # Build a PATH containing the required tools but no yq, independent of the host.
 no_yq_bin="$tmp_dir/no-yq-bin"
 mkdir -p "$no_yq_bin" "$tmp_dir/no-yq-state"
-for tool in bash basename cat cp dirname find grep head ls mkdir mktemp mv rm rmdir unzip; do
+for tool in bash basename cat cp dirname find flock grep head ls mkdir mktemp mv python3 rm rmdir unzip; do
     ln -s "$(type -P "$tool")" "$no_yq_bin/$tool"
 done
 for tool in curl jq sleep; do

@@ -138,14 +138,30 @@ def counting_tsv_paths(date):
 def compare_counting_tsvs(root, results_dir, date, log):
     """Compare bytes against the saved historical TSVs, without normalization."""
     baseline = baseline_dir(root)
-    statistics = results_dir / COUNT_TRIO / date / "statistics"
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src/lib"))
+    import run_manifest as manifests
+    try:
+        found = manifests.discover(results_dir)
+    except (ValueError, OSError, KeyError) as error:
+        return dict(status="failed", error=str(error), files=[], expected_count=8, matched_count=0)
+    if len(found) != 1:
+        return dict(status="failed", error="Expected one completed v2 regression run")
+    run = found[0]
+    value = manifests.load(run)
+    channels = {}
+    for artifact in value['artifacts']:
+        if artifact['kind'] in ('single', 'single_ncds', 'dinuc', 'dinuc_ncds'):
+            channels[(artifact['slot'], artifact['kind'])] = run / artifact['path']
     files = []
     with log.open("ab") as output:
         output.write(b"\nCounting TSV comparison (byte-for-byte):\n")
         for expected_relative, actual_relative in zip(
                 counting_tsv_paths(COUNT_BASELINE_DATE), counting_tsv_paths(date)):
             expected = baseline / expected_relative
-            actual = statistics / actual_relative
+            slot = 'org2' if str(expected_relative).startswith('Oikalb2/') else 'org3'
+            kind = 'dinuc' if '/dinuc/' in str(expected_relative) else 'single'
+            if '_ncds' in str(expected_relative): kind += '_ncds'
+            actual = channels[(slot, kind)]
             item = dict(expected=str(expected), actual=str(actual))
             try:
                 expected_bytes = expected.read_bytes()
@@ -348,6 +364,15 @@ def pipeline_worker(root, lock_fd):
                 comparison = compare_counting_tsvs(root, run_dir / "results", date, log)
                 if comparison["status"] != "passed":
                     code = 1
+                else:
+                    try:
+                        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src/lib"))
+                        import run_manifest as manifests
+                        manifests.validated(manifests.discover(run_dir / "results")[0], complete=True)
+                    except (OSError, ValueError, KeyError) as error:
+                        code = 1
+                        with log.open("a") as output:
+                            output.write("Plot/completion validation FAILED: " + str(error) + "\n")
             else:
                 comparison = dict(status="skipped", reason=(
                     "Input verification failed; pipeline was not launched" if pipeline_code is None

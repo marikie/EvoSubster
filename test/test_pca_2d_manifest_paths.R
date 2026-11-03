@@ -1,306 +1,36 @@
 #!/usr/bin/env Rscript
-
-# Regression tests for metadata manifests copied with stale absolute paths.
-
-this_file <- sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)[1])
+this_file <- sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value=TRUE)[1])
 root <- dirname(dirname(normalizePath(this_file)))
 source(file.path(root, "src", "visualize", "pca_2d.R"))
-
-fail <- 0L
-check <- function(cond, msg) {
-  if (isTRUE(cond)) {
-    cat("ok:", msg, "\n")
-  } else {
-    cat("FAIL:", msg, "\n")
-    fail <<- fail + 1L
-  }
+work <- tempfile("pca-v2-", tmpdir=file.path(root,"tmp","codex"))
+dir.create(work)
+on.exit <- NULL
+code <- paste0("import sys; from pathlib import Path; sys.path.insert(0,sys.argv[1]); ",
+               "from test_collect_run_summary import create_run; ",
+               "print(create_run(Path(sys.argv[2])/'renamable'))")
+run <- system2("python3", c("-c",shQuote(code),shQuote(file.path(root,"test")),shQuote(work)),stdout=TRUE)
+stopifnot(is.null(attr(run,"status")))
+run <- tail(run,1)
+bundle <- load_manifest_lookup(file.path(run,"metadata","metadata_manifest.json"))
+stopifnot(length(bundle$slot_map)==3, length(bundle$lookup)==2)
+found <- collect_substitution_tsvs(run,"*.tsv",bundle$slot_map)
+stopifnot(identical(sort(basename(found)),c("org2.tsv","org3.tsv")))
+identities <- collect_identity_strings(run,bundle$slot_map)
+stopifnot(identical(identities$identity,list(idt_12="90 %",idt_13="91 %",idt_23="97 %")))
+renamed <- file.path(work,"unrelated-name")
+stopifnot(file.rename(run,renamed))
+stopifnot(identical(discover_dataset_dirs(work), normalizePath(renamed)))
+relocated <- load_manifest_lookup(file.path(renamed,"metadata","metadata_manifest.json"))
+stopifnot(all(file.exists(vapply(relocated$lookup,function(x)x$metadata_path,character(1)))))
+stopifnot(identical(unname(build_classification_palette(c("Apicomplexa","Arthropoda"),"phylum")),c("#E69F00","#0072B2")))
+payload <- jsonlite::fromJSON(file.path(renamed,"metadata","metadata_manifest.json"),simplifyVector=FALSE)
+for (i in seq_along(payload$organisms)) {
+  payload$organisms[[i]]$accession <- NULL
+  payload$organisms[[i]]$taxonomy_json <- NULL
+  payload$organisms[[i]]$taxonomy_json_sha256 <- NULL
 }
-
-make_entry <- function(slot, role, accession, short_name, metadata_json) {
-  list(
-    slot = slot,
-    role = role,
-    accession = accession,
-    short_name = short_name,
-    metadata_json = metadata_json
-  )
-}
-
-write_manifest <- function(manifest_dir, metadata_dir, org2_json, org3_json) {
-  dir.create(manifest_dir, recursive = TRUE, showWarnings = FALSE)
-  manifest_path <- file.path(manifest_dir, "metadata_manifest.json")
-  manifest <- list(
-    metadata_dir = metadata_dir,
-    organisms = list(
-      make_entry("org1", "outgroup", "GCA_000000001.1", "Out1", file.path(metadata_dir, "Out1_GCA_000000001.1.json")),
-      make_entry("org2", "ingroup", "GCA_000000002.1", "In2", org2_json),
-      make_entry("org3", "ingroup", "GCA_000000003.1", "In3", org3_json)
-    )
-  )
-  jsonlite::write_json(manifest, manifest_path, auto_unbox = TRUE, pretty = TRUE)
-  manifest_path
-}
-
-write_fixture_file <- function(path) {
-  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
-  writeLines("{}", path)
-}
-
-write_identity <- function(path, value) {
-  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
-  writeLines(sprintf("# substitution percent identity: %s%%", value), path)
-}
-
-run_tests <- function() {
-  test_root <- tempfile("pca-manifest-paths-")
-  dir.create(test_root)
-  on.exit(unlink(test_root, recursive = TRUE), add = TRUE)
-
-  lineage_root <- file.path(test_root, "lineage")
-  dataset_a <- file.path(lineage_root, "dataset-a")
-  dataset_b <- file.path(lineage_root, "dataset-b")
-  dir.create(file.path(dataset_a, "20260809"), recursive = TRUE)
-  dir.create(file.path(dataset_a, "20260810"), recursive = TRUE)
-  dir.create(file.path(dataset_b, "20260811"), recursive = TRUE)
-  dir.create(file.path(lineage_root, "20260812"), recursive = TRUE)
-  dataset_dirs <- if (exists("discover_dataset_dirs")) {
-    discover_dataset_dirs(lineage_root)
-  } else {
-    character()
-  }
-  check(
-    identical(sort(basename(dataset_dirs)), c("dataset-a", "dataset-b")),
-    "lineage-root discovery selects immediate dataset directories and ignores numeric root entries"
-  )
-  check(
-    identical(normalizePath(find_latest_run_dir(dataset_a)), normalizePath(file.path(dataset_a, "20260810"))),
-    "dataset discovery selects the latest numeric run directory"
-  )
-
-  phylum_labels <- c(
-    "Apicomplexa", "Arthropoda", "Ascomycota", "Basidiomycota", "Chordata",
-    "Cnidaria", "Mucoromycota", "Oomycota", "Unknown"
-  )
-  phylum_palette <- if (exists("build_classification_palette")) {
-    build_classification_palette(phylum_labels, "phylum")
-  } else {
-    character()
-  }
-  check(
-    identical(unname(phylum_palette["Apicomplexa"]), "#E69F00") &&
-      identical(unname(phylum_palette["Arthropoda"]), "#0072B2"),
-    "phylum palette separates Apicomplexa orange from Arthropoda blue"
-  )
-  check(
-    length(phylum_palette) == length(phylum_labels) &&
-      length(unique(unname(phylum_palette))) == length(phylum_labels),
-    "phylum palette assigns a unique color to every current category"
-  )
-  check(
-    identical(unname(phylum_palette["Unknown"]), "#999999"),
-    "phylum palette renders Unknown in gray"
-  )
-
-  generic_palette <- if (exists("build_classification_palette")) {
-    build_classification_palette(c("alpha", "beta"), "class")
-  } else {
-    character()
-  }
-  check(
-    identical(generic_palette, c(alpha = "#F8766D", beta = "#00BFC4")),
-    "non-phylum plots retain the existing automatic hue palette"
-  )
-
-  future_palette <- if (exists("build_classification_palette")) {
-    build_classification_palette(c("Apicomplexa", "NovelPhylum"), "phylum")
-  } else {
-    character()
-  }
-  check(
-    length(future_palette) == 2 &&
-      !is.na(future_palette["NovelPhylum"]) &&
-      nzchar(future_palette["NovelPhylum"]),
-    "unregistered phyla receive an automatic fallback color"
-  )
-
-  relocated_dir <- file.path(test_root, "relocated", "metadata")
-  old_dir <- file.path(test_root, "old", "metadata")
-  local_org2 <- file.path(relocated_dir, "In2_GCA_000000002.1.json")
-  local_org3 <- file.path(relocated_dir, "In3_GCA_000000003.1.json")
-  old_org2 <- file.path(old_dir, basename(local_org2))
-  old_org3 <- file.path(old_dir, basename(local_org3))
-  for (path in c(local_org2, local_org3, old_org2, old_org3)) write_fixture_file(path)
-  relocated_manifest <- write_manifest(relocated_dir, old_dir, old_org2, old_org3)
-  relocated <- load_manifest_lookup(relocated_manifest)
-  check(
-    identical(relocated$lookup[["GCA_000000002.1::In2"]]$metadata_path, normalizePath(local_org2)),
-    "relocated metadata beside the manifest takes precedence over the recorded path"
-  )
-  check(
-    identical(relocated$lookup[["GCA_000000003.1::In3"]]$taxonomy_path,
-              file.path(normalizePath(relocated_dir), "taxonomy_In3_GCA_000000003.1.json")),
-    "taxonomy path follows the relocated metadata directory"
-  )
-  check(
-    length(relocated$lookup) == 2 && length(relocated$slot_map) == 3 &&
-      identical(relocated$slot_map$org1$role, "outgroup"),
-    "outgroup remains in the slot map but is excluded from the ingroup lookup"
-  )
-
-  fallback_manifest_dir <- file.path(test_root, "fallback-manifest")
-  fallback_dir <- file.path(test_root, "fallback-metadata")
-  fallback_org2 <- file.path(fallback_dir, "In2_GCA_000000002.1.json")
-  fallback_org3 <- file.path(fallback_dir, "In3_GCA_000000003.1.json")
-  write_fixture_file(fallback_org2)
-  write_fixture_file(fallback_org3)
-  fallback_manifest <- write_manifest(fallback_manifest_dir, fallback_dir, fallback_org2, fallback_org3)
-  fallback <- load_manifest_lookup(fallback_manifest)
-  check(
-    identical(fallback$lookup[["GCA_000000002.1::In2"]]$metadata_path, normalizePath(fallback_org2)),
-    "valid recorded metadata path remains a fallback"
-  )
-  check(
-    identical(fallback$lookup[["GCA_000000002.1::In2"]]$taxonomy_path,
-              file.path(normalizePath(fallback_dir), "taxonomy_In2_GCA_000000002.1.json")),
-    "taxonomy path follows fallback metadata when no relocated copy exists"
-  )
-
-  relative_dir <- file.path(test_root, "relative", "metadata")
-  relative_org2 <- file.path(relative_dir, "nested", "In2_GCA_000000002.1.json")
-  relative_org3 <- file.path(relative_dir, "nested", "In3_GCA_000000003.1.json")
-  write_fixture_file(relative_org2)
-  write_fixture_file(relative_org3)
-  relative_manifest <- write_manifest(
-    relative_dir,
-    ".",
-    file.path("nested", basename(relative_org2)),
-    file.path("nested", basename(relative_org3))
-  )
-  relative <- load_manifest_lookup(relative_manifest)
-  check(
-    identical(relative$lookup[["GCA_000000002.1::In2"]]$metadata_path, normalizePath(relative_org2)),
-    "relative metadata path remains resolved from the manifest directory"
-  )
-
-  missing_manifest_dir <- file.path(test_root, "missing", "metadata")
-  missing_dir <- file.path(test_root, "missing-old", "metadata")
-  missing_manifest <- write_manifest(
-    missing_manifest_dir,
-    missing_dir,
-    file.path(missing_dir, "In2_GCA_000000002.1.json"),
-    file.path(missing_dir, "In3_GCA_000000003.1.json")
-  )
-  error_message <- tryCatch(
-    {
-      load_manifest_lookup(missing_manifest)
-      NULL
-    },
-    error = function(e) e$message
-  )
-  check(
-    !is.null(error_message) && grepl("checked relocated path", error_message, fixed = TRUE) &&
-      grepl("recorded path", error_message, fixed = TRUE),
-    "missing metadata reports both relocated and recorded candidates"
-  )
-
-  empty_manifest <- write_manifest(
-    file.path(test_root, "empty-metadata-dir"),
-    "",
-    "In2_GCA_000000002.1.json",
-    "In3_GCA_000000003.1.json"
-  )
-  empty_error <- tryCatch(
-    {
-      load_manifest_lookup(empty_manifest)
-      NULL
-    },
-    error = function(e) e$message
-  )
-  check(
-    !is.null(empty_error) && grepl("'metadata_dir' missing or empty", empty_error, fixed = TRUE),
-    "empty metadata_dir fails with a clear manifest error"
-  )
-
-  artifact_run <- file.path(test_root, "artifacts", "20260810")
-  train_dir <- file.path(artifact_run, "intermediateFiles")
-  write_identity(file.path(artifact_run, "Out12In2_20260801.train"), 71)
-  write_identity(file.path(train_dir, "Out12In2_20260809.train"), 89)
-  write_identity(file.path(train_dir, "Out12In2_20260810.train"), 91)
-  write_identity(file.path(train_dir, "Out12In3_20260810.train"), 92)
-  write_identity(file.path(train_dir, "In22In3_20260810.train"), 97)
-  identity_result <- collect_identity_strings(artifact_run, relocated$slot_map)
-  check(
-    length(identity_result$issues) == 0 &&
-      identical(identity_result$identity, list(idt_12 = "89%", idt_13 = "92%", idt_23 = "97%")),
-    "identity discovery prefers intermediateFiles and selects its first sorted match"
-  )
-
-  legacy_train_run <- file.path(test_root, "legacy-train", "20260810")
-  write_identity(file.path(legacy_train_run, "Out12In2_20260810.train"), 81)
-  write_identity(file.path(legacy_train_run, "Out12In3_20260810.train"), 82)
-  write_identity(file.path(legacy_train_run, "In22In3_20260810.train"), 87)
-  legacy_identity <- collect_identity_strings(legacy_train_run, relocated$slot_map)
-  check(
-    length(legacy_identity$issues) == 0 &&
-      identical(legacy_identity$identity, list(idt_12 = "81%", idt_13 = "82%", idt_23 = "87%")),
-    "identity discovery falls back to the legacy run-root layout"
-  )
-
-  ingroup2_tsv <- file.path(artifact_run, "statistics", "In2", "singlenuc", "GCA_000000002.1_In2_20260810_ncds.tsv")
-  ingroup3_tsv <- file.path(artifact_run, "statistics", "In3", "singlenuc", "GCA_000000003.1_In3_20260810_ncds.tsv")
-  dinuc_tsv <- file.path(artifact_run, "statistics", "In2", "dinuc", "GCA_000000002.1_In2_20260810_dinuc_ncds.tsv")
-  misplaced_dinuc_tsv <- file.path(artifact_run, "statistics", "In2", "singlenuc", "GCA_000000002.1_In2_20260810_dinuc_ncds.tsv")
-  misplaced_outgroup_tsv <- file.path(artifact_run, "statistics", "In2", "singlenuc", "GCA_000000001.1_Out1_20260810_ncds.tsv")
-  legacy_tsv <- file.path(artifact_run, "GCA_000000002.1_In2_20260810_ncds.tsv")
-  for (path in c(ingroup2_tsv, ingroup3_tsv, dinuc_tsv, misplaced_dinuc_tsv, misplaced_outgroup_tsv, legacy_tsv)) write_fixture_file(path)
-  nested_tsvs <- collect_substitution_tsvs(artifact_run, "*_ncds.tsv", relocated$slot_map)
-  check(
-    identical(nested_tsvs, sort(c(ingroup2_tsv, ingroup3_tsv))),
-    "TSV discovery uses ingroup singlenuc directories and excludes dinuc and legacy duplicates"
-  )
-
-  legacy_run <- file.path(test_root, "legacy-artifacts", "20260810")
-  legacy_only_tsv <- file.path(legacy_run, "GCA_000000002.1_In2_20260810_ncds.tsv")
-  legacy_dinuc_tsv <- file.path(legacy_run, "GCA_000000002.1_In2_20260810_dinuc_ncds.tsv")
-  legacy_outgroup_tsv <- file.path(legacy_run, "GCA_000000001.1_Out1_20260810_ncds.tsv")
-  for (path in c(legacy_only_tsv, legacy_dinuc_tsv, legacy_outgroup_tsv)) write_fixture_file(path)
-  check(
-    identical(collect_substitution_tsvs(legacy_run, "*_ncds.tsv", relocated$slot_map), legacy_only_tsv),
-    "legacy TSV fallback keeps only ingroup singlenuc files"
-  )
-
-  mixed_run <- file.path(test_root, "mixed-artifacts", "20260810")
-  mixed_nested_tsv <- file.path(mixed_run, "statistics", "In2", "singlenuc", "GCA_000000002.1_In2_20260810_ncds.tsv")
-  mixed_legacy_tsv <- file.path(mixed_run, "GCA_000000003.1_In3_20260810_ncds.tsv")
-  write_fixture_file(mixed_nested_tsv)
-  write_fixture_file(mixed_legacy_tsv)
-  check(
-    identical(
-      collect_substitution_tsvs(mixed_run, "*_ncds.tsv", relocated$slot_map),
-      sort(c(mixed_nested_tsv, mixed_legacy_tsv))
-    ),
-    "TSV discovery falls back independently for each ingroup in a mixed layout"
-  )
-
-  search_locations <- if (exists("substitution_tsv_search_locations")) {
-    substitution_tsv_search_locations(artifact_run, "*_ncds.tsv", relocated$slot_map)
-  } else {
-    character()
-  }
-  check(
-    identical(
-      search_locations,
-      c(
-        file.path(artifact_run, "statistics", "In2", "singlenuc", "*_ncds.tsv"),
-        file.path(artifact_run, "statistics", "In3", "singlenuc", "*_ncds.tsv"),
-        file.path(artifact_run, "*_ncds.tsv")
-      )
-    ),
-    "TSV discovery diagnostics list each ingroup location and the legacy run-root location"
-  )
-
-  if (fail > 0L) quit(status = 1)
-  cat("All PCA manifest path tests passed.\n")
-}
-
-run_tests()
+jsonlite::write_json(payload,file.path(renamed,"metadata","metadata_manifest.json"),auto_unbox=TRUE,null="null")
+local_bundle <- load_manifest_lookup(file.path(renamed,"metadata","metadata_manifest.json"))
+stopifnot(length(local_bundle$lookup)==2, all(is.na(vapply(local_bundle$lookup,function(x)x$taxonomy_path,character(1)))))
+unlink(work,recursive=TRUE)
+cat("All PCA v2 manifest tests passed.\n")

@@ -1,4 +1,14 @@
 #!/usr/bin/env Rscript
+.pca_source_file <- local({
+  sourced <- Filter(Negate(is.null), lapply(sys.frames(), function(x) x$ofile))
+  if (length(sourced)) tail(sourced, 1)[[1]] else sub("^--file=", "", grep("^--file=", commandArgs(), value=TRUE)[1])
+})
+.pca_manifest_helper <- normalizePath(file.path(dirname(.pca_source_file), "..", "lib", "run_manifest.py"))
+manifest_command <- function(command, path) {
+  output <- system2("python3", c(shQuote(.pca_manifest_helper), command, shQuote(path)), stdout=TRUE)
+  if (!is.null(attr(output, "status")) && attr(output, "status") != 0) stop("Manifest validation failed: ", path)
+  jsonlite::fromJSON(paste(output, collapse="\n"), simplifyVector=FALSE)
+}
 
 # Walk dataset directories, gather substitution TSV files from each latest run,
 # and run 2D PCA clustering (logratio + observed variants, normal + filtered).
@@ -42,7 +52,7 @@ parse_args <- function() {
   parser <- ArgumentParser(
     description = paste(
       "Traverse dataset directories, collect substitution TSV files from each",
-      "dataset's latest numeric run directory, and generate 2D PCA and k-means",
+      "dataset's latest completed manifest run, and generate 2D PCA and k-means",
       "clustering results. Both log-ratio and observed-frequency variants are produced."
     ),
     formatter_class = "argparse.RawDescriptionHelpFormatter",
@@ -50,7 +60,7 @@ parse_args <- function() {
       "Examples:",
       "  Rscript src/visualize/pca_2d.R results/fungi",
       "  Rscript src/visualize/pca_2d.R results/fungi --output-dir results/fungi/pca_custom",
-      "  Rscript src/visualize/pca_2d.R results/fungi --tsv-pattern '*_cds.tsv' --max-clusters 6",
+      "  Rscript src/visualize/pca_2d.R results/fungi --tsv-pattern '*.tsv' --max-clusters 6",
       "  Rscript src/visualize/pca_2d.R results/fungi --cluster-boundary ellipse",
       sep = "\n"
     )
@@ -60,7 +70,7 @@ parse_args <- function() {
     metavar = "INPUT_DIR",
     help = paste(
       "Root directory containing dataset/trio subdirectories. For each dataset,",
-      "the latest numeric run directory is used (for example, results/fungi)."
+      "the latest completed manifest run is used (for example, results/fungi)."
     )
   )
   parser$add_argument(
@@ -68,7 +78,7 @@ parse_args <- function() {
     metavar = "GLOB",
     default = DEFAULT_TSV_PATTERN,
     help = sprintf(
-      "Glob pattern used to select substitution TSV files inside each latest run directory (default: %s).",
+      "Supported selection: *_ncds.tsv for noncoding or *.tsv for all genomic single-base channels (default: %s).",
       DEFAULT_TSV_PATTERN
     )
   )
@@ -112,22 +122,13 @@ parse_args <- function() {
 
 warn <- function(msg) message(sprintf("Warning: %s", msg))
 
-discover_dataset_dirs <- function(input_root) {
-  input_root <- normalizePath(input_root, winslash = "/", mustWork = TRUE)
-  entries <- list.dirs(input_root, full.names = TRUE, recursive = FALSE)
-  entries <- entries[normalizePath(entries, winslash = "/", mustWork = FALSE) != input_root]
-  dataset_dirs <- entries[!grepl("^[0-9]+$", basename(entries))]
-  if (length(dataset_dirs) == 0) input_root else dataset_dirs
+discover_dataset_dirs <- function(input_root) unlist(manifest_command("discover", input_root), use.names=FALSE)
+find_latest_run_dir <- function(dataset_dir) {
+  runs <- unlist(manifest_command("discover",dataset_dir),use.names=FALSE)
+  if (!length(runs)) return(NULL)
+  runs[[1]]
 }
 
-find_latest_run_dir <- function(dataset_dir) {
-  entries <- list.dirs(dataset_dir, full.names = TRUE, recursive = FALSE)
-  runs <- entries[grepl("^[0-9]+$", basename(entries))]
-  if (length(runs) == 0) {
-    return(NULL)
-  }
-  runs[which.max(basename(runs))]
-}
 
 resolve_path <- function(value, base_dir) {
   if (is.null(value) || is.na(value) || value == "") {
@@ -138,32 +139,11 @@ resolve_path <- function(value, base_dir) {
   normalizePath(path, winslash = "/", mustWork = FALSE)
 }
 
-resolve_manifest_file <- function(value, manifest_dir, label) {
-  if (is.null(value) || is.na(value) || value == "") {
-    stop(sprintf("%s missing in metadata manifest", label))
-  }
-  local_path <- normalizePath(file.path(manifest_dir, basename(value)), winslash = "/", mustWork = FALSE)
-  recorded_path <- resolve_path(value, manifest_dir)
-  candidates <- unique(c(local_path, recorded_path))
-  existing <- candidates[file.exists(candidates)]
-  if (length(existing) == 0) {
-    stop(sprintf(
-      "%s not found; checked relocated path %s and recorded path %s",
-      label,
-      local_path,
-      recorded_path
-    ))
-  }
-  existing[1]
-}
 
 load_manifest_lookup <- function(manifest_path) {
   manifest <- fromJSON(manifest_path, simplifyVector = FALSE)
-  metadata_dir_value <- manifest$metadata_dir
-  if (is.null(metadata_dir_value) || length(metadata_dir_value) != 1 || is.na(metadata_dir_value) || metadata_dir_value == "") {
-    stop(sprintf("'metadata_dir' missing or empty in manifest %s", manifest_path))
-  }
-  manifest_dir <- normalizePath(dirname(manifest_path), winslash = "/", mustWork = TRUE)
+  run_dir <- dirname(dirname(manifest_path))
+  manifest <- manifest_command("read", run_dir)
 
   lookup <- list()
   organisms <- manifest$organisms %||% list()
@@ -173,16 +153,12 @@ load_manifest_lookup <- function(manifest_path) {
     short_name <- entry$short_name
     accession <- entry$accession
     metadata_json <- entry$metadata_json
-    if (is.null(short_name) || is.null(accession) || is.null(metadata_json)) {
+    if (is.null(short_name) || is.null(metadata_json)) {
       stop(sprintf("Incomplete organism entry in manifest %s", manifest_path))
     }
-    metadata_path <- resolve_manifest_file(
-      metadata_json,
-      manifest_dir,
-      sprintf("metadata_json for %s (%s)", short_name, accession)
-    )
-    taxonomy_path <- file.path(dirname(metadata_path), sprintf("taxonomy_%s_%s.json", short_name, accession))
-    key <- paste(accession, short_name, sep = "::")
+    metadata_path <- file.path(run_dir, entry$metadata_json)
+    taxonomy_path <- if (!is.null(entry$taxonomy_json)) file.path(run_dir, entry$taxonomy_json) else NA_character_
+    key <- paste(accession %||% "local", short_name, sep = "::")
     lookup[[key]] <- list(metadata_path = metadata_path, taxonomy_path = taxonomy_path, entry = entry)
   }
 
@@ -194,6 +170,7 @@ load_manifest_lookup <- function(manifest_path) {
     if (!is.null(slot)) slot_map[[slot]] <- entry
   }
 
+  attr(slot_map,"manifest") <- manifest
   list(manifest = manifest, lookup = lookup, slot_map = slot_map)
 }
 
@@ -278,7 +255,7 @@ extract_genus <- function(metadata, short_name, accession) {
 }
 
 extract_genus_label <- function(entry) {
-  candidates <- c(entry$raw_organism_name, entry$ncbi_full_name, entry$directory_name, entry$short_name)
+  candidates <- c(entry$raw_organism_name, entry$ncbi_full_name)
   for (candidate in candidates) {
     if (is.null(candidate) || candidate == "") next
     sanitized <- trimws(gsub("_", " ", candidate))
@@ -311,11 +288,6 @@ evaluate_genus_condition <- function(slot_map) {
   list(result = condition, issues = character())
 }
 
-select_preferred_artifacts <- function(preferred, legacy) {
-  preferred <- sort(unique(preferred))
-  if (length(preferred) > 0) return(preferred)
-  sort(unique(legacy))
-}
 
 filter_entry_substitution_tsvs <- function(paths, entry) {
   prefix <- paste0(entry$accession, "_", entry$short_name, "_")
@@ -338,40 +310,14 @@ substitution_tsv_search_locations <- function(run_dir, pattern, slot_map) {
 }
 
 collect_substitution_tsvs <- function(run_dir, pattern, slot_map) {
-  ingroup_entries <- Filter(function(entry) {
-    tolower(entry$role %||% "") != "outgroup" &&
-      !is.null(entry$short_name) && entry$short_name != "" &&
-      !is.null(entry$accession) && entry$accession != ""
-  }, slot_map)
-  legacy_candidates <- Sys.glob(file.path(run_dir, pattern))
-  matches <- unlist(lapply(ingroup_entries, function(entry) {
-    nested_candidates <- Sys.glob(file.path(
-      run_dir, "statistics", entry$short_name, "singlenuc", pattern
-    ))
-    select_preferred_artifacts(
-      filter_entry_substitution_tsvs(nested_candidates, entry),
-      filter_entry_substitution_tsvs(legacy_candidates, entry)
-    )
-  }), use.names = FALSE)
-  sort(unique(matches))
+  if (!pattern %in% c("*_ncds.tsv","*.tsv")) stop("Unsupported --tsv-pattern; use *_ncds.tsv (noncoding) or *.tsv (all genomic).")
+  kind <- if (grepl("ncds", pattern, fixed=TRUE)) "single_ncds" else "single"
+  manifest <- attr(slot_map,"manifest") %||% manifest_command("read", run_dir)
+  unlist(lapply(Filter(function(a) identical(a$kind, kind), manifest$artifacts),
+                function(a) file.path(run_dir, a$path)), use.names=FALSE)
 }
 
-extract_identity_line <- function(train_path) {
-  lines <- readLines(train_path, warn = FALSE)
-  hits <- lines[startsWith(trimws(lines), IDENTITY_PREFIX)]
-  if (length(hits) >= 2) {
-    return(trimws(hits[length(hits) - 1]))
-  }
-  if (length(hits) == 1) {
-    return(trimws(hits[1]))
-  }
-  NULL
-}
 
-extract_identity_value <- function(line) {
-  parts <- strsplit(line, ":", fixed = TRUE)[[1]]
-  trimws(tail(parts, 1))
-}
 
 parse_identity_percentage <- function(value) {
   sanitized <- gsub("%", " ", value)
@@ -383,41 +329,13 @@ parse_identity_percentage <- function(value) {
 }
 
 collect_identity_strings <- function(run_dir, slot_map) {
+  manifest <- attr(slot_map,"manifest") %||% manifest_command("read", run_dir)
   identity <- list()
-  issues <- character()
-  short_name_for <- function(slot) slot_map[[slot]]$short_name %||% NA
-  pair_specs <- list(
-    list(key = "idt_12", a = "org1", b = "org2"),
-    list(key = "idt_13", a = "org1", b = "org3"),
-    list(key = "idt_23", a = "org2", b = "org3")
-  )
-  for (spec in pair_specs) {
-    short_a <- short_name_for(spec$a)
-    short_b <- short_name_for(spec$b)
-    if (is.na(short_a) || is.na(short_b)) {
-      issues <- c(issues, sprintf("%s: Missing short_name for %s or %s.", spec$key, spec$a, spec$b))
-      next
-    }
-    pattern <- sprintf("*%s2%s_*.train", short_a, short_b)
-    train_paths <- select_preferred_artifacts(
-      Sys.glob(file.path(run_dir, "intermediateFiles", pattern)),
-      Sys.glob(file.path(run_dir, pattern))
-    )
-    if (length(train_paths) == 0) {
-      issues <- c(issues, sprintf("%s: No train file matching '%s'.", spec$key, pattern))
-      next
-    }
-    train_path <- train_paths[1]
-    identity_line <- extract_identity_line(train_path)
-    if (is.null(identity_line)) {
-      issues <- c(issues, sprintf("%s: '%s' line missing in %s.", spec$key, IDENTITY_PREFIX, basename(train_path)))
-      next
-    }
-    raw_value <- extract_identity_value(identity_line)
-    value <- if (endsWith(raw_value, "%")) raw_value else paste(raw_value, "%")
-    identity[[spec$key]] <- value
+  for (a in Filter(function(a) identical(a$kind, "train"), manifest$artifacts)) {
+    key <- paste0("idt_", sub("org([123])-org([123])", "\\1\\2", a$slot))
+    identity[[key]] <- paste(a$identity_percent, "%")
   }
-  list(identity = identity, issues = issues)
+  list(identity=identity, issues=character())
 }
 
 evaluate_identity_condition <- function(identity_values) {
@@ -764,7 +682,9 @@ run_pca_for_indices <- function(vectors, feature_order, indices, output_prefix, 
   if (length(indices) < 2) stop(sprintf("%s PCA requires at least two samples.", output_prefix))
   subset_vectors <- vectors[indices]
   matrix_data <- do.call(rbind, subset_vectors)
-  scaled_data <- scale(matrix_data)
+  feature_sd <- apply(matrix_data,2,sd)
+  feature_sd[!is.finite(feature_sd) | feature_sd == 0] <- 1
+  scaled_data <- scale(matrix_data,scale=feature_sd)
   pca <- prcomp(scaled_data, center = FALSE, scale. = FALSE)
   pca_data <- pca$x[, 1:2, drop = FALSE]
   if (is.null(colnames(pca$rotation))) {
@@ -888,11 +808,9 @@ main <- function() {
       warn(sprintf("%s: metadata manifest not found at %s.", dataset_name, manifest_path))
       next
     }
-    manifest_bundle <- tryCatch(load_manifest_lookup(manifest_path), error = function(e) {
-      warn(sprintf("%s: Failed to load manifest %s: %s", dataset_name, manifest_path, e$message))
-      NULL
-    })
+    manifest_bundle <- load_manifest_lookup(manifest_path)
     if (is.null(manifest_bundle)) next
+    dataset_name <- manifest_bundle$manifest$trio_key
     slot_map <- manifest_bundle$slot_map
     filter_info <- evaluate_dataset_filter(slot_map, latest_run)
     for (issue in filter_info$issues) warn(sprintf("%s: %s", dataset_name, issue))
@@ -913,20 +831,14 @@ main <- function() {
     }
     samples_before <- length(logratio_vectors)
     for (tsv_file in sort(tsv_files)) {
-      parts <- strsplit(basename(tsv_file), "_")[[1]]
-      if (length(parts) < 4) {
-        warn(sprintf("%s: Unexpected TSV filename format: %s", dataset_name, basename(tsv_file)))
-        next
-      }
-      accession <- paste(parts[1:2], collapse = "_")
-      short_name <- parts[3]
-      date <- parts[4]
-      key <- paste(accession, short_name, sep = "::")
+      candidates <- Filter(function(a) identical(normalizePath(file.path(latest_run, a$path)), normalizePath(tsv_file)), manifest_bundle$manifest$artifacts)
+      if (length(candidates) != 1) stop("Ambiguous TSV artifact: ", tsv_file)
+      entry <- slot_map[[candidates[[1]]$slot]]
+      accession <- entry$accession %||% "local"
+      short_name <- entry$short_name
+      date <- manifest_bundle$manifest$date
+      key <- paste(entry$accession %||% "local", short_name, sep="::")
       manifest_entry <- manifest_bundle$lookup[[key]]
-      if (is.null(manifest_entry)) {
-        warn(sprintf("%s: No manifest entry for accession %s / short_name %s (file %s).", dataset_name, accession, short_name, basename(tsv_file)))
-        next
-      }
       metadata_path <- manifest_entry$metadata_path
       metadata_json <- tryCatch(load_json_cached(metadata_path, metadata_cache), error = function(e) {
         warn(sprintf("%s: Failed to load metadata JSON %s: %s", dataset_name, metadata_path, e$message))
@@ -934,12 +846,12 @@ main <- function() {
       })
       if (is.null(metadata_json)) next
       taxonomy_path <- manifest_entry$taxonomy_path
-      ensure_taxonomy_json(taxonomy_path, metadata_json, short_name, accession)
-      taxonomy_json <- tryCatch(load_json_cached(taxonomy_path, taxonomy_cache), error = function(e) {
-        warn(sprintf("%s: Failed to load taxonomy JSON %s: %s", dataset_name, taxonomy_path, e$message))
-        list()
-      })
-      genus_info <- extract_genus(metadata_json, short_name, accession)
+      taxonomy_json <- if (!is.na(taxonomy_path) && file.exists(taxonomy_path)) {
+        load_json_cached(taxonomy_path,taxonomy_cache)
+      } else list()
+      genus_info <- if (is.null(entry$raw_organism_name) && is.null(entry$ncbi_full_name)) {
+        list(genus="Unknown",species=short_name)
+      } else extract_genus(metadata_json, short_name, accession)
       classification_map <- extract_classification_map(taxonomy_json, sprintf("%s (%s)", short_name, accession))
       observed_levels <- unique(c(observed_levels, names(classification_map)))
 
@@ -1049,6 +961,7 @@ main <- function() {
   }
   message(sprintf("Results saved to: %s", output_dir))
 }
+
 
 if (sys.nframe() == 0L) {
   tryCatch(

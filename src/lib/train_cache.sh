@@ -83,6 +83,7 @@ copy_train_file_atomically() {
 
 reuse_cached_train() {
     local cache_dir="$1" date="$2" ref_acc="$3" query_acc="$4" dest="$5"
+    local ref_fasta="${6:-}" query_fasta="${7:-}"
 
     # Materialize valid symlinks from older runs so later cache cleanup cannot
     # break an otherwise complete pipeline output.
@@ -118,8 +119,12 @@ reuse_cached_train() {
         return 0
     fi
 
-    local cached="${cache_dir}/${ref_acc}2${query_acc}.train"
-    if ! is_valid_train_file "$cached"; then
+    [ -n "$ref_fasta" ] && [ -n "$query_fasta" ] || return 0
+    local namespace
+    namespace=$(python3 "$(dirname "${BASH_SOURCE[0]}")/run_manifest.py" training-directory \
+        "$cache_dir" "$ref_fasta" "$query_fasta" "$ref_acc" "$query_acc") || return 1
+    local cached="${namespace}/${ref_acc}2${query_acc}.train"
+    if ! is_valid_train_file "$cached" || ! python3 "$(dirname "${BASH_SOURCE[0]}")/run_manifest.py" verify-file "$cached" >/dev/null 2>&1; then
         if [ -e "$cached" ] || [ -L "$cached" ]; then
             echo "Train-cache miss: invalid or incomplete file at $cached" >&2
         else
@@ -129,6 +134,7 @@ reuse_cached_train() {
     fi
 
     if copy_train_file_atomically "$cached" "$dest"; then
+        python3 "$(dirname "${BASH_SOURCE[0]}")/run_manifest.py" seal-file "$dest" || return 1
         echo "Reused cached train file: $cached -> $dest"
         return 0
     fi

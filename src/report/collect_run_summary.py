@@ -21,6 +21,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "select"))
 from trio_filter import evaluate_filter_status  # noqa: E402
 from report_contract import summary_paths  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+import run_manifest as runs
+from train_identity import parse_identity
+
 IDENTITY_PREFIX = "# substitution percent identity:"
 GC_CONTENT_PREFIX = "Total GC content: "
 PDF_ARTIFACT_SPECS = (
@@ -72,77 +76,18 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def find_latest_run_dir(dataset_dir: Path) -> Optional[Path]:
-    run_dirs = [
-        entry for entry in dataset_dir.iterdir() if entry.is_dir() and entry.name.isdigit()
-    ]
-    if not run_dirs:
-        return None
-    return max(run_dirs, key=lambda path: path.name)
+def find_latest_run_dir(dataset_dir):
+    found = runs.discover(dataset_dir)
+    return max(found, key=lambda p: runs.load(p)['created_at']) if found else None
 
 
-def has_manifest_run(path: Path) -> bool:
-    return any(
-        entry.is_dir()
-        and entry.name.isdigit()
-        and (entry / "metadata" / "metadata_manifest.json").is_file()
-        for entry in path.iterdir()
-    )
+def has_manifest_run(path):
+    return bool(runs.discover(path))
 
 
-def is_dataset_candidate(path: Path) -> bool:
-    if has_manifest_run(path):
-        return True
-    return len(path.name.split("_")) == 3 and find_latest_run_dir(path) is not None
+def is_dataset_candidate(path):
+    return has_manifest_run(path)
 
-
-def matches_short_name(path: Path, short_name: str) -> bool:
-    if not short_name:
-        return False
-    parts = path.stem.split("_")
-    return any(part == short_name for part in parts)
-
-
-class ArtifactResolver:
-    """Resolve artifacts from preferred layouts before legacy fallbacks."""
-
-    def __init__(self, run_dir: Path):
-        self.run_dir = run_dir
-
-    def find_all(
-        self,
-        patterns: Iterable[str],
-        *,
-        short_name: Optional[str] = None,
-        excluded_fragments: Tuple[str, ...] = (),
-    ) -> List[Path]:
-        for pattern in patterns:
-            matches = sorted(self.run_dir.glob(pattern))
-            if short_name:
-                matches = [path for path in matches if matches_short_name(path, short_name)]
-            if excluded_fragments:
-                matches = [
-                    path
-                    for path in matches
-                    if not any(fragment in path.name for fragment in excluded_fragments)
-                ]
-            if matches:
-                return matches
-        return []
-
-    def find_first(
-        self,
-        patterns: Iterable[str],
-        *,
-        short_name: Optional[str] = None,
-        excluded_fragments: Tuple[str, ...] = (),
-    ) -> Optional[Path]:
-        matches = self.find_all(
-            patterns,
-            short_name=short_name,
-            excluded_fragments=excluded_fragments,
-        )
-        return matches[0] if matches else None
 
 
 def load_json_file(path: Path) -> Tuple[Optional[dict], Optional[str]]:
@@ -178,22 +123,13 @@ def read_taxonomy_lineage(metadata_json_path: str) -> Tuple[Optional[dict], Opti
     return result, None
 
 
-def load_manifest(run_dir: Path) -> Tuple[Optional[dict], Optional[str]]:
-    manifest_path = run_dir / "metadata" / "metadata_manifest.json"
-    if not manifest_path.exists():
-        return None, f"Metadata manifest not found: {manifest_path}"
-    payload, error = load_json_file(manifest_path)
-    if error:
-        return None, error
-    for entry in payload.get("organisms", []):
-        metadata_json = entry.get("metadata_json")
-        if not metadata_json:
-            continue
-        metadata_path = Path(metadata_json)
-        relocated_path = manifest_path.parent / metadata_path.name
-        if relocated_path.is_file():
-            entry["metadata_json"] = str(relocated_path)
-    payload["manifest_path"] = str(manifest_path)
+def load_manifest(run_dir):
+    payload = runs.validated(run_dir, complete=True)
+    for entry in payload['organisms']:
+        for field in ('metadata_json', 'taxonomy_json'):
+            if entry.get(field):
+                entry[field] = str(runs.artifact_path(run_dir, entry[field]))
+    payload['manifest_path'] = str(run_dir / runs.MANIFEST)
     return payload, None
 
 
@@ -216,17 +152,8 @@ def sanitize_metadata(metadata: dict) -> dict:
     return filtered
 
 
-def extract_identity_line(train_path: Path) -> Optional[str]:
-    lines = [
-        line.strip()
-        for line in train_path.read_text(encoding="utf-8").splitlines()
-        if line.startswith(IDENTITY_PREFIX)
-    ]
-    if len(lines) >= 2:
-        return lines[-2]
-    if lines:
-        return lines[0]
-    return None
+def extract_identity_line(train_path):
+    return f"{IDENTITY_PREFIX} {parse_identity(train_path):g}"
 
 
 def extract_identity_value(identity_line: str) -> str:
@@ -268,6 +195,7 @@ def process_species(
     include_tsv: bool = True,
     include_sbst_ratio: bool = True,
     include_pdfs: bool = True,
+    manifest=None,
 ) -> Tuple[Dict[str, object], List[str]]:
     data: Dict[str, object] = {"metadata": sanitize_metadata(metadata)}
     issues: List[str] = []
@@ -278,134 +206,47 @@ def process_species(
         issues.append(f"{slot}: Metadata missing short_name.")
         return data, issues
 
-    resolver = ArtifactResolver(run_dir)
-
-    accession = metadata.get("accession")
-    if accession:
-        data["accession"] = accession
-    metadata_json = metadata.get("metadata_json")
-    if metadata_json:
-        data["metadata_json"] = metadata_json
-        lineage, tax_err = read_taxonomy_lineage(metadata_json)
-        if lineage:
-            data["taxonomy"] = lineage
-        elif tax_err:
-            issues.append(f"{slot}: {tax_err}")
-
+    def first(kind):
+        paths = runs.artifacts(run_dir, kind, slot, manifest)
+        return paths[0] if paths else None
+    data['accession'] = metadata.get('accession')
+    for field in ('metadata_json', 'taxonomy_json'):
+        if metadata.get(field):
+            data[field] = metadata[field]
+    if metadata.get('taxonomy_json'):
+        taxonomy, err = load_json_file(Path(metadata['taxonomy_json']))
+        if taxonomy:
+            classification = ((taxonomy.get('reports') or [{}])[0].get('taxonomy') or {}).get('classification', {})
+            data['taxonomy'] = {rank: item['name'] for rank, item in classification.items()
+                                if isinstance(item, dict) and item.get('name')}
     if include_tsv:
-        tsv_patterns = [
-            f"statistics/{short_name}/singlenuc/*_*{short_name}_*.tsv",
-            f"statistics/singlenuc/*_*{short_name}_*.tsv",
-            f"*_*{short_name}_*.tsv",
-        ]
-        tsv_path = resolver.find_first(tsv_patterns, short_name=short_name)
-        if tsv_path:
-            data["tsv_file"] = str(tsv_path)
-        else:
-            issues.append(f"{slot}: No single-nucleotide TSV found in supported layouts.")
-
-    if include_sbst_ratio:
-        if sbst_ratio_path and ratio_line_index is not None:
-            ratio_value = extract_sbst_ratio_line(sbst_ratio_path, ratio_line_index)
-            if ratio_value:
-                data["sbst_ratio_entry"] = ratio_value
-            else:
-                issues.append(
-                    f"{slot}: Could not extract substitution ratio line {ratio_line_index} from "
-                    f"{sbst_ratio_path.name}."
-                )
-        else:
-            issues.append(f"{slot}: Missing statistics/misc/sbstRatio*.out file.")
-
-    gc_patterns = [
-        f"statistics/misc/*{short_name}_gcContent*.out",
-        f"*{short_name}_gcContent*.out",
-    ]
-    gc_path = resolver.find_first(gc_patterns, short_name=short_name)
-    if gc_path:
-        data["gc_content_file"] = str(gc_path)
-        data["gc_content"] = read_file_lines(gc_path)
-    else:
-        issues.append(
-            f"{slot}: No GC content file found in supported layouts."
-        )
-
-    coding_path = resolver.find_first(
-        [f"statistics/misc/*{short_name}_codingRegionPercentage*.out",
-         f"*{short_name}_codingRegionPercentage*.out"],
-        short_name=short_name,
-    )
-    if coding_path:
-        data["coding_region_percentage_file"] = str(coding_path)
-        data["coding_region_percentage"] = read_file_lines(coding_path)
-    # Optional for species without annotations and runs predating this metric.
-
+        path = first('single')
+        if path:
+            data['tsv_file'] = str(path)
+    if include_sbst_ratio and sbst_ratio_path:
+        data['sbst_ratio_entry'] = extract_sbst_ratio_line(sbst_ratio_path, ratio_line_index)
+    for kind, field in (('gc', 'gc_content'), ('coding', 'coding_region_percentage')):
+        path = first(kind)
+        if path:
+            data[field + '_file'] = str(path)
+            data[field] = read_file_lines(path)
     if include_pdfs:
-        pdfs: Dict[str, List[str]] = {}
-        for key, subdirectory, suffix, excluded_fragments, required_description in PDF_ARTIFACT_SPECS:
-            patterns = [
-                f"figs/{short_name}/{subdirectory}/*_*{short_name}_*{suffix}",
-                f"*_*{short_name}_*{suffix}",
-            ]
-            pdfs[key] = [
-                str(path)
-                for path in resolver.find_all(
-                    patterns,
-                    short_name=short_name,
-                    excluded_fragments=excluded_fragments,
-                )
-            ]
-            if required_description and not pdfs[key]:
-                issues.append(
-                    f"{slot}: Missing required PDF matching "
-                    f"'*_*{short_name}_{required_description}'."
-                )
-        data["pdfs"] = pdfs
+        data['pdfs'] = {key: [str(p) for p in runs.artifacts(run_dir, 'pdf_' + key, slot, manifest)]
+                        for key, *_ in PDF_ARTIFACT_SPECS}
 
     return data, issues
 
 
 def collect_identity_metrics(
-    run_dir: Path, slot_map: Dict[str, dict]
+    run_dir: Path, slot_map: Dict[str, dict], manifest=None
 ) -> Tuple[Dict[str, str], List[str]]:
     identity: Dict[str, str] = {}
     issues: List[str] = []
-    resolver = ArtifactResolver(run_dir)
-
-    def short_name_for(slot: str) -> Optional[str]:
-        entry = slot_map.get(slot)
-        return entry.get("short_name") if entry else None
-
-    pair_specs = [
-        ("idt_12", "org1", "org2"),
-        ("idt_13", "org1", "org3"),
-        ("idt_23", "org2", "org3"),
-    ]
-
-    for key, slot_a, slot_b in pair_specs:
-        short_a = short_name_for(slot_a)
-        short_b = short_name_for(slot_b)
-        if not short_a or not short_b:
-            issues.append(f"{key}: Missing short_name for {slot_a} or {slot_b}.")
-            continue
-
-        patterns = [
-            f"intermediateFiles/*{short_a}2{short_b}_*.train",
-            f"*{short_a}2{short_b}_*.train",
-        ]
-        train_path = resolver.find_first(patterns)
-        if not train_path:
-            issues.append(f"{key}: No train file found in supported layouts.")
-            continue
-
-        identity_line = extract_identity_line(train_path)
-        if not identity_line:
-            issues.append(f"{key}: '{IDENTITY_PREFIX}' line missing in {train_path.name}.")
-            continue
-
-        raw_value = extract_identity_value(identity_line)
-        value_with_unit = raw_value if raw_value.endswith("%") else f"{raw_value} %"
-        identity[key] = value_with_unit
+    for pair in ('12', '13', '23'):
+        paths = runs.artifacts(run_dir, 'train', f'org{pair[0]}-org{pair[1]}', manifest)
+        if len(paths) != 1:
+            raise ValueError(f'Missing unique training pair {pair}: {run_dir}')
+        identity['idt_' + pair] = f'{parse_identity(paths[0]):g} %'
 
     return identity, issues
 
@@ -426,13 +267,12 @@ def process_dataset(dataset_dir: Path, idt_threshold: float) -> Tuple[Optional[D
     if manifest_error or not manifest:
         issues.append(manifest_error or "Unknown metadata manifest error.")
         return None, issues
+    dataset_data["dataset"] = manifest["trio_key"]
+    dataset_data["latest_run"] = manifest["date"]
     dataset_data["metadata_manifest"] = manifest.get("manifest_path")
     slot_map = build_manifest_slot_map(manifest)
-    resolver = ArtifactResolver(latest_run)
-
-    sbst_ratio_path = resolver.find_first(
-        ["statistics/misc/sbstRatio*.out", "sbstRatio*.out"]
-    )
+    ratio_paths = runs.artifacts(latest_run, 'sbst_ratio', validated_manifest=manifest)
+    sbst_ratio_path = ratio_paths[0] if ratio_paths else None
 
     species1_meta = slot_map.get("org1")
     if not species1_meta:
@@ -446,7 +286,7 @@ def process_dataset(dataset_dir: Path, idt_threshold: float) -> Tuple[Optional[D
             None,
             include_tsv=False,
             include_sbst_ratio=False,
-            include_pdfs=False,
+            include_pdfs=False, manifest=manifest,
         )
         issues.extend(species1_issues)
     dataset_data["species1"] = species1_data
@@ -457,7 +297,7 @@ def process_dataset(dataset_dir: Path, idt_threshold: float) -> Tuple[Optional[D
         issues.append("org2: Missing metadata entry in manifest.")
     else:
         species2_data, species2_issues = process_species(
-            latest_run, species2_meta, sbst_ratio_path, 1
+            latest_run, species2_meta, sbst_ratio_path, 1, manifest=manifest
         )
         issues.extend(species2_issues)
     dataset_data["species2"] = species2_data
@@ -468,12 +308,12 @@ def process_dataset(dataset_dir: Path, idt_threshold: float) -> Tuple[Optional[D
         issues.append("org3: Missing metadata entry in manifest.")
     else:
         species3_data, species3_issues = process_species(
-            latest_run, species3_meta, sbst_ratio_path, 2
+            latest_run, species3_meta, sbst_ratio_path, 2, manifest=manifest
         )
         issues.extend(species3_issues)
     dataset_data["species3"] = species3_data
 
-    identity_values, identity_issues = collect_identity_metrics(latest_run, slot_map)
+    identity_values, identity_issues = collect_identity_metrics(latest_run, slot_map, manifest)
     dataset_data.update(identity_values)
     issues.extend(identity_issues)
 
@@ -501,15 +341,7 @@ def build_summary(root: Path, idt_threshold: float) -> Tuple[Dict[str, object], 
     filtered_entries: List[Dict[str, object]] = []
     aggregated_issues: Dict[str, List[str]] = {}
 
-    if find_latest_run_dir(root):
-        dataset_dirs = [root]
-    else:
-        dataset_dirs = [
-            entry
-            for entry in sorted(root.iterdir())
-            if entry.is_dir() and is_dataset_candidate(entry)
-        ]
-
+    dataset_dirs = runs.discover(root)
     for entry in dataset_dirs:
         dataset_data, issues = process_dataset(entry, idt_threshold)
         dataset_name = entry.name

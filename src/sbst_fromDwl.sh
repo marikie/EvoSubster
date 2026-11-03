@@ -585,6 +585,7 @@ if [ -n "$TREE_FILE" ] || [ -n "$TRIOS_FILE" ]; then
     [ "$IDT_ONLY" -eq 1 ] && pass_opts+=(--idt-only)
     [ "$FORCE_DOWNLOAD" -eq 1 ] && pass_opts+=(--force)
 
+    export EVOSUBSTER_SELECTION_SOURCE="${TRIOS_FILE:-${selected_file:-}}"
     trio_count=0
     trio_failures=0
     trio_results=()
@@ -681,130 +682,26 @@ org2ShortName=$(make_short_name "$org2FullNameWithSuffix" "2")
 org3ShortName=$(make_short_name "$org3FullNameWithSuffix" "3")
 
 short_names=("$org1ShortName" "$org2ShortName" "$org3ShortName")
-run_combo_dir="${org1ShortName}_${org2ShortName}_${org3ShortName}"
-run_dir_root="$out_dir_base/$run_combo_dir"
-run_date_dir_rel="$run_dir_root/$DATE"
-last_options_guard "$run_date_dir_rel" run || exit 1
-metadata_dir_rel="$run_date_dir_rel/metadata"
-
-if ! mkdir -p "$metadata_dir_rel"; then
-    echo "Error: Unable to create metadata directory at $metadata_dir_rel" >&2
-    exit 1
-fi
-
-run_date_dir="$(cd "$run_dir_root/$DATE" && pwd)"
-metadata_dir="$run_date_dir/metadata"
-
-# Detect available annotations for each species; downloads may have been cached.
+# Supply source metadata; sbst owns run allocation, locking, and publication.
+metadata_input=$(mktemp) || exit 1
+trap 'rm -f "$metadata_input"' EXIT
+python3 - "$metadata_input" "${summary_jsons[@]}" "${tax_jsons[@]}" \
+    "${raw_names[@]}" "${ncbi_full_names[@]}" "${short_names[@]}" <<'PYMETA'
+import json, sys
+from pathlib import Path
+values = sys.argv[2:]
+Path(sys.argv[1]).write_text(json.dumps([
+    dict(metadata_json=values[i], taxonomy_json=values[i+3],
+         raw_organism_name=values[i+6], ncbi_full_name=values[i+9], short_name=values[i+12]) for i in range(3)]))
+PYMETA
+export EVOSUBSTER_METADATA_INPUT="$metadata_input"
 declare -a gff_paths=()
-for fasta_path in "$org1FASTA" "$org2FASTA" "$org3FASTA"; do
-    gffFilePath="$(dirname "$fasta_path")/genomic.gff"
-    if [ -f "$gffFilePath" ]; then
-        gff_paths+=("$gffFilePath")
-        echo "GFF file found: $gffFilePath"
-    else
-        gff_paths+=("NO_GFF_FILE")
-        echo "No GFF file found beside $fasta_path."
-    fi
+resolved_ids=("$resolvedOrg1ID" "$resolvedOrg2ID" "$resolvedOrg3ID")
+for i in 0 1 2; do
+    gff=$(python3 "$SCRIPT_DIR/lib/run_manifest.py" bundle-gff "${fasta_paths[$i]}" "${resolved_ids[$i]}") || exit 1
+    gff_paths+=("$gff")
 done
 org1GFF="${gff_paths[0]}"
-
-echo "--- Preparing metadata artifacts in $metadata_dir"
-declare -a metadata_json_copies=("" "" "")
-
-for i in {0..2}; do
-    src_json=${summary_jsons[$i]}
-    short_name=${short_names[$i]}
-    accession=${ids[$i]}
-    if [ -n "$src_json" ] && [ -f "$src_json" ]; then
-        dest_json="$metadata_dir/${short_name}_${accession}.json"
-        if cp "$src_json" "$dest_json"; then
-            metadata_json_copies[$i]="$dest_json"
-        else
-            echo "Warning: Failed to copy metadata JSON for ${short_name} ($accession) to $dest_json" >&2
-        fi
-    else
-        echo "Warning: Source metadata JSON missing for ${short_name} ($accession) at ${src_json:-<empty>}" >&2
-    fi
-done
-
-manifest_path="$metadata_dir/metadata_manifest.json"
-python3 - "$manifest_path" "$DATE" "$run_combo_dir" "$run_date_dir" "$metadata_dir" \
-"${ids[0]}" "${names[0]}" "${short_names[0]}" "${fasta_paths[0]}" "${gff_paths[0]}" "${raw_names[0]}" "${ncbi_full_names[0]}" "${metadata_json_copies[0]}" \
-"${ids[1]}" "${names[1]}" "${short_names[1]}" "${fasta_paths[1]}" "${gff_paths[1]}" "${raw_names[1]}" "${ncbi_full_names[1]}" "${metadata_json_copies[1]}" \
-"${ids[2]}" "${names[2]}" "${short_names[2]}" "${fasta_paths[2]}" "${gff_paths[2]}" "${raw_names[2]}" "${ncbi_full_names[2]}" "${metadata_json_copies[2]}" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-def normalize(value, empty_as_none=False):
-    if value in ("", "null", "None"):
-        return None
-    if empty_as_none and value in ("NO_GFF_FILE",):
-        return None
-    return value
-
-manifest_path = Path(sys.argv[1])
-run_date = sys.argv[2]
-combo_dir = sys.argv[3]
-run_dir = sys.argv[4]
-metadata_dir = sys.argv[5]
-
-args = sys.argv[6:]
-slots = [
-    ("org1", "outgroup"),
-    ("org2", "ingroup"),
-    ("org3", "ingroup"),
-]
-chunk_size = 8
-organisms = []
-for idx, (slot, role) in enumerate(slots):
-    offset = idx * chunk_size
-    chunk = args[offset : offset + chunk_size]
-    accession, directory_name, short_name, fasta_path, gff_path, raw_name, ncbi_full, metadata_json = chunk
-    organisms.append(
-        {
-            "slot": slot,
-            "role": role,
-            "accession": normalize(accession),
-            "directory_name": normalize(directory_name),
-            "short_name": normalize(short_name),
-            "fasta_path": normalize(fasta_path),
-            "gff_path": normalize(gff_path, empty_as_none=True),
-            "raw_organism_name": normalize(raw_name),
-            "ncbi_full_name": normalize(ncbi_full),
-            "metadata_json": normalize(metadata_json),
-        }
-    )
-
-manifest = {
-    "date": run_date,
-    "combo_dir": combo_dir,
-    "run_dir": run_dir,
-    "metadata_dir": metadata_dir,
-    "organisms": organisms,
-}
-manifest_path.parent.mkdir(parents=True, exist_ok=True)
-manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-print(f"Wrote metadata manifest to {manifest_path}")
-PY
-
-# shellcheck disable=SC2181
-if [ $? -ne 0 ]; then
-    echo "Error: Failed to generate metadata manifest" >&2
-    exit 1
-fi
-
-# Copy taxonomy JSONs (downloaded by dwl_organism.sh) to metadata dir with short_name prefix
-for i in {0..2}; do
-    tax_src=${tax_jsons[$i]}
-    short_name=${short_names[$i]}
-    accession=${ids[$i]}
-    tax_dest="$metadata_dir/taxonomy_${short_name}_${accession}.json"
-    if [ -f "$tax_src" ] && [ ! -f "$tax_dest" ]; then
-        cp "$tax_src" "$tax_dest"
-    fi
-done
 
 # Run downstream pipeline (no checkInnerGroupIdt argument anymore)
 trisbst_args=()

@@ -419,7 +419,7 @@ write_complete_train <- function(path, final_identity) {
 
 real_run <- run
 run <- function(command, args, quiet_stderr = FALSE) {
-  if (command == "python3" && any(grepl("last_options.py", args, fixed = TRUE))) {
+  if (command == "python3" && any(grepl("last_options.py|run_manifest.py", args))) {
     return(real_run(command, args, quiet_stderr))
   }
   if (grepl("dwl_organism[.]sh", args[1])) {
@@ -429,7 +429,7 @@ run <- function(command, args, quiet_stderr = FALSE) {
       writeLines(
         c(
           "accession\tartifact_type\trelative_path",
-          paste(args[2], "file", basename(fake_fasta), sep = "\t")
+          if (!file.exists(paste0(cache_file,".complete.json"))) paste(args[2], "file", basename(fake_fasta), sep = "\t") else character()
         ),
         manifest_path
       )
@@ -438,8 +438,11 @@ run <- function(command, args, quiet_stderr = FALSE) {
   }
   if (grepl("last_train[.]sh", args[1])) {
     stopifnot(tail(args, 1) == "--date-free-cache")
-    dir.create(file.path(cache_root, paste0(acc_a, "db")))
+    cache_namespace <- gsub("^'|'$", "", args[7])
+    cache_file <<- train_file_path(cache_namespace, acc_a, acc_b)
+    dir.create(file.path(cache_namespace, paste0(acc_a, "db")))
     write_complete_train(cache_file, 88.5)
+    real_run("python3", c(shQuote(file.path(SRC_DIR,"lib","run_manifest.py")), "seal-file", shQuote(cache_file)))
     return(character())
   }
   stop("Unexpected command in test stub: ", command, " ", paste(args, collapse = " "))
@@ -463,7 +466,7 @@ next_day <- make_fetchers(data.frame(), modifyList(defaults, list(
 )))
 check(identical(next_day$get_identity(acc_b, acc_a), 88.5) &&
         identical(next_day$counters$trains, 0L) &&
-        identical(next_day$counters$downloads, 0L) &&
+        identical(next_day$counters$downloads, 2L) &&
         nrow(next_day$get_owned_artifacts()) == 0,
       "another run date reuses the complete pair cache without training or claiming ownership")
 run <- real_run
@@ -481,7 +484,7 @@ check(
   any(
     owned_after_replacement$storage == "train_cache" &
       owned_after_replacement$artifact_type == "file" &
-      owned_after_replacement$relative_path == basename(cache_file)
+      endsWith(owned_after_replacement$relative_path, basename(cache_file))
   ),
   "a regenerated complete train cache is owned by the current run"
 )
@@ -491,7 +494,7 @@ check(
       owned_after_replacement$artifact_type == "directory_tree" &
       owned_after_replacement$accession_1 == acc_a &
       owned_after_replacement$accession_2 == "" &
-      owned_after_replacement$relative_path == paste0(acc_a, "db")
+      endsWith(owned_after_replacement$relative_path, paste0(acc_a, "db"))
   ),
   "a current-run LAST database directory is owned by its reference accession"
 )

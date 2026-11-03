@@ -23,224 +23,100 @@ def write_file(path, content=""):
     path.write_text(content, encoding="utf-8")
 
 
-def create_run(dataset_dir, layout, date="20260101", stale_metadata=False):
-    run_dir = dataset_dir / date
-    metadata_dir = run_dir / "metadata"
+def create_run(dataset_dir, layout="current", date="20260101", stale_metadata=False):
+    run = dataset_dir / date
     organisms = []
-
-    for slot, short_name, accession, organism_name in SLOTS:
-        metadata_path = metadata_dir / f"{short_name}_{accession}.json"
-        write_file(metadata_path, "{}")
-        write_file(
-            metadata_dir / f"taxonomy_{metadata_path.name}",
-            json.dumps(
-                {
-                    "reports": [
-                        {
-                            "taxonomy": {
-                                "classification": {
-                                    "genus": {"name": organism_name.split()[0]},
-                                    "species": {"name": organism_name},
-                                }
-                            }
-                        }
-                    ]
-                }
-            ),
-        )
-        manifest_metadata = (
-            Path("/removed/results") / dataset_dir.name / date / "metadata" / metadata_path.name
-            if stale_metadata
-            else metadata_path
-        )
-        organisms.append(
-            {
-                "slot": slot,
-                "short_name": short_name,
-                "accession": accession,
-                "raw_organism_name": organism_name,
-                "metadata_json": str(manifest_metadata),
-            }
-        )
-
-    write_file(metadata_dir / "metadata_manifest.json", json.dumps({"organisms": organisms}))
-
-    artifact_root = run_dir if layout == "legacy" else run_dir / "statistics" / "misc"
-    write_file(artifact_root / f"Out1_gcContent_{date}.out", "Total GC content: 40%\n")
-    write_file(artifact_root / f"In2_gcContent_{date}.out", "Total GC content: 41%\n")
-    write_file(artifact_root / f"In3_gcContent_{date}.out", "Total GC content: 42%\n")
-    write_file(artifact_root / f"sbstRatio_{date}.out", "org2: 1.2\norg3: 1.3\n")
-
-    train_root = run_dir if layout == "legacy" else run_dir / "intermediateFiles"
-    for pair, identity in (("Out12In2", 90), ("Out12In3", 91), ("In22In3", 97)):
-        write_file(
-            train_root / f"{pair}_{date}.train",
-            f"# substitution percent identity: {identity}\n",
-        )
-
-    for _, short_name, accession, _ in SLOTS[1:]:
-        if layout == "legacy":
-            tsv_dir = run_dir
-            pdf_dir = run_dir
-        else:
-            tsv_dir = run_dir / "statistics" / short_name / "singlenuc"
-            pdf_dir = run_dir / "figs" / short_name / "singlenuc"
-        write_file(tsv_dir / f"{accession}_{short_name}_{date}.tsv", "context\tcount\n")
-        write_file(
-            pdf_dir / ("ratio" if layout == "current" else "") / f"{accession}_{short_name}_{date}_norm.pdf"
-        )
-        write_file(
-            pdf_dir / ("log-ratio" if layout == "current" else "") / f"{accession}_{short_name}_{date}_logRatio_mean.pdf"
-        )
-        write_file(
-            (run_dir / "figs" / short_name / "dinuc" if layout == "current" else pdf_dir)
-            / f"{accession}_{short_name}_{date}_dinuc.tsv.pdf"
-        )
-
-    return run_dir
+    artifacts = []
+    def artifact(kind, slot, relative, content):
+        path = run / relative
+        write_file(path, content)
+        entry = dict(kind=kind, slot=slot, path=relative, sha256=script.runs.sha256(path))
+        artifacts.append(entry)
+        return entry
+    for slot, name, accession, organism in SLOTS:
+        meta = f"metadata/{slot}.json"
+        tax = f"metadata/{slot}-taxonomy.json"
+        write_file(run / meta, "{}")
+        write_file(run / tax, json.dumps({'reports':[{'taxonomy':{'classification':{
+            'genus':{'name': organism.split()[0]}, 'species':{'name': organism}}}}]}))
+        organisms.append(dict(slot=slot, role='outgroup' if slot == 'org1' else 'ingroup',
+            short_name=name, accession=accession, raw_organism_name=organism,
+            fasta_sha256='fixture', gff_sha256=None, metadata_json=meta, taxonomy_json=tax,
+            metadata_json_sha256=script.runs.sha256(run / meta),
+            taxonomy_json_sha256=script.runs.sha256(run / tax)))
+        artifact('gc', slot, f"arbitrary/{slot}-gc.txt", "Total GC content: 40%\n")
+        artifact('coding', slot, f"arbitrary/{slot}-coding.txt", "Coding region percentage: 25.00%\n")
+        if slot != 'org1':
+            artifact('single', slot, f"tables/{slot}.tsv", "context\tcount\n")
+            artifact('dinuc', slot, f"tables/{slot}-dinuc.tsv", "mutType\tmutNum\ttotalRootNum\n")
+            for kind in ('norm','sbst','ori','logratio','dinuc_tsv'):
+                artifact('pdf_'+kind, slot, f"plots/{slot}-{kind}.pdf", "%PDF-fixture\n%%EOF")
+    artifact('sbst_ratio', 'all', 'ratios.txt', 'org2: 1.2\norg3: 1.3\n')
+    for pair, value in (('org1-org2',90),('org1-org3',91),('org2-org3',97)):
+        content = '# substitution percent identity: 10\n# substitution percent identity: '+str(value)+'\n'
+        content += ''.join('#last -'+option+' 1\n' for option in ('t','a','A','b','B','S'))
+        content += '# score matrix (query letters = columns, reference letters = rows):\n'
+        content += ''.join(letter+' 1 0 0 0\n' for letter in 'ACGT')
+        entry = artifact('train', pair, f"training/{pair}.txt", content)
+        entry.update(identity_percent=value, reference_slot=pair.split('-')[0], query_slot=pair.split('-')[1])
+    payload = dict(schema_version=2, trio_key='fixture-trio', run_key='fixture-run',
+                   created_at=date, date=date, options={}, status='complete',
+                   organisms=organisms, artifacts=artifacts)
+    if layout == 'legacy': payload.pop('schema_version')
+    write_file(run / script.runs.MANIFEST, json.dumps(payload))
+    return run
 
 
-class BuildSummaryCompatibilityTest(unittest.TestCase):
-    def test_coding_region_percentage_is_optional_and_collected_for_all_species(self):
-        for layout in ("current", "legacy"):
-            with self.subTest(layout=layout), tempfile.TemporaryDirectory() as tmp:
-                dataset_dir = Path(tmp) / "TrioA"
-                run_dir = create_run(dataset_dir, layout)
-                artifact_root = run_dir / "statistics/misc" if layout == "current" else run_dir
-                for _, short_name, _, _ in SLOTS:
-                    write_file(artifact_root / f"{short_name}_codingRegionPercentage_20260101.out",
-                               "Coding region percentage: 25.00%\n")
-                summary, _ = script.build_summary(dataset_dir, 80.0)
-                entry = summary["datasets"][0]
-                for slot in ("species1", "species2", "species3"):
-                    self.assertEqual(entry[slot]["coding_region_percentage"],
-                                     ["Coding region percentage: 25.00%"])
-                    self.assertTrue(Path(entry[slot]["coding_region_percentage_file"]).is_file())
-                self.assertEqual(summary["issues"], [])
-                self.assertEqual(report_contract.validate_summary(summary)[1], [])
-
-    def test_coding_region_percentage_contract_rejects_wrong_type(self):
+class BuildSummaryManifestTest(unittest.TestCase):
+    def test_reads_explicit_artifacts_and_final_identity(self):
         with tempfile.TemporaryDirectory() as tmp:
-            dataset_dir = Path(tmp) / "TrioA"
-            create_run(dataset_dir, "current")
-            summary, _ = script.build_summary(dataset_dir, 80.0)
-            self.assertEqual(report_contract.validate_summary(summary)[1], [])
-            for value in (25.0, "25%", [25.0]):
-                summary["datasets"][0]["species1"]["coding_region_percentage"] = value
-                self.assertTrue(any("coding_region_percentage" in error
-                                    for error in report_contract.validate_summary(summary)[1]))
+            run = create_run(Path(tmp)/'arbitrary')
+            summary, _ = script.build_summary(Path(tmp),80)
+            entry = summary['datasets'][0]
+            self.assertEqual(entry['dataset'],'fixture-trio')
+            self.assertEqual(entry['idt_12'],'90 %')
+            self.assertEqual(entry['species2']['tsv_file'],str(run/'tables/org2.tsv'))
+            self.assertEqual(entry['species1']['coding_region_percentage'],['Coding region percentage: 25.00%'])
+            self.assertEqual(report_contract.validate_summary(summary)[1],[])
 
-    def test_reads_current_layout_and_rebases_stale_metadata_paths(self):
+    def test_trio_table_uses_recorded_identity(self):
+        import summarize_trios
         with tempfile.TemporaryDirectory() as tmp:
-            dataset_dir = Path(tmp) / "TrioA"
-            run_dir = create_run(dataset_dir, "current", stale_metadata=True)
+            create_run(Path(tmp)/'arbitrary-folder')
+            rows,warnings=summarize_trios.collect_all_rows(Path(tmp))
+            self.assertEqual(len(rows),3)
+            self.assertEqual({row.trio_id for row in rows},{'fixture-trio'})
 
-            summary, _ = script.build_summary(dataset_dir, 80.0)
-
-            self.assertEqual(len(summary["datasets"]), 1)
-            entry = summary["datasets"][0]
-            self.assertEqual(entry["species2"]["metadata_json"], str(run_dir / "metadata" / "In2_GCA_2.json"))
-            self.assertIn("statistics/In2/singlenuc", entry["species2"]["tsv_file"])
-            self.assertEqual(summary["issues"], [])
-
-    def test_prefers_local_metadata_even_when_original_path_still_exists(self):
+    def test_directory_rename_preserves_logical_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            dataset_dir = root / "TrioA"
-            run_dir = create_run(dataset_dir, "current")
-            external_metadata = root / "original" / "In2_GCA_2.json"
-            write_file(external_metadata, "{}")
-            manifest_path = run_dir / "metadata" / "metadata_manifest.json"
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            manifest["organisms"][1]["metadata_json"] = str(external_metadata)
-            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            run = create_run(root/'old')
+            first, _ = script.build_summary(root,80)
+            run.rename(root/'renamed')
+            second, _ = script.build_summary(root,80)
+            for field in ('dataset','latest_run','idt_12','idt_13','idt_23'):
+                self.assertEqual(first['datasets'][0][field],second['datasets'][0][field])
 
-            summary, _ = script.build_summary(dataset_dir, 80.0)
-
-            self.assertEqual(
-                summary["datasets"][0]["species2"]["metadata_json"],
-                str(run_dir / "metadata" / "In2_GCA_2.json"),
-            )
-
-    def test_reads_legacy_run_root_layout(self):
+    def test_legacy_manifest_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
-            dataset_dir = Path(tmp) / "TrioLegacy"
-            run_dir = create_run(dataset_dir, "legacy")
+            create_run(Path(tmp)/'old', 'legacy')
+            with self.assertRaises(ValueError): script.build_summary(Path(tmp),80)
 
-            summary, _ = script.build_summary(dataset_dir, 80.0)
-
-            entry = summary["datasets"][0]
-            self.assertEqual(Path(entry["species2"]["tsv_file"]).parent, run_dir)
-            self.assertEqual(entry["idt_23"], "97 %")
-            self.assertEqual(summary["issues"], [])
-
-    def test_prefers_current_artifacts_when_legacy_files_also_exist(self):
+    def test_modified_artifact_is_rejected_without_filename_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:
-            dataset_dir = Path(tmp) / "TrioMixed"
-            run_dir = create_run(dataset_dir, "current")
-            write_file(run_dir / "GCA_2_In2_20260101.tsv", "legacy\n")
+            run = create_run(Path(tmp)/'new')
+            (run/'tables/org2.tsv').write_text('modified')
+            with self.assertRaises(ValueError): script.build_summary(Path(tmp),80)
 
-            summary, _ = script.build_summary(dataset_dir, 80.0)
-
-            self.assertIn("statistics/In2/singlenuc", summary["datasets"][0]["species2"]["tsv_file"])
-
-    def test_pdf_search_falls_back_after_excluding_current_ncds_only_matches(self):
+    def test_incomplete_run_is_not_a_full_report(self):
         with tempfile.TemporaryDirectory() as tmp:
-            dataset_dir = Path(tmp) / "TrioMixed"
-            run_dir = create_run(dataset_dir, "current")
-            for short_name, accession in (("In2", "GCA_2"), ("In3", "GCA_3")):
-                (run_dir / "figs" / short_name / "singlenuc" / "ratio" / f"{accession}_{short_name}_20260101_norm.pdf").unlink()
-                (run_dir / "figs" / short_name / "singlenuc" / "log-ratio" / f"{accession}_{short_name}_20260101_logRatio_mean.pdf").unlink()
-                write_file(run_dir / "figs" / short_name / "singlenuc" / "ratio" / f"{accession}_{short_name}_20260101_ncds_norm.pdf")
-                write_file(run_dir / "figs" / short_name / "singlenuc" / "log-ratio" / f"{accession}_{short_name}_20260101_ncds_logRatio_mean.pdf")
-                write_file(run_dir / f"{accession}_{short_name}_20260101_norm.pdf")
-                write_file(run_dir / f"{accession}_{short_name}_20260101_logRatio_mean.pdf")
+            run = create_run(Path(tmp)/'new')
+            payload = script.runs.load(run)
+            payload['status']='identity_complete'
+            script.runs.atomic_json(run/script.runs.MANIFEST,payload)
+            summary,_=script.build_summary(Path(tmp),80)
+            self.assertEqual(summary['datasets'],[])
 
-            summary, _ = script.build_summary(dataset_dir, 80.0)
-
-            self.assertEqual(
-                Path(summary["datasets"][0]["species2"]["pdfs"]["norm"][0]).parent,
-                run_dir,
-            )
-            self.assertEqual(summary["issues"], [])
-
-    def test_lineage_root_ignores_non_dataset_directories(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp) / "lineage"
-            create_run(root / "TrioA", "current")
-            (root / "pca" / "20260101").mkdir(parents=True)
-            (root / "tmp").mkdir()
-
-            summary, _ = script.build_summary(root, 80.0)
-
-            self.assertEqual([entry["dataset"] for entry in summary["datasets"]], ["TrioA"])
-            self.assertEqual(summary["issues"], [])
-
-    def test_reports_missing_manifest_in_newest_run(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp) / "lineage"
-            dataset_dir = root / "TrioA"
-            create_run(dataset_dir, "current")
-            (dataset_dir / "20260102").mkdir()
-
-            summary, _ = script.build_summary(root, 80.0)
-
-            self.assertEqual(summary["datasets"], [])
-            self.assertEqual(len(summary["issues"]), 1)
-            self.assertIn("Metadata manifest not found", summary["issues"][0])
-
-    def test_reports_missing_manifest_in_first_incomplete_run(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp) / "lineage"
-            (root / "Out1_In2_In3" / "20260101").mkdir(parents=True)
-            (root / "pca" / "20260101").mkdir(parents=True)
-
-            summary, _ = script.build_summary(root, 80.0)
-
-            self.assertEqual(summary["datasets"], [])
-            self.assertEqual(len(summary["issues"]), 1)
-            self.assertTrue(summary["issues"][0].startswith("Out1_In2_In3:"))
-            self.assertIn("Metadata manifest not found", summary["issues"][0])
 
 
 class ReportContractTest(unittest.TestCase):

@@ -8,53 +8,11 @@ train_file_path <- function(cache_dir, acc_a, acc_b) {
 
 parse_train_identity <- function(path) {
   if (!file.exists(path)) return(NA_real_)
-  lines <- readLines(path, warn = FALSE)
-  identity_lines <- which(startsWith(lines, IDENTITY_PREFIX))
-  if (!length(identity_lines)) return(NA_real_)
-
-  # Intermediate training iterations also contain identity lines. The final
-  # identity is the last one and is valid only when followed by the complete
-  # parameter block consumed by lastal -p.
-  identity_idx <- tail(identity_lines, 1)
-  value_text <- trimws(sub(IDENTITY_PREFIX, "", lines[identity_idx], fixed = TRUE))
-  if (!grepl("^[0-9]+([.][0-9]+)?$", value_text)) return(NA_real_)
-  value <- as.numeric(value_text)
-  if (!is.finite(value) || value < 0 || value > 100) return(NA_real_)
-  if (identity_idx >= length(lines)) return(NA_real_)
-
-  final_block <- lines[(identity_idx + 1):length(lines)]
-  required_parameters <- c(
-    "#last -t", "#last -a", "#last -A",
-    "#last -b", "#last -B", "#last -S"
-  )
-  if (!all(vapply(
-    required_parameters,
-    function(prefix) any(startsWith(final_block, prefix)),
-    logical(1)
-  ))) return(NA_real_)
-
-  matrix_headers <- which(
-    final_block == "# score matrix (query letters = columns, reference letters = rows):"
-  )
-  if (!length(matrix_headers)) return(NA_real_)
-  matrix_idx <- tail(matrix_headers, 1)
-  if (matrix_idx >= length(final_block)) return(NA_real_)
-
-  score_number <- "-?[0-9]+([.][0-9]+)?"
-  row_pattern <- paste0(
-    "^([ACGT])[[:space:]]+", score_number,
-    "[[:space:]]+", score_number,
-    "[[:space:]]+", score_number,
-    "[[:space:]]+", score_number,
-    "[[:space:]]*$"
-  )
-  matrix_rows <- sub(
-    row_pattern, "\\1",
-    grep(row_pattern, final_block[(matrix_idx + 1):length(final_block)], value = TRUE)
-  )
-  if (!setequal(matrix_rows, c("A", "C", "G", "T"))) return(NA_real_)
-
-  value
+  output <- suppressWarnings(system2("python3", c(shQuote(file.path(SRC_DIR, "lib", "train_identity.py")),
+                    shQuote(path)), stdout=TRUE, stderr=FALSE))
+  if (!is.null(attr(output, "status")) && attr(output, "status") != 0L) return(NA_real_)
+  value <- suppressWarnings(as.numeric(tail(output, 1)))
+  if (length(value) != 1 || !is.finite(value)) NA_real_ else value
 }
 
 remove_invalid_train_cache <- function(train) {
@@ -117,8 +75,6 @@ make_fetchers <- function(leaves, opts) {
   cache_dir <- resolve_train_cache_dir(opts)
   dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
   Sys.setenv(THREAD_NUM = opts$threads)
-  run("python3", c(shQuote(file.path(SRC_DIR, "lib", "last_options.py")),
-                   "guard", shQuote(cache_dir), "training"))
 
   append_owned <- function(records) {
     if (nrow(records)) {
@@ -169,23 +125,34 @@ make_fetchers <- function(leaves, opts) {
     hit <- idt_cache[[key]]
     if (!is.null(hit)) return(hit)
 
-    train <- train_file_path(cache_dir, a1, a2)
-    val <- parse_train_identity(train)
+    # Hash actual inputs before considering a cross-run cache hit.
+    fa1 <- get_fasta(a1); fa2 <- get_fasta(a2)
+    namespace <- tail(run("python3", c(shQuote(file.path(SRC_DIR, "lib", "run_manifest.py")),
+      "training-directory", shQuote(cache_dir), shQuote(fa1), shQuote(fa2), a1, a2)), 1)
+    dir.create(namespace, recursive = TRUE, showWarnings = FALSE)
+    train <- train_file_path(namespace, a1, a2)
+    valid_seal <- if (file.exists(train)) {
+      status <- system2("python3", c(shQuote(file.path(SRC_DIR, "lib", "run_manifest.py")),
+                        "verify-file", shQuote(train)), stdout=FALSE, stderr=FALSE)
+      identical(status, 0L)
+    } else FALSE
+    val <- if (valid_seal) parse_train_identity(train) else NA_real_
     if (is.na(val)) {
       # last_train.sh treats every existing path as complete. Remove partial
       # files and dangling links first so interrupted cache writes can recover.
       remove_invalid_train_cache(train)
-      fa1 <- get_fasta(a1); fa2 <- get_fasta(a2)
       db_relative <- paste0(a1, "db")
-      db_path <- file.path(cache_dir, db_relative)
+      db_path <- file.path(namespace, db_relative)
       db_preexisting <- path_exists_without_following(db_path)
       run("bash", c(shQuote(LAST_TRAIN), opts$date, shQuote(fa1), shQuote(fa2),
-                    a1, a2, shQuote(cache_dir), "--date-free-cache"))
+                    a1, a2, shQuote(namespace), "--date-free-cache"))
       counters$trains <- counters$trains + 1L
       val <- parse_train_identity(train)
       if (!opts$keep_unused_species_data) {
-        append_owned(trained_owned_artifacts(train, db_path, db_relative,
-                                             db_preexisting, a1, a2))
+        records <- trained_owned_artifacts(train, db_path, db_relative,
+                                           db_preexisting, a1, a2)
+        if (nrow(records)) records$relative_path <- file.path("v2", basename(namespace), records$relative_path)
+        append_owned(records)
       }
     }
     idt_cache[[key]] <- val

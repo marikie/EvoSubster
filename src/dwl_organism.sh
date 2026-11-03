@@ -431,15 +431,24 @@ DWL_QUERY_PARAMS="${DWL_QUERY_PARAMS#&}"
 
 mkdir -p "$OUT_DIR"
 # Temporary dest_dir placeholder; real dir determined after name resolution
-tmp_dest="$OUT_DIR/__tmp_dwl_${ACCESSION}"
-mkdir -p "$tmp_dest"
+tmp_dest=$(mktemp -d "$OUT_DIR/.summary-staging-XXXXXX") || exit 1
 
 ncbi_info=$(get_org_info_from_ncbi "$ACCESSION" "$OVERRIDE_NAME" "$tmp_dest") || exit 1
 
 IFS='|' read -r dir_name summary_json_path raw_organism_name ncbi_full_name tax_id <<< "$ncbi_info"
+REQUESTED_ACCESSION="$ACCESSION"
+ACCESSION=$(jq -r '.reports[0].accession // empty' "$summary_json_path") || exit 1
+if [[ ! "$ACCESSION" =~ ^(GCA|GCF)_[0-9]+\.[0-9]+$ ]]; then
+    echo "Error: summary did not resolve an exact versioned assembly accession." >&2
+    exit 1
+fi
+
 
 # Move summary JSON to final org dir
-org_dir="$OUT_DIR/$dir_name"
+org_dir="$OUT_DIR/assemblies/$ACCESSION"
+mkdir -p "$OUT_DIR/assemblies" || exit 1
+exec 7>"$OUT_DIR/assemblies/.${ACCESSION}.download.lock"
+flock 7 || exit 1
 org_dir_preexisting=0
 if [ -n "$ARTIFACT_MANIFEST" ] && { [ -e "$org_dir" ] || [ -L "$org_dir" ]; }; then
     org_dir_preexisting=1
@@ -454,11 +463,6 @@ if [ -n "$ARTIFACT_MANIFEST" ] && { [ -e "$org_dir" ] || [ -L "$org_dir" ]; }; t
 fi
 mkdir -p "$org_dir"
 final_summary_json="$org_dir/${ACCESSION}.json"
-if [ "$summary_json_path" != "$final_summary_json" ]; then
-    mv "$summary_json_path" "$final_summary_json" 2>/dev/null || cp "$summary_json_path" "$final_summary_json"
-fi
-rmdir "$tmp_dest" 2>/dev/null || true
-summary_json_path="$final_summary_json"
 
 echo "Organism: $ncbi_full_name (dir: $dir_name)" >&2
 
@@ -467,9 +471,9 @@ echo "Organism: $ncbi_full_name (dir: $dir_name)" >&2
 fasta_path=""
 if [ "$NO_GENOME" -eq 0 ]; then
     _need_download=1
-    if [ "$FORCE" -eq 0 ] && has_fasta_files "$org_dir" "$ACCESSION"; then
-        _existing=$(find_first_fasta "$org_dir" "$ACCESSION")
-        if is_valid_fasta "$_existing"; then
+    if [ "$FORCE" -eq 0 ] && has_fasta_files "$org_dir/genome" "$ACCESSION"; then
+        _existing=$(find_first_fasta "$org_dir/genome" "$ACCESSION")
+        if is_valid_fasta "$_existing" && python3 "$SCRIPT_DIR/lib/run_manifest.py" bundle-gff "$_existing" "$ACCESSION" >/dev/null; then
             echo "Genome files already exist for $dir_name; skipping download." >&2
             _need_download=0
         else
@@ -478,8 +482,9 @@ if [ "$NO_GENOME" -eq 0 ]; then
     fi
     if [ "$_need_download" -eq 1 ]; then
         echo "Downloading genome for $dir_name ($ACCESSION)..." >&2
+        staging_dir=$(mktemp -d "$org_dir/.genome-staging-XXXXXX") || exit 1
         (
-            cd "$org_dir"
+            cd "$staging_dir"
             if ! curl_with_retry -sS --fail -o ncbi_dataset.zip \
                 "https://api.ncbi.nlm.nih.gov/datasets/v2/genome/accession/$ACCESSION/download?${DWL_QUERY_PARAMS}"; then
                 echo "Error: Failed to download genome for $ACCESSION" >&2
@@ -490,13 +495,34 @@ if [ "$NO_GENOME" -eq 0 ]; then
                 exit 1
             fi
         ) || exit 1
-        process_genome_zip "$org_dir" "$ACCESSION" >&2 || exit 1
+        process_genome_zip "$staging_dir" "$ACCESSION" >&2 || exit 1
+        staged_fasta=$(find_first_fasta "$staging_dir" "$ACCESSION")
+        is_valid_fasta "$staged_fasta" || exit 1
+        python3 "$SCRIPT_DIR/lib/run_manifest.py" bundle-save "$staging_dir" "$ACCESSION" "$staged_fasta" || exit 1
+        mkdir -p "$org_dir/versions" || exit 1
+        version_name="$(basename "$staging_dir")"
+        mv "$staging_dir" "$org_dir/versions/$version_name" || exit 1
+        python3 - "$org_dir" "$version_name" <<'PYPUBLISH' || exit 1
+import os, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+temporary = root / ('.genome-pointer-' + str(os.getpid()))
+temporary.symlink_to('versions/' + sys.argv[2], target_is_directory=True)
+os.replace(temporary, root / 'genome')
+PYPUBLISH
+
     fi
-    fasta_path=$(find_first_fasta "$org_dir" "$ACCESSION")
+    fasta_path=$(find_first_fasta "$org_dir/genome" "$ACCESSION")
     if [ -z "$fasta_path" ]; then
         echo "Warning: No FASTA file found in $org_dir after download." >&2
     fi
 fi
+
+if [ "$summary_json_path" != "$final_summary_json" ]; then
+    mv "$summary_json_path" "$final_summary_json" 2>/dev/null || cp "$summary_json_path" "$final_summary_json" || exit 1
+fi
+rmdir "$tmp_dest" 2>/dev/null || true
+summary_json_path="$final_summary_json"
 
 # --- step 3: taxonomy download ---
 
@@ -536,7 +562,7 @@ fi
 
 if [ -n "$ARTIFACT_MANIFEST" ]; then
     write_artifact_manifest \
-        "$ARTIFACT_MANIFEST" "$org_dir" "$dir_name" "$org_dir_preexisting" \
+        "$ARTIFACT_MANIFEST" "$org_dir" "assemblies/$ACCESSION" "$org_dir_preexisting" \
         "$ARTIFACT_BEFORE_SNAPSHOT" || exit 1
 fi
 

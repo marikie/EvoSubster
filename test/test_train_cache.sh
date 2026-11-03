@@ -72,25 +72,34 @@ check "rejects an accession without a version" \
 cache_dir="$tmp_dir/cache"
 dest_dir="$tmp_dir/dest"
 mkdir -p "$cache_dir" "$dest_dir"
+ref_fasta="$tmp_dir/reference.fa"
+query_fasta="$tmp_dir/query.fa"
+printf '>ref\nACGT\n' > "$ref_fasta"
+printf '>query\nAGGT\n' > "$query_fasta"
+namespace=$(python3 "$ROOT_DIR/src/lib/run_manifest.py" training-directory "$cache_dir" "$ref_fasta" "$query_fasta" GCA_000000001.1 GCA_000000002.1)
+mkdir -p "$namespace"
+
 
 # Forward-orientation reuse copies validated content and survives cache cleanup.
-forward_cache="$cache_dir/GCA_000000001.12GCA_000000002.1.train"
+forward_cache="$namespace/GCA_000000001.12GCA_000000002.1.train"
 forward_dest="$dest_dir/forward.train"
 write_valid_train "$forward_cache"
+python3 "$ROOT_DIR/src/lib/run_manifest.py" seal-file "$forward_cache"
 reuse_cached_train "$cache_dir" "20260723" \
-    "GCA_000000001.1" "GCA_000000002.1" "$forward_dest"
+    "GCA_000000001.1" "GCA_000000002.1" "$forward_dest" "$ref_fasta" "$query_fasta"
 check "reuses a forward-orientation cache entry" test -f "$forward_dest"
 check "materializes a regular file instead of a symlink" test ! -L "$forward_dest"
 reuse_cached_train "$cache_dir" "20260724" \
-    "GCA_000000001.1" "GCA_000000002.1" "$dest_dir/next-day.train"
+    "GCA_000000001.1" "GCA_000000002.1" "$dest_dir/next-day.train" "$ref_fasta" "$query_fasta"
 check "reuses the same cache on another run date" is_valid_train_file "$dest_dir/next-day.train"
 rm -f "$forward_cache"
 check "reused output remains valid after cache cleanup" is_valid_train_file "$forward_dest"
 
 # Reverse orientation must not use parameters trained in the opposite direction.
-reverse_cache="$cache_dir/GCA_000000001.12GCA_000000002.1.train"
+reverse_cache="$namespace/GCA_000000001.12GCA_000000002.1.train"
 reverse_dest="$dest_dir/reverse.train"
 write_valid_train "$reverse_cache"
+python3 "$ROOT_DIR/src/lib/run_manifest.py" seal-file "$reverse_cache"
 reuse_cached_train "$cache_dir" "20260723" \
     "GCA_000000002.1" "GCA_000000001.1" "$reverse_dest"
 check "skips a reverse-orientation cache entry" test ! -e "$reverse_dest"
@@ -99,7 +108,7 @@ check "skips a reverse-orientation cache entry" test ! -e "$reverse_dest"
 dangling_dest="$dest_dir/dangling.train"
 ln -s "$tmp_dir/missing-cache.train" "$dangling_dest"
 reuse_cached_train "$cache_dir" "20260723" \
-    "GCA_000000001.1" "GCA_000000002.1" "$dangling_dest"
+    "GCA_000000001.1" "GCA_000000002.1" "$dangling_dest" "$ref_fasta" "$query_fasta"
 check "replaces a dangling destination link" test -f "$dangling_dest"
 check "recovered destination is no longer a symlink" test ! -L "$dangling_dest"
 
@@ -194,9 +203,15 @@ printf '>c\nACGT\n' > "$fasta3"
 acc1="GCA_000000011.1"
 acc2="GCA_000000022.1"
 acc3="GCA_000000033.1"
-write_valid_train "$pipeline_cache/${acc1}2${acc2}.train" 91
-write_valid_train "$pipeline_cache/${acc1}2${acc3}.train" 92
-write_valid_train "$pipeline_cache/${acc2}2${acc3}.train" 93
+for spec in "1 2 $acc1 $acc2 91" "1 3 $acc1 $acc3 92" "2 3 $acc2 $acc3 93"; do
+    read -r first second ref_acc query_acc identity <<< "$spec"
+    ref_var="fasta$first"; query_var="fasta$second"
+    namespace=$(PATH="$stub_bin:$PATH" python3 "$ROOT_DIR/src/lib/run_manifest.py" training-directory "$pipeline_cache" "${!ref_var}" "${!query_var}" "$ref_acc" "$query_acc")
+    mkdir -p "$namespace"
+    profile="$namespace/${ref_acc}2${query_acc}.train"
+    write_valid_train "$profile" "$identity"
+    python3 "$ROOT_DIR/src/lib/run_manifest.py" seal-file "$profile"
+done
 
 PATH="$stub_bin:$PATH" \
 ALIGN_DIR_OVERRIDE="$stub_align" \

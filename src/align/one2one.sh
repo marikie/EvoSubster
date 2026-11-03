@@ -22,6 +22,10 @@ last_options_guard "$o2omaf" alignment || exit 1
 
 alignmentDbDir="${dbDir}.seed-${seedScheme}"
 alignmentDbBasename=$(basename "$alignmentDbDir")
+MANIFEST_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/run_manifest.py"
+if [ -d "$alignmentDbDir" ] && ! python3 "$MANIFEST_HELPER" verify-directory "$alignmentDbDir" >/dev/null 2>&1; then
+    rm -rf "$alignmentDbDir" || exit 1
+fi
 # lastdb
 echo "---lastdb"
 if [ ! -d "$alignmentDbDir" ]; then
@@ -33,6 +37,7 @@ if [ ! -d "$alignmentDbDir" ]; then
 	if (cd "$alignmentDbTmp" && \
 		echo "time lastdb ${LASTDB_ALIGN_ARGS[*]} $alignmentDbBasename $org1FASTA" && \
 		time lastdb "${LASTDB_ALIGN_ARGS[@]}" "$alignmentDbBasename" "$org1FASTA"); then
+		python3 "$MANIFEST_HELPER" seal-directory "$alignmentDbTmp" || exit 1
 		mv "$alignmentDbTmp" "$alignmentDbDir"
 	else
 		rm -rf "$alignmentDbTmp"

@@ -53,7 +53,7 @@ During execution the wrapper:
 
 - Downloads each accession via `datasets` (includes: `genome`, `gff3`, `rna`, `cds`, `protein`, `seq-report`). If a genomic FASTA is already present and passes a basic validity check (non-empty, starts with `>`), the download is skipped. If the file fails validation (e.g. truncated from a previous interrupted download), it is re-downloaded automatically. Pass `--force` to bypass the check and re-download unconditionally.
 - Unpacks the archives, prunes helper directories, and moves FASTA/GFF assets into the genome directory.
-- Detects `genomic.gff` for each species; if missing, downstream steps receive `NO_GFF_FILE`.
+- Downloads assembly-isolated, checksum-verified FASTA/GFF bundles. Missing annotations are recorded explicitly as `NO_GFF_FILE`.
 - Resolves FASTA paths and invokes `sbst.sh` with the appropriate arguments.
 
 ### Select trios from a Newick tree
@@ -66,10 +66,10 @@ Tree mode selects assemblies and candidate outgroups, downloads genomes and
 builds `last-train` caches on demand, then runs the pipeline for each selected
 trio.
 
-Training caches use date-free accession-pair names (`<ACC1>2<ACC2>.train`) and
-LAST database directories (`<ACC>db/`), so the same `--train-cache-dir` can be
-reused across run dates. Older date-suffixed cache entries are left intact and
-are not reused automatically. Ordinary pipeline result filenames retain the run date.
+Training caches use date-free accession-pair filenames inside content-addressed
+`v2/<training-key>/` namespaces. The same cache root can hold multiple input and
+option combinations across run dates. Legacy flat caches remain on disk and are
+not reused. Ordinary result filenames retain their display names and run label.
 
 Identity conditions can be configured independently:
 
@@ -353,7 +353,7 @@ the three positional accessions; `--selection-config` requires `--trios`.
   reuse is enabled only when all three filenames begin with a versioned
   `GCA_...` or `GCF_...` accession.
 - Supply the outgroup GFF path or use `NO_GFF_FILE`.
-- Ingroup annotations default to `genomic.gff` beside each FASTA. Use
+- Ingroup annotations default to `NO_GFF_FILE`. Supply annotation paths explicitly with
   `--org2-gff PATH` / `--org3-gff PATH` to specify another file, or
   `NO_GFF_FILE` as the option value to skip that species explicitly.
 - `--out-dir`, `--thread`, and `--idt-only` behave the same as in the download wrapper.
@@ -391,7 +391,7 @@ This script:
 Results reside under:
 
 ```
-<out_dir>/<ORG1>_<ORG2>_<ORG3>/<DATE>/
+<out_dir>/<trio-key>/<DATE>-<run-key>/
 ├── intermediateFiles/       # MAF and LAST training files
 ├── figs/
 │   ├── <ORG2>/singlenuc/{ratio,log-ratio,count}/
@@ -471,13 +471,30 @@ the trained parameter-file connection, required MAF output, or alignment directi
 are rejected before downloads. Unknown options are rejected using the LAST 1648
 CLI definition; the underlying LAST command validates parameter values.
 
-Effective settings are saved in `metadata/last_options.json` for each trio run,
-and in settings files beside cached training/alignment products. Reusing a
-directory with different settings fails and preserves its existing results;
-choose another date or `--out-dir`, and a separate `--train-cache-dir` when training
-settings change. Legacy outputs without settings records cannot be reused by a stage receiving
-additional LAST options. Unchanged training settings can still reuse their cache. FASTA record order still affects tied mappings;
-these CLI options do not reorder genomes or update historical expected TSVs.
+Effective settings, ordered input SHA256 hashes, assembly versions, stage completion,
+and relative artifact paths are saved in `metadata/metadata_manifest.json` (schema 2).
+Run and training cache keys include content, direction, effective LAST settings,
+threads, and algorithm/tool versions. Different inputs or settings allocate different
+keys automatically. Existing unverified outputs and legacy manifests are rejected;
+rerun old analyses into a new output directory. Folder names are display/storage
+choices, never assembly or artifact identities. FASTA record order is preserved.
+
+Reports, PCA, and trio aggregation consume completed schema-2 manifests and recorded
+artifact paths. Moving or renaming a whole run preserves its meaning. Training-only
+runs record `identity_complete` and are excluded from complete-analysis reports.
+The identity reported is from LAST's complete final training block.
+
+Plotting requires Courier Prime (weight 700) and Roboto (regular and bold).
+Set `EVOSUBSTER_FONT_CACHE` to a writable reusable font directory; by default it is
+`~/.cache/evo-subster/fonts`. Missing faces are downloaded from Google Fonts and
+validated before plotting. An unavailable required font or failed plot makes the
+pipeline fail. PDFs are generated privately and published after the full set succeeds.
+
+Overall substitution ratios exclude columns containing gaps or ambiguous bases in
+any of the three genomes. DBS tests use a categorical goodness-of-fit null with
+nine original double substitutions equally probable, preserving reverse-complement
+folding multiplicities. Low expected counts use multinomial Monte Carlo with
+10,000 replicates and seed 1.
 
 ## Pipeline regression checks
 
@@ -526,7 +543,7 @@ runs into a single rendered report (Word, PDF, or HTML).
 ```
 
 `input_dir` is a lineage root (`results/<lineage>`) or a single trio root
-(`results/<ORG1>_<ORG2>_<ORG3>`). This runs `collect_run_summary.py`, which
+(`results/<trio-key>`). This runs `collect_run_summary.py`, which
 gathers run metadata into a JSON summary (default:
 `<input_dir>/<name>_summary.json`), then `render_report.sh`, which renders it
 via R Markdown.

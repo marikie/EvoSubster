@@ -72,8 +72,6 @@ def extract_genus_label(metadata_entry: dict) -> Optional[str]:
     candidates = [
         metadata_entry.get("raw_organism_name"),
         metadata_entry.get("ncbi_full_name"),
-        metadata_entry.get("directory_name"),
-        metadata_entry.get("short_name"),
     ]
     for candidate in candidates:
         if not candidate:

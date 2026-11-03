@@ -23,8 +23,8 @@ Positional arguments:
 
 Options:
   --out-dir PATH              Output directory (default: ./results)
-  --org2-gff PATH             Ingroup 2 GFF (default: genomic.gff beside its FASTA)
-  --org3-gff PATH             Ingroup 3 GFF (default: genomic.gff beside its FASTA)
+  --org2-gff PATH             Ingroup 2 GFF (default: NO_GFF_FILE)
+  --org3-gff PATH             Ingroup 3 GFF (default: NO_GFF_FILE)
   --train-cache-dir PATH      Directory containing cached last-train files
   --accession-ids A1 A2 A3   Exact NCBI accessions for cache keys; normally supplied by sbst_fromDwl.sh
   --thread N                  Number of threads for LAST alignment (default: 8)
@@ -298,12 +298,7 @@ gff_fastas=("$org1FASTA" "$org2FASTA" "$org3FASTA")
 gff_paths=("$org1GFF" "$org2GFF" "$org3GFF")
 for i in 0 1 2; do
     if [ "$i" -gt 0 ] && [ -z "${gff_paths[$i]}" ]; then
-        candidate="$(dirname "${gff_fastas[$i]}")/genomic.gff"
-        if [ -f "$candidate" ]; then
-            gff_paths[$i]="$candidate"
-        else
-            gff_paths[$i]="NO_GFF_FILE"
-        fi
+        gff_paths[$i]="NO_GFF_FILE"
     fi
     if [ "${gff_paths[$i]}" != "NO_GFF_FILE" ]; then
         if [ ! -f "${gff_paths[$i]}" ] || [ ! -r "${gff_paths[$i]}" ]; then
@@ -318,9 +313,6 @@ org1GFF="${gff_paths[0]}"
 # Propagate thread count to child scripts (last_train.sh / one2one.sh).
 threadNum="$THREAD_NUM_OVERRIDE"
 export THREAD_NUM="$threadNum"
-if [ -n "$TRAIN_CACHE_DIR" ]; then
-    last_options_guard "$TRAIN_CACHE_DIR" training || exit 1
-fi
 
 # Extract the name of the parent directory of $org1FASTA
 org1DirName="$(basename "$(dirname "$org1FASTA")")"
@@ -335,6 +327,12 @@ org3FullName="${org3DirName}_3"
 org1ShortName=$(make_short_name "$org1FullName" "1")
 org2ShortName=$(make_short_name "$org2FullName" "2")
 org3ShortName=$(make_short_name "$org3FullName" "3")
+
+if [ -n "${EVOSUBSTER_METADATA_INPUT:-}" ]; then
+    mapfile -t display_names < <(python3 -c 'import json,sys; print("\n".join(e["short_name"] for e in json.load(open(sys.argv[1]))))' "$EVOSUBSTER_METADATA_INPUT")
+    [ "${#display_names[@]}" -eq 3 ] || exit 1
+    org1ShortName="${display_names[0]}"; org2ShortName="${display_names[1]}"; org3ShortName="${display_names[2]}"
+fi
 
 org1ID=$(extract_accession_from_path "$org1FASTA")
 org2ID=$(extract_accession_from_path "$org2FASTA")
@@ -378,8 +376,21 @@ if [ ! -d "$outDirBase" ]; then
         exit 1
     fi
 fi
-outDirPath="${outDirBase}/${org1ShortName}_${org2ShortName}_${org3ShortName}"
-last_options_guard "$outDirPath/$DATE" run || exit 1
+MANIFEST_HELPER="$SCRIPT_DIR/lib/run_manifest.py"
+manifest_args=("$outDirBase" "$DATE" "$threadNum"
+    "$org1FASTA" "${gff_paths[0]}" "$cacheOrg1ID" "$org1ShortName"
+    "$org2FASTA" "${gff_paths[1]}" "$cacheOrg2ID" "$org2ShortName"
+    "$org3FASTA" "${gff_paths[2]}" "$cacheOrg3ID" "$org3ShortName")
+run_path=$(python3 "$MANIFEST_HELPER" path "${manifest_args[@]}") || exit 1
+mkdir -p "$run_path" || exit 1
+exec 9>"$run_path/.run.lock"
+flock -n 9 || { echo "Error: run is already active: $run_path" >&2; exit 1; }
+python3 "$MANIFEST_HELPER" prepare "${manifest_args[@]}" >/dev/null || exit 1
+outDirPath="$run_path"
+# A resumed run retains its recorded display labels even if input folders moved.
+mapfile -t run_names < <(python3 -c 'import json,sys; print("\n".join(e["short_name"] for e in json.load(open(sys.argv[1]))["organisms"]))' "$run_path/metadata/metadata_manifest.json")
+org1ShortName="${run_names[0]}"; org2ShortName="${run_names[1]}"; org3ShortName="${run_names[2]}"
+
 
 gcContent_org1=$(get_config '.patterns.gc_content' | sed "s/{org_short}/$org1ShortName/g" | sed "s/{date}/$DATE/g")
 gcContent_org2=$(get_config '.patterns.gc_content' | sed "s/{org_short}/$org2ShortName/g" | sed "s/{date}/$DATE/g")
@@ -405,17 +416,7 @@ org3tsv_ncds="${org3ID}_${org3ShortName}_${DATE}_ncds.tsv"
 org2_dinuc_tsv_ncds="${org2ID}_${org2ShortName}_${DATE}_dinuc_ncds.tsv"
 org3_dinuc_tsv_ncds="${org3ID}_${org3ShortName}_${DATE}_dinuc_ncds.tsv"
 
-if [ ! -d "$outDirPath" ]; then
-	echo "---making $outDirPath"
-	mkdir -p "$outDirPath"
-fi
-cd "$outDirPath"
-if [ ! -d "$DATE" ]; then
-	echo "---making $DATE"
-	mkdir "$DATE"
-fi
-cd "$DATE"
-outDirPath=$(pwd)
+cd "$outDirPath" || exit 1
 last_options_guard "$outDirPath/intermediateFiles" training || exit 1
 echo "pwd: $(pwd)"
 
@@ -466,19 +467,19 @@ org3_dinuc_tsv_ncds="${stat_org3}/dinuc/${org3_dinuc_tsv_ncds}"
 echo "$(get_config '.messages.gc_content')"
 if [ ! -e "$gcContent_org1" ]; then
 echo "time bash $METRICS_DIR/gc_content.sh $org1FASTA >$gcContent_org1"
-time bash "$METRICS_DIR/gc_content.sh" "$org1FASTA" >"$gcContent_org1"
+time bash "$METRICS_DIR/gc_content.sh" "$org1FASTA" >"$gcContent_org1" || exit 1
 else
 	echo "$gcContent_org1 already exists"
 fi
 if [ ! -e "$gcContent_org2" ]; then
 echo "time bash $METRICS_DIR/gc_content.sh $org2FASTA >$gcContent_org2"
-time bash "$METRICS_DIR/gc_content.sh" "$org2FASTA" >"$gcContent_org2"
+time bash "$METRICS_DIR/gc_content.sh" "$org2FASTA" >"$gcContent_org2" || exit 1
 else
 	echo "$gcContent_org2 already exists"
 fi
 if [ ! -e "$gcContent_org3" ]; then
 echo "time bash $METRICS_DIR/gc_content.sh $org3FASTA >$gcContent_org3"
-time bash "$METRICS_DIR/gc_content.sh" "$org3FASTA" >"$gcContent_org3"
+time bash "$METRICS_DIR/gc_content.sh" "$org3FASTA" >"$gcContent_org3" || exit 1
 else
 	echo "$gcContent_org3 already exists"
 fi
@@ -505,17 +506,32 @@ done
 
 # Run last-train to check substitution percent identity between org1 and org2
 echo "$(get_config '.options.checkIdt.enabled_message')"
-reuse_cached_train "$TRAIN_CACHE_DIR" "$DATE" "$cacheOrg1ID" "$cacheOrg2ID" "$train12" || exit 1
-time bash "$ALIGN_DIR/last_train.sh" "$DATE" "$org1FASTA" "$org2FASTA" "$org1ShortName" "$org2ShortName" "$imf"
+reuse_cached_train "$TRAIN_CACHE_DIR" "$DATE" "$cacheOrg1ID" "$cacheOrg2ID" "$train12" "$org1FASTA" "$org2FASTA" || exit 1
+time bash "$ALIGN_DIR/last_train.sh" "$DATE" "$org1FASTA" "$org2FASTA" "$org1ShortName" "$org2ShortName" "$imf" || exit 1
 # Run last-train to check substitution percent identity between org1 and org3
 echo "$(get_config '.options.checkIdt.enabled_message')"
-reuse_cached_train "$TRAIN_CACHE_DIR" "$DATE" "$cacheOrg1ID" "$cacheOrg3ID" "$train13" || exit 1
-time bash "$ALIGN_DIR/last_train.sh" "$DATE" "$org1FASTA" "$org3FASTA" "$org1ShortName" "$org3ShortName" "$imf"
+reuse_cached_train "$TRAIN_CACHE_DIR" "$DATE" "$cacheOrg1ID" "$cacheOrg3ID" "$train13" "$org1FASTA" "$org3FASTA" || exit 1
+time bash "$ALIGN_DIR/last_train.sh" "$DATE" "$org1FASTA" "$org3FASTA" "$org1ShortName" "$org3ShortName" "$imf" || exit 1
 # Run last-train to check substitution percent identity between org2 and org3 (inner group)
 echo "$(get_config '.options.checkIdt.enabled_message')"
 reuse_cached_train "$TRAIN_CACHE_DIR" "$DATE" "$cacheOrg2ID" "$cacheOrg3ID" \
-    "${imf}/${org2ShortName}2${org3ShortName}_${DATE}.train" || exit 1
-time bash "$ALIGN_DIR/last_train.sh" "$DATE" "$org2FASTA" "$org3FASTA" "$org2ShortName" "$org3ShortName" "$imf"
+    "${imf}/${org2ShortName}2${org3ShortName}_${DATE}.train" "$org2FASTA" "$org3FASTA" || exit 1
+time bash "$ALIGN_DIR/last_train.sh" "$DATE" "$org2FASTA" "$org3FASTA" "$org2ShortName" "$org3ShortName" "$imf" || exit 1
+
+for train_file in "$train12" "$train13" "${imf}/${org2ShortName}2${org3ShortName}_${DATE}.train"; do
+    is_valid_train_file "$train_file" || { echo "Error: incomplete training output: $train_file" >&2; exit 1; }
+done
+identity_specs=("gc:org1:$gcContent_org1" "gc:org2:$gcContent_org2" "gc:org3:$gcContent_org3")
+for i in 0 1 2; do
+    coding_filename="${coding_pattern//\{org_short\}/${coding_short_names[$i]}}"
+    coding_filename="${coding_filename//\{date\}/$DATE}"
+    if [ "${gff_paths[$i]}" != "NO_GFF_FILE" ]; then
+        identity_specs+=("coding:org$((i+1)):$stat_misc/$coding_filename")
+    fi
+done
+python3 "$MANIFEST_HELPER" checkpoint "$outDirPath" identity_complete "${identity_specs[@]}" \
+    "train:org1-org2:$train12" "train:org1-org3:$train13" \
+    "train:org2-org3:${imf}/${org2ShortName}2${org3ShortName}_${DATE}.train" || exit 1
 
 if [ "$IDT_ONLY" -eq 1 ]; then
     echo "---idt-only is enabled; exiting after last-train identity checks."
@@ -604,6 +620,14 @@ else
 		"$org3_dinuc_tsv" || exit 1
 fi
 
+count_specs=("gc:org1:$gcContent_org1" "gc:org2:$gcContent_org2" "gc:org3:$gcContent_org3" "sbst_ratio:all:$sbstRatio" "single:org2:$org2tsv" "single:org3:$org3tsv"
+    "dinuc:org2:$org2_dinuc_tsv" "dinuc:org3:$org3_dinuc_tsv")
+if [ "$org1GFF" != "NO_GFF_FILE" ]; then
+    count_specs+=("single_ncds:org2:$org2tsv_ncds" "single_ncds:org3:$org3tsv_ncds"
+        "dinuc_ncds:org2:$org2_dinuc_tsv_ncds" "dinuc_ncds:org3:$org3_dinuc_tsv_ncds")
+fi
+python3 "$MANIFEST_HELPER" checkpoint "$outDirPath" counts_complete "${count_specs[@]}" || exit 1
+
 # Generate all graphs
 bash "$SCRIPT_DIR/generate_graphs.sh" \
     "$org2tsv" \
@@ -618,4 +642,5 @@ bash "$SCRIPT_DIR/generate_graphs.sh" \
     "$figs_org2" \
     "$figs_org3" || exit 1
 
+python3 "$MANIFEST_HELPER" checkpoint "$outDirPath" complete || exit 1
 echo "[[ This is the end of the pipeline ]]"

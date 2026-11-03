@@ -18,6 +18,43 @@ checks = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(checks)
 
 
+def write_count_manifest(statistics):
+    run = statistics.parent
+    records = []
+    for path in statistics.glob('*/*/*.tsv'):
+        kind = 'dinuc' if path.parent.name == 'dinuc' else 'single'
+        if '_ncds' in path.name: kind += '_ncds'
+        slot = 'org2' if path.parent.parent.name == 'Oikalb2' else 'org3'
+        records.append(dict(kind=kind, slot=slot, path=path.relative_to(run).as_posix(),
+                            sha256=hashlib.sha256(path.read_bytes()).hexdigest()))
+    for slot in ('org2','org3'):
+        for region in ('', 'ncds_'):
+            for kind in ('norm','sbst','ori','logratio','dinuc'):
+                key = 'pdf_dinuc_' + ('ncds_tsv' if region else 'tsv') if kind == 'dinuc' else 'pdf_' + region + kind
+                path = run/'figs'/f'{slot}-{region}{kind}.pdf'
+                path.parent.mkdir(exist_ok=True)
+                path.write_bytes(b'%PDF-fixture\n%%EOF')
+                records.append(dict(kind=key,slot=slot,path=path.relative_to(run).as_posix(),sha256=hashlib.sha256(path.read_bytes()).hexdigest()))
+    def extra(kind,slot,content):
+        path=run/'support'/f'{kind}-{slot}.txt'
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(content)
+        entry=dict(kind=kind,slot=slot,path=path.relative_to(run).as_posix(),sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+        records.append(entry)
+        return entry
+    for slot in ('org1','org2','org3'): extra('gc',slot,'GC 40%')
+    extra('sbst_ratio','all','B 1%\nC 2%')
+    for pair in ('org1-org2','org1-org3','org2-org3'):
+        content='# substitution percent identity: 95\n'+''.join('#last -'+x+' 1\n' for x in ('t','a','A','b','B','S'))
+        content+='# score matrix (query letters = columns, reference letters = rows):\n'+''.join(x+' 1 0 0 0\n' for x in 'ACGT')
+        extra('train',pair,content)['identity_percent']=95
+    payload = dict(schema_version=2, trio_key='test', run_key='test', status='complete',
+                   options={}, created_at='now', date=run.name, artifacts=records,
+                   organisms=[dict(slot='org'+str(i),fasta_sha256='fixture',gff_sha256=None) for i in (1,2,3)])
+    (run/'metadata').mkdir(exist_ok=True)
+    (run/'metadata/metadata_manifest.json').write_text(json.dumps(payload))
+
+
 def create_test_inputs(root):
     manifest_path = root / "test/fixtures/pipeline_counts/20261031101732/manifest.json"
     manifest = json.loads(manifest_path.read_text())
@@ -146,6 +183,8 @@ class CodexChecksTests(unittest.TestCase):
             "shutil.copytree('test/fixtures/pipeline_counts/20261031101732', statistics)\n"
             "for path in statistics.glob('*/*/*.tsv'):\n"
             "    path.rename(path.with_name(path.name.replace('20261031101732', date)))\n"
+            "sys.path.insert(0, " + repr(str(REPO/'test')) + ")\n"
+            "from test_codex_checks import write_count_manifest\nwrite_count_manifest(statistics)\n"
             "p = Path('runs')\nn = int(p.read_text()) + 1 if p.exists() else 1\n"
             "p.write_text(str(n))\n"
             "if n == 1:\n"
@@ -184,7 +223,7 @@ class CodexChecksTests(unittest.TestCase):
         self.assertEqual(state["pipeline_exit_code"], 0)
         self.assertEqual(state["exit_code"], 1)
         self.assertEqual(state["counting_comparison"]["matched_count"], 0)
-        self.assertEqual(len(state["counting_comparison"]["files"]), 8)
+        self.assertEqual(state["counting_comparison"]["files"], [])
 
     def test_environment_logging_avoids_unsupported_last_train_version(self):
         log = self.root / "environment.log"
@@ -306,6 +345,7 @@ class CodexChecksTests(unittest.TestCase):
             shutil.copytree(checks.baseline_dir(self.root), statistics)
             for path in statistics.glob("*/*/*.tsv"):
                 path.rename(path.with_name(path.name.replace(checks.COUNT_BASELINE_DATE, date)))
+            write_count_manifest(statistics)
             actual = sorted(statistics.glob("*/*/*.tsv"))[0]
             actual.write_bytes(actual.read_bytes() + b"\n")
             log.write_text("EXIT CODE: 0\n")
@@ -399,6 +439,7 @@ class CountingComparisonTests(unittest.TestCase):
             actual = path.with_name(path.name.replace(checks.COUNT_BASELINE_DATE, self.date))
             path.rename(actual)
             self.actuals.append(actual)
+        write_count_manifest(statistics)
         self.log = self.root / "pipeline.log"
 
     def compare(self):

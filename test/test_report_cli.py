@@ -93,9 +93,8 @@ class ReportCliTest(unittest.TestCase):
                 "--collect-only",
             )
 
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('"datasets": []', result.stdout)
-        self.assertIn("collect-only mode: done", result.stdout)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("No v2 runs found", result.stderr)
 
     def test_render_report_rejects_missing_option_value(self):
         result = self.run_command("bash", str(RENDER_REPORT), "--json")

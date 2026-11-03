@@ -81,77 +81,26 @@ wait_for_shared_resources() {
     done
 }
 
-run_dir_for() {
-    printf '%s/%s1_%s2_%s3/%s\n' "$result_root" "$1" "$2" "$3" "$date_tag"
-}
-
 is_complete_run() {
-    local dir="$1" out_short="$2" in1_short="$3" in2_short="$4"
-    local out_acc="$5" in1_acc="$6" in2_acc="$7"
-    local out_label="${out_short}1" in1_label="${in1_short}2" in2_label="${in2_short}3"
-    local joined="$dir/intermediateFiles/${out_label}_${in1_label}_${in2_label}_${date_tag}.maf"
-    local ncds="${joined%.maf}_ncds.maf"
-    local ratio="$dir/statistics/misc/sbstRatio_${date_tag}.out"
-    local short acc kind suffix stat pdf manifest requires_ncds=0
-
-    [[ -s "$joined" && -e "${joined}.complete" && -s "$ratio" && -e "${ratio}.complete" ]] || return 1
-    manifest="$dir/metadata/metadata_manifest.json"
-    if [[ -s "$manifest" ]] && jq -e 'any(.organisms[]; .slot == "org1" and (.gff_path != null and .gff_path != ""))' "$manifest" >/dev/null; then
-        requires_ncds=1
-        [[ -s "$ncds" ]] || return 1
-    fi
-    for short in "$in1_label" "$in2_label"; do
-        if [[ "$short" == "$in1_label" ]]; then acc="$in1_acc"; else acc="$in2_acc"; fi
-        for kind in singlenuc dinuc; do
-            for suffix in '' $([[ "$requires_ncds" -eq 1 ]] && printf '_ncds'); do
-                stat="$dir/statistics/$short/$kind/${acc}_${short}_${date_tag}"
-                if [[ "$kind" == "dinuc" ]]; then stat+="_dinuc"; fi
-                stat+="${suffix}.tsv"
-                [[ -s "$stat" ]] || return 1
-            done
-        done
-    done
-    for kind in singlenuc dinuc; do
-        for suffix in '' $([[ "$requires_ncds" -eq 1 ]] && printf '_ncds'); do
-            stat="$dir/statistics/$in1_label/$kind/${in1_acc}_${in1_label}_${date_tag}"
-            [[ "$kind" == "dinuc" ]] && stat+="_dinuc"
-            stat+="${suffix}.tsv.complete"
-            [[ -e "$stat" ]] || return 1
-        done
-    done
-    for short in "$in1_label" "$in2_label"; do
-        if [[ "$short" == "$in1_label" ]]; then acc="$in1_acc"; else acc="$in2_acc"; fi
-        for pdf in \
-            "figs/$short/dinuc/${acc}_${short}_${date_tag}_dinuc.tsv.pdf" \
-            "figs/$short/singlenuc/count/${acc}_${short}_${date_tag}_ori.pdf" \
-            "figs/$short/singlenuc/count/${acc}_${short}_${date_tag}_sbst.pdf" \
-            "figs/$short/singlenuc/log-ratio/${acc}_${short}_${date_tag}_logRatio.pdf" \
-            "figs/$short/singlenuc/ratio/${acc}_${short}_${date_tag}_norm.pdf"; do
-            [[ -s "$dir/$pdf" ]] || return 1
-        done
-        if [[ "$requires_ncds" -eq 1 ]]; then
-            for pdf in \
-                "figs/$short/dinuc/${acc}_${short}_${date_tag}_dinuc_ncds.tsv.pdf" \
-                "figs/$short/singlenuc/count/${acc}_${short}_${date_tag}_ncds_ori.pdf" \
-                "figs/$short/singlenuc/count/${acc}_${short}_${date_tag}_ncds_sbst.pdf" \
-                "figs/$short/singlenuc/log-ratio/${acc}_${short}_${date_tag}_ncds_logRatio.pdf" \
-                "figs/$short/singlenuc/ratio/${acc}_${short}_${date_tag}_ncds_norm.pdf"; do
-                [[ -s "$dir/$pdf" ]] || return 1
-            done
-        fi
-    done
-}
-
-safe_remove_run_dir() {
-    local dir="$1" expected="$2" base_real dir_real
-    base_real=$(realpath -m "$result_root") || return 1
-    dir_real=$(realpath -m "$dir") || return 1
-    [[ "$dir_real" == "$base_real/"* && "$dir_real" == "$expected" ]] || {
-        echo "refusing unsafe removal: $dir_real" >&2
-        return 1
-    }
-    [[ ! -L "$dir" ]] || { echo "refusing symlink run dir: $dir" >&2; return 1; }
-    rm -rf -- "$dir"
+    local out_acc="$1" in1_acc="$2" in2_acc="$3"
+    python3 - "$result_root" "$date_tag" "$out_acc" "$in1_acc" "$in2_acc" <<'PYRUN'
+import sys
+from pathlib import Path
+sys.path.insert(0,str(Path('src/lib').resolve()))
+import run_manifest as runs
+root=Path(sys.argv[1])
+if not root.exists(): raise SystemExit(1)
+try:
+    found=runs.discover(root)
+except ValueError:
+    raise SystemExit(1)
+for run in found:
+    manifest=runs.load(run)
+    if manifest['date']==sys.argv[2] and [x['accession'] for x in manifest['organisms']]==sys.argv[3:]:
+        runs.validated(run,complete=True)
+        raise SystemExit(0)
+raise SystemExit(1)
+PYRUN
 }
 
 is_memory_failure() {
@@ -162,13 +111,8 @@ run_trio() {
     local trio="$1" out_acc="$2" in1_acc="$3" in2_acc="$4"
     local out_short="$5" in1_short="$6" in2_short="$7"
     local dir log rc attempts=0 note
-    dir=$(run_dir_for "$out_short" "$in1_short" "$in2_short")
     log="$log_dir/${run_id}_${trio}.log"
 
-    if is_complete_run "$dir" "$out_short" "$in1_short" "$in2_short" "$out_acc" "$in1_acc" "$in2_acc"; then
-        printf '%s\t%s\t%s\t%s\texisting_complete\t0\t%s\tvalidated\n' "$trio" "$out_acc" "$in1_acc" "$in2_acc" "$log" >>"$summary"
-        return 0
-    fi
 
     while (( attempts < 2 )); do
         attempts=$((attempts + 1))
@@ -186,14 +130,12 @@ run_trio() {
             printf '%s\t%s\t%s\t%s\tskipped_memory_cap\t%s\t%s\tLAST memory-cap diagnostic\n' "$trio" "$out_acc" "$in1_acc" "$in2_acc" "$attempts" "$log" >>"$summary"
             return 0
         fi
-        if [[ "$rc" -eq 0 ]] && is_complete_run "$dir" "$out_short" "$in1_short" "$in2_short" "$out_acc" "$in1_acc" "$in2_acc"; then
+        if [[ "$rc" -eq 0 ]] && is_complete_run "$out_acc" "$in1_acc" "$in2_acc"; then
             printf '%s\t%s\t%s\t%s\tcompleted\t%s\t%s\tvalidated\n' "$trio" "$out_acc" "$in1_acc" "$in2_acc" "$attempts" "$log" >>"$summary"
             return 0
         fi
         if (( attempts == 1 )); then
-            expected="$(realpath -m "$result_root")/${out_short}1_${in1_short}2_${in2_short}3/${date_tag}"
-            printf '%s resume validation failed; removing only this incomplete run before full retry\n' "$(date -Is)" >>"$log"
-            safe_remove_run_dir "$dir" "$expected" || break
+            printf '%s retrying through manifest-verified stage recovery\n' "$(date -Is)" >>"$log"
         fi
     done
     note="pipeline exit=${rc:-unknown} or final-artifact validation failed"

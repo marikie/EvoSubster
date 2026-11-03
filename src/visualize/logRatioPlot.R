@@ -8,6 +8,8 @@ library(rlang)
 
 script_file <- sub("^--file=", "", grep("^--file=", commandArgs(), value = TRUE)[1])
 source(file.path(dirname(normalizePath(script_file)), "plot_species_label.R"))
+source(file.path(dirname(normalizePath(script_file)), "required_fonts.R"))
+load_required_fonts()
 
 generate_plots <- function(tsv_path, out_dir = dirname(tsv_path), species_name = "") {
   data <- read.csv(tsv_path, sep = "\t", header = TRUE)
@@ -25,8 +27,6 @@ create_pdf <- function(graph_path, data, value_col, species_name = "") {
   # Prepare ordering by substitution type groups and within-group order
   group_order <- c("C>A", "C>G", "C>T", "T>A", "T>C", "T>G")
   # Fonts for labels
-  sysfonts::font_add_google("Courier Prime", "mn", 700)
-  sysfonts::font_add_google("Roboto", "os")
   showtext::showtext_auto()
   data <- data %>%
     mutate(trans = factor(substr(mutType, 3, 5), levels = group_order)) %>%

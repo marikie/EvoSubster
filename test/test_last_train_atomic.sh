@@ -57,7 +57,20 @@ test -z "$(find "$failed_train" -maxdepth 1 -name 'Ref2Qry_20260809.train.tmp.*'
 
 cat > "$stub_bin/last-train" <<'EOF'
 #!/bin/bash
-printf '# complete parameters\n'
+cat <<'TRAIN'
+# substitution percent identity: 95
+#last -t 1
+#last -a 1
+#last -A 1
+#last -b 1
+#last -B 1
+#last -S 1
+# score matrix (query letters = columns, reference letters = rows):
+A 1 0 0 0
+C 0 1 0 0
+G 0 0 1 0
+T 0 0 0 1
+TRAIN
 EOF
 chmod +x "$stub_bin/last-train"
 
