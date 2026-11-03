@@ -1,0 +1,4 @@
+[shell_environment_policy.set]
+TMPDIR = "/big/mrk/proj/sbst/evo-subster/tmp/codex"
+TMP = "/big/mrk/proj/sbst/evo-subster/tmp/codex"
+TEMP = "/big/mrk/proj/sbst/evo-subster/tmp/codex"
