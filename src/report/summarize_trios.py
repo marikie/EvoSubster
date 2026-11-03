@@ -27,6 +27,10 @@ TAXONOMY_RANKS = ["kingdom", "phylum", "class", "order", "family", "genus", "spe
 MISSING = "—"
 
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+import run_manifest as runs
+
 # ---------------------------------------------------------------------------
 # Data
 # ---------------------------------------------------------------------------
@@ -52,24 +56,13 @@ class OrgRow:
 # Directory helpers
 # ---------------------------------------------------------------------------
 
-def find_trio_dirs(root: Path) -> List[Path]:
-    """Return subdirectories that look like trio combos (name has 2+ underscores)."""
-    dirs = []
-    for entry in sorted(root.iterdir()):
-        if not entry.is_dir():
-            continue
-        parts = entry.name.split("_")
-        if len(parts) >= 3:
-            dirs.append(entry)
-    return dirs
+def find_trio_dirs(root):
+    return runs.discover(root)
 
 
-def find_latest_run_dir(trio_dir: Path) -> Optional[Path]:
-    """Return the subdirectory with the lexicographically largest all-digit name."""
-    run_dirs = [e for e in trio_dir.iterdir() if e.is_dir() and e.name.isdigit()]
-    if not run_dirs:
-        return None
-    return max(run_dirs, key=lambda p: p.name)
+def find_latest_run_dir(trio_dir):
+    found = runs.discover(trio_dir)
+    return found[0] if found else None
 
 
 # ---------------------------------------------------------------------------
@@ -85,11 +78,8 @@ def load_json_file(path: Path) -> Tuple[Optional[dict], Optional[str]]:
         return None, f"Cannot read {path}: {exc}"
 
 
-def load_manifest(run_dir: Path) -> Tuple[Optional[dict], Optional[str]]:
-    manifest_path = run_dir / "metadata" / "metadata_manifest.json"
-    if not manifest_path.exists():
-        return None, f"Manifest not found: {manifest_path}"
-    return load_json_file(manifest_path)
+def load_manifest(run_dir):
+    return runs.validated(run_dir, complete=True), None
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +88,7 @@ def load_manifest(run_dir: Path) -> Tuple[Optional[dict], Optional[str]]:
 
 def has_noncoding_data(run_dir: Path) -> bool:
     """Return True if any *_ncds.tsv file exists directly under run_dir."""
-    return bool(list(run_dir.glob("*_ncds.tsv")))
+    return bool(runs.artifacts(run_dir, 'single_ncds'))
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +197,13 @@ def build_org_rows(
         role = org.get("role", "")
         organism_name = org.get("raw_organism_name") or org.get("ncbi_full_name", "")
 
-        tax, err = read_taxonomy(short_name, accession, metadata_dir)
+        taxonomy_path = org.get('taxonomy_json')
+        tax, err = ({}, 'No recorded taxonomy')
+        if taxonomy_path:
+            payload = json.loads(runs.artifact_path(run_dir, taxonomy_path).read_text())
+            classification = ((payload.get('reports') or [{}])[0].get('taxonomy') or {}).get('classification', {})
+            tax = {rank: entry.get('name', '') for rank, entry in classification.items() if isinstance(entry, dict)}
+            err = None
         notes = ""
         if err:
             warnings.append(f"[{trio_id}/{short_name}] {err}")
@@ -254,6 +250,7 @@ def collect_all_rows(input_dir: Path) -> Tuple[List[OrgRow], List[str]]:
             all_warnings.append(f"[{trio_id}] {err}; skipping")
             continue
 
+        trio_id = manifest["trio_key"]
         rows, warnings = build_org_rows(trio_id, manifest, run_dir)
         all_rows.extend(rows)
         all_warnings.extend(warnings)

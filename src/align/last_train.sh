@@ -1,7 +1,12 @@
 #!/bin/bash
 
+date_free_cache=false
+if [ "${!#}" = "--date-free-cache" ]; then
+    date_free_cache=true
+    set -- "${@:1:$#-1}"
+fi
 if [ $# -lt 5 ] || [ $# -gt 6 ]; then
-    echo "Usage: $0 <Today's Date> <org2FASTA> <org3FASTA> <org2ShortName> <org3ShortName> [out_dir]"
+    echo "Usage: $0 <Today's Date> <org2FASTA> <org3FASTA> <org2ShortName> <org3ShortName> [out_dir] [--date-free-cache]"
     exit 1
 fi
 # Get arguments
@@ -12,18 +17,42 @@ org2ShortName=$4
 org3ShortName=$5
 out_dir="${6:-.}"
 
-dbBasename="${org2ShortName}db_${DATE}"
+suffix="_${DATE}"
+if [ "$date_free_cache" = true ]; then
+    suffix=""
+fi
+dbBasename="${org2ShortName}db${suffix}"
 dbDir="${out_dir}/${dbBasename}"
-trainFile="${out_dir}/${org2ShortName}2${org3ShortName}_${DATE}.train"
-threadNum=${THREAD_NUM:-8}
+trainFile="${out_dir}/${org2ShortName}2${org3ShortName}${suffix}.train"
 
+# Validate settings before reusing a DB or profile.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/train_cache.sh"
+mkdir -p "$out_dir" || exit 1
+exec 8>"${trainFile}.lock"
+flock 8 || exit 1
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/last_options.sh"
+last_options_load || exit 1
+last_options_guard "$out_dir" training || exit 1
+
+MANIFEST_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/run_manifest.py"
+if [ -d "$dbDir" ] && ! python3 "$MANIFEST_HELPER" verify-directory "$dbDir" >/dev/null 2>&1; then
+    rm -rf "$dbDir" || exit 1
+fi
 # lastdb
 echo "---lastdb"
 if [ ! -d "$dbDir" ]; then
 	echo "making lastdb"
-	mkdir -p "$dbDir"
-	(cd "$dbDir" && echo "time lastdb -P${threadNum} -c -uRY4 $dbBasename $org2FASTA" && \
-		time lastdb -P${threadNum} -c -uRY4 "$dbBasename" "$org2FASTA") || exit 1
+	dbTmp="${dbDir}.tmp.$$"
+	rm -rf "$dbTmp"
+	mkdir -p "$dbTmp"
+	if (cd "$dbTmp" && echo "time lastdb ${LASTDB_TRAIN_ARGS[*]} $dbBasename $org2FASTA" && \
+		time lastdb "${LASTDB_TRAIN_ARGS[@]}" "$dbBasename" "$org2FASTA"); then
+		python3 "$MANIFEST_HELPER" seal-directory "$dbTmp" || exit 1
+		mv "$dbTmp" "$dbDir"
+	else
+		rm -rf "$dbTmp"
+		exit 1
+	fi
 else
 	echo "$dbDir already exists"
 fi
@@ -34,11 +63,22 @@ fi
 #     to lowercase letters in both sets of sequences.
 # -uRY4: selects a seeding scheme that reduces the run time and memory use, but also reduces sensitivity.
 
+if [ -e "$trainFile" ] && ! python3 "$MANIFEST_HELPER" verify-file "$trainFile" >/dev/null 2>&1; then
+    rm -f "$trainFile" || exit 1
+fi
 # last-train
 echo "--last-train"
 if [ ! -e "$trainFile" ]; then
-	echo "time last-train -P${threadNum} --revsym -C2 $dbDir/$dbBasename $org3FASTA >$trainFile"
-	time last-train -P${threadNum} --revsym -C2 "$dbDir/$dbBasename" "$org3FASTA" >"$trainFile"
+	echo "time last-train ${LAST_TRAIN_ARGS[*]} $dbDir/$dbBasename $org3FASTA >$trainFile"
+	trainTmp="${trainFile}.tmp.$$"
+	if time last-train "${LAST_TRAIN_ARGS[@]}" "$dbDir/$dbBasename" "$org3FASTA" >"$trainTmp" \
+			&& is_valid_train_file "$trainTmp"; then
+		mv "$trainTmp" "$trainFile"
+		python3 "$MANIFEST_HELPER" seal-file "$trainFile" || exit 1
+	else
+		rm -f "$trainTmp"
+		exit 1
+	fi
 else
 	echo "$trainFile already exists"
 fi
@@ -46,3 +86,5 @@ fi
 #           symmetry, e.g. score(A→G) = score(T→C).  This is often
 #           appropriate, if neither strand is "special".
 # -C COUNT: Before extending gapped alignments, discard any gapless alignment whose query range lies in COUNT other gapless alignments with higher score-per-length. This aims to reduce run time. -C2 may reduce run time with little effect on accuracy.
+
+is_valid_train_file "$trainFile" || exit 1

@@ -4,6 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COLLECT_PY="$SCRIPT_DIR/collect_run_summary.py"
+CONTRACT_PY="$SCRIPT_DIR/report_contract.py"
 RENDER_SH="$SCRIPT_DIR/render_report.sh"
 
 usage() {
@@ -13,7 +14,7 @@ Usage: $(basename "$0") <input_dir> [options]
 Run collect_run_summary.py then render_report.sh in sequence.
 
 Arguments:
-  input_dir                   Root directory containing dataset subdirectories.
+    input_dir                   Lineage root (results/<lineage>) or a single trio root.
 
 Options:
   --idt-threshold FLOAT       Identity threshold for dataset filtering (default: 80.0).
@@ -27,11 +28,11 @@ Options:
   -h, --help                  Show this help message and exit.
 
 Examples:
-  $(basename "$0") /home/mrk/sbst/data/fungi
-  $(basename "$0") /home/mrk/sbst/data/fungi --use-filtered
-  $(basename "$0") /home/mrk/sbst/data/fungi --idt-threshold 85 --use-filtered
-  $(basename "$0") /home/mrk/sbst/data/fungi -f html_document -o /tmp/report.html
-  $(basename "$0") /home/mrk/sbst/data/fungi --collect-only
+    $(basename "$0") results/fungi
+    $(basename "$0") results/fungi --use-filtered
+    $(basename "$0") results/fungi --idt-threshold 85 --use-filtered
+    $(basename "$0") results/Oikdio1_Oikalb2_Oikvan3 -f html_document -o /tmp/report.html
+    $(basename "$0") results/fungi --collect-only
 EOF
 }
 
@@ -43,30 +44,35 @@ OUTPUT_FORMAT="word_document"
 COLLECT_ONLY=0
 POSITIONAL_ARGS=()
 
+require_option_value() {
+    local option="$1"
+    local value="${2:-}"
+    if [[ -z "$value" || ( "$value" == -* && !( "$option" == "--json" && "$value" == "-" ) ) ]]; then
+        echo "Error: ${option} requires a value." >&2
+        exit 1
+    fi
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --idt-threshold)
-            if [[ -z "${2:-}" ]]; then
-                echo "Error: --idt-threshold requires a value." >&2
-                exit 1
-            fi
+            require_option_value "$1" "${2:-}"
             IDT_THRESHOLD="$2"
             shift 2
             ;;
         --idt-threshold=*)
             IDT_THRESHOLD="${1#*=}"
+            require_option_value "--idt-threshold" "$IDT_THRESHOLD"
             shift
             ;;
         --json)
-            if [[ -z "${2:-}" ]]; then
-                echo "Error: --json requires a value." >&2
-                exit 1
-            fi
+            require_option_value "$1" "${2:-}"
             JSON_OUTPUT="$2"
             shift 2
             ;;
         --json=*)
             JSON_OUTPUT="${1#*=}"
+            require_option_value "--json" "$JSON_OUTPUT"
             shift
             ;;
         --use-filtered)
@@ -74,27 +80,23 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -o|--report-output)
-            if [[ -z "${2:-}" ]]; then
-                echo "Error: ${1} requires a value." >&2
-                exit 1
-            fi
+            require_option_value "$1" "${2:-}"
             REPORT_OUTPUT="$2"
             shift 2
             ;;
         --report-output=*)
             REPORT_OUTPUT="${1#*=}"
+            require_option_value "--report-output" "$REPORT_OUTPUT"
             shift
             ;;
         -f|--format)
-            if [[ -z "${2:-}" ]]; then
-                echo "Error: ${1} requires a value." >&2
-                exit 1
-            fi
+            require_option_value "$1" "${2:-}"
             OUTPUT_FORMAT="$2"
             shift 2
             ;;
         --format=*)
             OUTPUT_FORMAT="${1#*=}"
+            require_option_value "--format" "$OUTPUT_FORMAT"
             shift
             ;;
         --collect-only)
@@ -123,8 +125,12 @@ while [[ $# -gt 0 ]]; do
 done
 set -- "${POSITIONAL_ARGS[@]+"${POSITIONAL_ARGS[@]}"}"
 
-if [[ $# -lt 1 ]]; then
-    echo "Error: input_dir is required." >&2
+if [[ $# -ne 1 ]]; then
+    if [[ $# -lt 1 ]]; then
+        echo "Error: input_dir is required." >&2
+    else
+        echo "Error: exactly one input_dir is required." >&2
+    fi
     usage >&2
     exit 1
 fi
@@ -141,10 +147,22 @@ if [[ ! -f "$COLLECT_PY" ]]; then
     exit 1
 fi
 
+if [[ ! -f "$CONTRACT_PY" ]]; then
+    echo "Error: report_contract.py not found at $CONTRACT_PY" >&2
+    exit 1
+fi
+
 if ! command -v python3 >/dev/null 2>&1; then
     echo "Error: python3 is not available in PATH." >&2
     exit 1
 fi
+
+if [[ "$JSON_OUTPUT" == "-" && "$COLLECT_ONLY" -ne 1 ]]; then
+    echo "Error: --json - can only be used with --collect-only." >&2
+    exit 1
+fi
+
+python3 "$CONTRACT_PY" validate-format "$OUTPUT_FORMAT"
 
 # --- Step 1: collect_run_summary.py ---
 
@@ -166,39 +184,14 @@ fi
 
 # --- Step 2: derive JSON path and run render_report.sh ---
 
-INPUT_DIR_ABS="$(python3 - "$INPUT_DIR" <<'PY'
-import os, sys
-print(os.path.abspath(sys.argv[1]))
-PY
-)"
-
+SUMMARY_PATH_ARGS=("summary-path" "$INPUT_DIR")
 if [[ -n "$JSON_OUTPUT" ]]; then
-    SUMMARY_JSON="$(python3 - "$JSON_OUTPUT" <<'PY'
-import os, sys
-print(os.path.abspath(sys.argv[1]))
-PY
-)"
-else
-    SUMMARY_JSON="$(python3 - "$INPUT_DIR_ABS" <<'PY'
-import os, sys
-d = sys.argv[1]
-name = os.path.basename(d)
-print(os.path.join(d, f"{name}_summary.json"))
-PY
-)"
+    SUMMARY_PATH_ARGS+=("--output" "$JSON_OUTPUT")
 fi
-
 if [[ "$USE_FILTERED" -eq 1 ]]; then
-    REPORT_JSON="$(python3 - "$SUMMARY_JSON" <<'PY'
-import os, sys
-p = sys.argv[1]
-stem, ext = os.path.splitext(os.path.basename(p))
-print(os.path.join(os.path.dirname(p), f"{stem}_filtered{ext}"))
-PY
-)"
-else
-    REPORT_JSON="$SUMMARY_JSON"
+    SUMMARY_PATH_ARGS+=("--filtered")
 fi
+REPORT_JSON="$(python3 "$CONTRACT_PY" "${SUMMARY_PATH_ARGS[@]}")"
 
 if [[ ! -f "$REPORT_JSON" ]]; then
     echo "Error: Expected JSON not found: $REPORT_JSON" >&2

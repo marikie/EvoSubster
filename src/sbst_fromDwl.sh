@@ -1,9 +1,18 @@
 #!/bin/bash
 
+# Shared, shell-free LAST option parsing (also inherited by tree-mode children).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$ROOT_DIR/src/lib/last_options.sh"
+LAST_OPTIONS_DEFER_VALIDATE=1 last_options_parse_cli "$@" || exit 1
+set -- "${LAST_REMAINING_ARGS[@]}"
+SELECTION_HELPER="$SCRIPT_DIR/lib/selection_run.py"
+
 
 PATH="$SCRIPT_DIR:$PATH"
+
+# shellcheck source=lib/train_cache.sh
+source "$SCRIPT_DIR/lib/train_cache.sh"
 
 config_file="$ROOT_DIR/config/dwl_config.yaml"
 # Load YAML configuration using yq
@@ -49,32 +58,96 @@ make_short_name() {
 
 
 OUT_DIR_OVERRIDE=""
+TRAIN_CACHE_DIR_OVERRIDE=""
 BASE_GENOMES_OVERRIDE=""
 IDT_ONLY=0
-THREAD_NUM_OVERRIDE=8
+THREAD_NUM_OVERRIDE=""
 FORCE_DOWNLOAD=0
+TREE_FILE=""
+TRIOS_FILE=""
+SELECTION_CONFIG=""
+IDT_THRESHOLD=""
+INGROUP_IDT_THRESHOLD=""
+OUTGROUP_IDT_THRESHOLD=""
+MIN_IDT_GAP_BETWEEN_OUT_IN=""
+MAX_OUTGROUP_TRIES=""
+INGROUP_PAIRING=""
+MIN_REL_CONTIG_N50=""
+KEEP_UNUSED_SPECIES_DATA=0
+STAGE0_TOP_K=""
+ASSEMBLY_QC=""
+ALLOW_QC_OVERRIDE=0
 POSITIONAL_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help)
             cat <<'EOF'
-Usage: sbst_fromDwl.sh <DATE> <ACC1> <ACC2> <ACC3> [OPTIONS]
+Usage:
+  sbst_fromDwl.sh <DATE> <ACC1> <ACC2> <ACC3> [OPTIONS]   # single trio
+  sbst_fromDwl.sh --tree <FILE.nwk> [DATE] [OPTIONS]       # select trios from a tree
+  sbst_fromDwl.sh --trios <FILE.tsv> [DATE] [OPTIONS]      # run previously selected trios
 
 Download genomes from NCBI and run the substitution spectrum pipeline.
 
-Positional arguments:
+Positional arguments (single-trio mode):
   DATE     Run date (e.g. 20240101)
   ACC1     Outgroup accession ID (e.g. GCA_023078555.1)
   ACC2     Ingroup accession ID (e.g. GCA_900538255.1)
   ACC3     Ingroup accession ID (e.g. GCA_024500015.1)
 
+Tree mode:
+  --tree FILE.nwk      Select trios from a Newick tree (src/select/trio_selection.R),
+                       then run the pipeline for each selected trio. The four positional
+                       accessions are unused here; DATE is optional (defaults to today).
+                       Leaf labels must be accession-free complete taxon names with spaces
+                       encoded as underscores (for example, Chaunax_sp._Z400). Convert
+                       legacy accession-suffixed trees with strip_newick_accessions.py.
+  --idt-threshold N    Common identity threshold (default: 80); individual values override it.
+  --ingroup-idt-threshold N  Ingroup identity must strictly exceed this (default: 80).
+  --outgroup-idt-threshold N  Both outgroup-ingroup identities must strictly exceed this (default: 80).
+  --min-idt-gap-between-out-in N
+                       Both ingroup minus outgroup-ingroup identity gaps must strictly exceed
+                       N percentage points (default: 0). Exempt when ingroups share a genus
+                       distinct from the outgroup. Absolute thresholds still apply.
+  --max-outgroup-tries N  Give up on an ingroup pair after training this many outgroup
+                       candidates without a thesis-rule pass (default: 5). Per-pair cost cap.
+  --ingroup-pairing MODE  Which ingroup couples to consider: 'matching' (default; greedy
+                       closest-first disjoint sister-pair matching, ~n/2 independent couples)
+                       or 'all' (every tip pair, exhaustive).
+  --min-rel-contig-n50 F  Drop a species unless some current assembly has relative contig
+                       N50 (contig_n50/total_ungapped_length) >= F. Size-normalized so one
+                       value works across lineages; default: 0 = off, e.g. 0.005.
+  --keep-unused-species-data
+                       Keep current-run genome and train artifacts for candidates absent
+                       from every selected trio (tree mode only; default: remove them).
+  --stage0-top-k N     Keep N candidates per species in the metadata shortlist for QC audit and optional explicit strict override
+                       (default: 3; the eligible NCBI reference is anchored in the shortlist).
+  --assembly-qc FILE   Optional external QC TSV with BUSCO genome-mode and/or Merqury results.
+  --allow-qc-override  Explicitly allow a strict BUSCO-based override of the metadata baseline.
+                       Off by default; external QC is otherwise audit-only.
+
 Options:
-  --genome-dir PATH    Genome storage directory (default: ./genomes)
-  --out-dir PATH       Output directory (default: ./results)
-  --thread N           Number of threads for LAST alignment (default: 8)
-  --idt-only           Stop after checking sequence percent identity among three genomes; skip downstream analysis
-  --force              Re-download genomes even if local files exist
-  -h, --help           Show this help message and exit
+  --trios FILE.tsv        Run out_acc/in1_acc/in2_acc rows through graph generation;
+                         additional columns are ignored and selection is not repeated.
+                         Reads selection_run.json beside the TSV automatically.
+                         DATE is required when no saved settings are available.
+  --selection-config FILE  Use this saved selection configuration with --trios.
+                         Explicit CLI options override saved settings, then defaults.
+  --genome-dir PATH       Genome storage directory (default: ./genomes)
+  --out-dir PATH          Output directory (default: ./results)
+  --train-cache-dir PATH  Directory containing cached last-train files
+  --thread N              Number of threads for LAST alignment (default: 8)
+  --lastdb-options TEXT    Additional lastdb arguments (training and alignment)
+  --lastal-options TEXT    Additional lastal arguments
+  --last-train-options TEXT  Additional last-train arguments (including tree selection)
+  --last-split-options TEXT  Additional last-split arguments
+  --idt-only              Stop after checking sequence percent identity among three genomes; skip downstream analysis
+  --force                 Re-download genomes even if local files exist
+  -h, --help              Show this help message and exit
+
+LAST option strings use shell-style quoting without shell expansion (LAST 1648).
+Specify each --*-options once. Pipeline-managed formats, inputs and threads
+cannot be replaced. Different settings require a new date/output/cache directory.
 EOF
             exit 0
             ;;
@@ -83,8 +156,32 @@ EOF
             shift
             continue
             ;;
+        --trios|--selection-config|--trios=*|--selection-config=*)
+            _key="${1%%=*}"
+            if [[ "$1" == *=* ]]; then
+                _value="${1#*=}"
+                shift
+            else
+                _value="${2:-}"
+                shift
+                [ "$#" -gt 0 ] && shift
+            fi
+            if [[ -z "$_value" || "$_value" == --* ]]; then
+                echo "Error: $_key requires a file path." >&2
+                exit 1
+            fi
+            case "$_key" in
+                --trios) TRIOS_FILE="$_value" ;;
+                --selection-config) SELECTION_CONFIG="$_value" ;;
+            esac
+            ;;
         --force)
             FORCE_DOWNLOAD=1
+            shift
+            continue
+            ;;
+        --keep-unused-species-data)
+            KEEP_UNUSED_SPECIES_DATA=1
             shift
             continue
             ;;
@@ -132,6 +229,24 @@ EOF
             shift
             continue
             ;;
+        --train-cache-dir)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: --train-cache-dir requires a non-empty path argument." >&2
+                exit 1
+            fi
+            TRAIN_CACHE_DIR_OVERRIDE="$2"
+            shift 2
+            continue
+            ;;
+        --train-cache-dir=*)
+            TRAIN_CACHE_DIR_OVERRIDE="${1#*=}"
+            if [[ -z "$TRAIN_CACHE_DIR_OVERRIDE" ]]; then
+                echo "Error: --train-cache-dir requires a non-empty path argument." >&2
+                exit 1
+            fi
+            shift
+            continue
+            ;;
         --genome-dir)
             if [[ -z "${2:-}" ]]; then
                 echo "Error: --genome-dir requires a non-empty path argument." >&2
@@ -147,6 +262,152 @@ EOF
                 echo "Error: --genome-dir requires a non-empty path argument." >&2
                 exit 1
             fi
+            shift
+            continue
+            ;;
+        --tree)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: --tree requires a Newick file path." >&2
+                exit 1
+            fi
+            TREE_FILE="$2"
+            shift 2
+            continue
+            ;;
+        --tree=*)
+            TREE_FILE="${1#*=}"
+            if [[ -z "$TREE_FILE" ]]; then
+                echo "Error: --tree requires a Newick file path." >&2
+                exit 1
+            fi
+            shift
+            continue
+            ;;
+        --stage0-top-k)
+            if [[ -z "${2:-}" ]] || ! [[ "$2" =~ ^[1-9][0-9]*$ ]]; then
+                echo "Error: --stage0-top-k requires a positive integer argument." >&2
+                exit 1
+            fi
+            STAGE0_TOP_K="$2"
+            shift 2
+            continue
+            ;;
+        --stage0-top-k=*)
+            STAGE0_TOP_K="${1#*=}"
+            if ! [[ "$STAGE0_TOP_K" =~ ^[1-9][0-9]*$ ]]; then
+                echo "Error: --stage0-top-k requires a positive integer argument." >&2
+                exit 1
+            fi
+            shift
+            continue
+            ;;
+        --assembly-qc)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: --assembly-qc requires a TSV file path." >&2
+                exit 1
+            fi
+            ASSEMBLY_QC="$2"
+            shift 2
+            continue
+            ;;
+        --assembly-qc=*)
+            ASSEMBLY_QC="${1#*=}"
+            if [[ -z "$ASSEMBLY_QC" ]]; then
+                echo "Error: --assembly-qc requires a TSV file path." >&2
+                exit 1
+            fi
+            shift
+            continue
+            ;;
+        --allow-qc-override)
+            ALLOW_QC_OVERRIDE=1
+            shift
+            continue
+            ;;
+        --idt-threshold|--ingroup-idt-threshold|--outgroup-idt-threshold|--min-idt-gap-between-out-in|\
+        --idt-threshold=*|--ingroup-idt-threshold=*|--outgroup-idt-threshold=*|--min-idt-gap-between-out-in=*)
+            _opt_key="${1%%=*}"
+            if [[ "$1" == *=* ]]; then
+                _opt_val="${1#*=}"
+                shift
+            else
+                if [[ -z "${2:-}" ]]; then
+                    echo "Error: $_opt_key requires a finite number in [0, 100]." >&2
+                    exit 1
+                fi
+                _opt_val="$2"
+                shift 2
+            fi
+            if ! python3 -c '
+import math, sys
+try:
+    value = float(sys.argv[1])
+    valid = math.isfinite(value) and 0 <= value <= 100
+except ValueError:
+    valid = False
+sys.exit(0 if valid else 1)
+' "$_opt_val"; then
+                echo "Error: $_opt_key must be a finite number in [0, 100] (got: $_opt_val)." >&2
+                exit 1
+            fi
+            case "$_opt_key" in
+                --idt-threshold) IDT_THRESHOLD="$_opt_val" ;;
+                --ingroup-idt-threshold) INGROUP_IDT_THRESHOLD="$_opt_val" ;;
+                --outgroup-idt-threshold) OUTGROUP_IDT_THRESHOLD="$_opt_val" ;;
+                --min-idt-gap-between-out-in) MIN_IDT_GAP_BETWEEN_OUT_IN="$_opt_val" ;;
+            esac
+            continue
+            ;;
+        --max-outgroup-tries|--min-rel-contig-n50)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: $1 requires a non-negative number argument." >&2
+                exit 1
+            fi
+            if ! [[ "$2" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+                echo "Error: $1 must be a non-negative number (got: $2)." >&2
+                exit 1
+            fi
+            case "$1" in
+                --max-outgroup-tries) MAX_OUTGROUP_TRIES="$2" ;;
+                --min-rel-contig-n50) MIN_REL_CONTIG_N50="$2" ;;
+            esac
+            shift 2
+            continue
+            ;;
+        --max-outgroup-tries=*|--min-rel-contig-n50=*)
+            _opt_key="${1%%=*}"
+            _opt_val="${1#*=}"
+            if ! [[ "$_opt_val" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+                echo "Error: $_opt_key must be a non-negative number (got: $_opt_val)." >&2
+                exit 1
+            fi
+            case "$_opt_key" in
+                --max-outgroup-tries) MAX_OUTGROUP_TRIES="$_opt_val" ;;
+                --min-rel-contig-n50) MIN_REL_CONTIG_N50="$_opt_val" ;;
+            esac
+            shift
+            continue
+            ;;
+        --ingroup-pairing)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: $1 requires a mode argument (matching or all)." >&2
+                exit 1
+            fi
+            if ! [[ "$2" =~ ^(matching|all)$ ]]; then
+                echo "Error: --ingroup-pairing must be 'matching' or 'all' (got: $2)." >&2
+                exit 1
+            fi
+            INGROUP_PAIRING="$2"
+            shift 2
+            continue
+            ;;
+        --ingroup-pairing=*)
+            _opt_val="${1#*=}"
+            if ! [[ "$_opt_val" =~ ^(matching|all)$ ]]; then
+                echo "Error: --ingroup-pairing must be 'matching' or 'all' (got: $_opt_val)." >&2
+                exit 1
+            fi
+            INGROUP_PAIRING="$_opt_val"
             shift
             continue
             ;;
@@ -173,9 +434,48 @@ org1ID="$2"
 org2ID="$3"
 org3ID="$4"
 
+if [ -n "$TRIOS_FILE" ]; then
+    if [ -n "$TREE_FILE" ] || [ "${#POSITIONAL_ARGS[@]}" -gt 1 ]; then
+        echo "Error: --trios cannot be combined with --tree or positional accessions." >&2
+        exit 1
+    fi
+    # Validate every row before any downloads or output directories are created.
+    trio_rows=$(python3 "$SELECTION_HELPER" trios "$TRIOS_FILE") || exit 1
+    resolve_args=(resolve --trios "$TRIOS_FILE" --config "$SELECTION_CONFIG"
+        --date "$DATE" --genome-dir "$BASE_GENOMES_OVERRIDE"
+        --out-dir "$OUT_DIR_OVERRIDE" --train-cache-dir "$TRAIN_CACHE_DIR_OVERRIDE"
+        --threads "$THREAD_NUM_OVERRIDE")
+    for name in "${LAST_EXPLICIT_NAMES[@]}"; do
+        resolve_args+=(--explicit-last "$name")
+    done
+    resolution_file=$(mktemp) || exit 1
+    if ! python3 "$SELECTION_HELPER" "${resolve_args[@]}" > "$resolution_file"; then
+        rm -f "$resolution_file"
+        exit 1
+    fi
+    mapfile -d '' -t resolved < "$resolution_file"
+    rm -f "$resolution_file"
+    DATE="${resolved[0]}"
+    BASE_GENOMES_OVERRIDE="${resolved[1]}"
+    OUT_DIR_OVERRIDE="${resolved[2]}"
+    TRAIN_CACHE_DIR_OVERRIDE="${resolved[3]}"
+    THREAD_NUM_OVERRIDE="${resolved[4]}"
+    export EVOSUBSTER_LAST_OPTIONS="${resolved[5]}"
+    export LASTDB_ALIGNMENT_SEED="${resolved[6]}"
+    export LASTAL_QUERY_BATCH_SIZE="${resolved[7]}"
+    export LASTAL_SPLIT_MEMORY="${resolved[8]}"
+    echo "[trios mode] settings: ${resolved[9]}"
+elif [ -n "$SELECTION_CONFIG" ]; then
+    echo "Error: --selection-config requires --trios." >&2
+    exit 1
+fi
+THREAD_NUM_OVERRIDE="${THREAD_NUM_OVERRIDE:-8}"
+export THREAD_NUM="$THREAD_NUM_OVERRIDE"
+python3 "$LAST_OPTIONS_HELPER" validate >/dev/null || exit 1
 
-# Check minimally required arguments (DATE and 3 accessions)
-if [ -z "$DATE" ] || [ -z "$org1ID" ] || [ -z "$org2ID" ] || [ -z "$org3ID" ]; then
+# Check minimally required arguments (DATE and 3 accessions).
+# Tree mode picks its own trios, so the positional accessions are optional there.
+if [ -z "$TREE_FILE" ] && [ -z "$TRIOS_FILE" ] && { [ -z "$DATE" ] || [ -z "$org1ID" ] || [ -z "$org2ID" ] || [ -z "$org3ID" ]; }; then
     echo "$(get_config '.errors.arg_count' | sed "s/{arg_num}/$(get_config '.settings.required_args')/g")" >&2
    echo "$(get_config '.errors.usage')" >&2
    exit 1
@@ -211,6 +511,105 @@ if [ ! -d "$out_dir_base" ]; then
     fi
 fi
 
+if [ -n "$TRAIN_CACHE_DIR_OVERRIDE" ]; then
+    TRAIN_CACHE_DIR_OVERRIDE=$(resolve_path "$TRAIN_CACHE_DIR_OVERRIDE")
+fi
+if [ -n "$ASSEMBLY_QC" ]; then
+    ASSEMBLY_QC=$(resolve_path "$ASSEMBLY_QC")
+fi
+
+# --- Tree mode: select trios from a Newick tree, then run the pipeline per trio ---
+# trio_selection.R downloads genomes and runs last-train itself to score candidates;
+# here we only loop the per-trio pipeline over the trios it selected.  Each per-trio
+# call takes the positional path (no --tree), so selection never re-enters itself.
+if [ -n "$TREE_FILE" ]; then
+    if [ ! -f "$TREE_FILE" ]; then
+        echo "Error: --tree file not found: $TREE_FILE" >&2
+        exit 1
+    fi
+    DATE="${DATE:-$(date +%Y%m%d)}"
+
+    rt_out_dir="$out_dir_base/trio_selection"
+    # Invalidate the resume record before starting another selection attempt.
+    rm -f "$rt_out_dir/selection_run.json" || exit 1
+    last_options_guard "$rt_out_dir" selection || exit 1
+    r_args=(--tree "$TREE_FILE"
+            --genome-dir "$base_genomes"
+            --out-dir "$rt_out_dir"
+            --date "$DATE"
+            --threads "$THREAD_NUM_OVERRIDE")
+    [ -n "$IDT_THRESHOLD" ] && r_args+=(--idt-threshold "$IDT_THRESHOLD")
+    [ -n "$INGROUP_IDT_THRESHOLD" ] && r_args+=(--ingroup-idt-threshold "$INGROUP_IDT_THRESHOLD")
+    [ -n "$OUTGROUP_IDT_THRESHOLD" ] && r_args+=(--outgroup-idt-threshold "$OUTGROUP_IDT_THRESHOLD")
+    [ -n "$MIN_IDT_GAP_BETWEEN_OUT_IN" ] && r_args+=(--min-idt-gap-between-out-in "$MIN_IDT_GAP_BETWEEN_OUT_IN")
+    [ -n "$MAX_OUTGROUP_TRIES" ] && r_args+=(--max-outgroup-tries "$MAX_OUTGROUP_TRIES")
+    [ -n "$INGROUP_PAIRING" ] && r_args+=(--ingroup-pairing "$INGROUP_PAIRING")
+    [ -n "$MIN_REL_CONTIG_N50" ] && r_args+=(--min-rel-contig-n50 "$MIN_REL_CONTIG_N50")
+    [ -n "$STAGE0_TOP_K" ] && r_args+=(--stage0-top-k "$STAGE0_TOP_K")
+    [ -n "$ASSEMBLY_QC" ] && r_args+=(--assembly-qc "$ASSEMBLY_QC")
+    [ "$ALLOW_QC_OVERRIDE" -eq 1 ] && r_args+=(--allow-qc-override)
+    [ -n "$TRAIN_CACHE_DIR_OVERRIDE" ] && r_args+=(--train-cache-dir "$TRAIN_CACHE_DIR_OVERRIDE")
+    [ "$KEEP_UNUSED_SPECIES_DATA" -eq 1 ] && r_args+=(--keep-unused-species-data)
+
+    echo "--- [tree mode] selecting trios from $TREE_FILE"
+    if ! Rscript "$SCRIPT_DIR/select/trio_selection.R" "${r_args[@]}"; then
+        echo "Error: trio_selection.R failed" >&2
+        exit 1
+    fi
+
+    selected_file="$rt_out_dir/selected_trios.tsv"
+    python3 "$SELECTION_HELPER" save "$rt_out_dir/selection_run.json" \
+        --date "$DATE" --genome-dir "$base_genomes" --out-dir "$out_dir_base" \
+        --train-cache-dir "${TRAIN_CACHE_DIR_OVERRIDE:-$rt_out_dir/train_cache}" \
+        --threads "$THREAD_NUM_OVERRIDE" || exit 1
+    trio_rows=$(python3 "$SELECTION_HELPER" trios "$selected_file") || exit 1
+    TRAIN_CACHE_DIR_OVERRIDE="${TRAIN_CACHE_DIR_OVERRIDE:-$rt_out_dir/train_cache}"
+fi
+
+# Both entry points use the same downstream runner; only tree mode selects.
+if [ -n "$TREE_FILE" ] || [ -n "$TRIOS_FILE" ]; then
+    mode="trios mode"
+    [ -n "$TREE_FILE" ] && mode="tree mode"
+    echo "[$mode] DATE=$DATE genome-dir=$base_genomes out-dir=$out_dir_base"
+    echo "[$mode] train-cache-dir=${TRAIN_CACHE_DIR_OVERRIDE:-(none)} thread=$THREAD_NUM_OVERRIDE"
+    if [ -z "$trio_rows" ]; then
+        echo "[$mode] selected no trios; nothing to run."
+        exit 0
+    fi
+
+    # Options forwarded to every single-trio run.
+    pass_opts=(--genome-dir "$base_genomes" --out-dir "$out_dir_base" --thread "$THREAD_NUM_OVERRIDE")
+    if [ -n "$TRAIN_CACHE_DIR_OVERRIDE" ]; then
+        pass_opts+=(--train-cache-dir "$TRAIN_CACHE_DIR_OVERRIDE")
+    fi
+    [ "$IDT_ONLY" -eq 1 ] && pass_opts+=(--idt-only)
+    [ "$FORCE_DOWNLOAD" -eq 1 ] && pass_opts+=(--force)
+
+    export EVOSUBSTER_SELECTION_SOURCE="${TRIOS_FILE:-${selected_file:-}}"
+    trio_count=0
+    trio_failures=0
+    trio_results=()
+    while IFS=$'\t' read -r out_acc in1_acc in2_acc; do
+        if [ -z "$out_acc" ] || [ -z "$in1_acc" ] || [ -z "$in2_acc" ]; then
+            continue
+        fi
+        trio_count=$((trio_count + 1))
+        echo "=== [$mode] trio $trio_count: outgroup=$out_acc ingroup=$in1_acc,$in2_acc ==="
+        if ! bash "$SCRIPT_DIR/sbst_fromDwl.sh" "$DATE" "$out_acc" "$in1_acc" "$in2_acc" "${pass_opts[@]}"; then
+            echo "Warning: pipeline failed for trio $out_acc/$in1_acc/$in2_acc; continuing." >&2
+            trio_failures=$((trio_failures + 1))
+            trio_results+=("FAILED $out_acc $in1_acc $in2_acc")
+        else
+            trio_results+=("OK $out_acc $in1_acc $in2_acc")
+        fi
+    done <<< "$trio_rows"
+
+    printf '%s\n' "${trio_results[@]}"
+    echo "[$mode] ran pipeline on $trio_count trio(s); $trio_failures failed."
+    [ "$trio_failures" -gt 0 ] && exit 1
+    exit 0
+fi
+
 # Download genome + taxonomy for each accession via dwl_organism.sh
 _dwl_flags=()
 [ "$FORCE_DOWNLOAD" -eq 1 ] && _dwl_flags+=("--force")
@@ -221,6 +620,38 @@ org3Result=$(bash "$SCRIPT_DIR/dwl_organism.sh" "$org3ID" --out-dir "$base_genom
 IFS='|' read -r org1FullName org1FASTA org1SummaryJson org1RawName org1NcbiFullName org1TaxJson <<< "$org1Result"
 IFS='|' read -r org2FullName org2FASTA org2SummaryJson org2RawName org2NcbiFullName org2TaxJson <<< "$org2Result"
 IFS='|' read -r org3FullName org3FASTA org3SummaryJson org3RawName org3NcbiFullName org3TaxJson <<< "$org3Result"
+
+resolve_downloaded_accession() {
+    local requested="$1" summary_json="$2" fasta_path="$3"
+    local metadata_accession=""
+    if [ -f "$summary_json" ]; then
+        metadata_accession=$(jq -r 'try .reports[0].accession catch ""' "$summary_json")
+    fi
+
+    local fasta_accession
+    fasta_accession=$(extract_ncbi_accession_from_path "$fasta_path")
+    local candidate
+    for candidate in "$metadata_accession" "$fasta_accession" "$requested"; do
+        if [[ "$candidate" =~ ^GC[AF]_[0-9]+\.[0-9]+$ ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+resolvedOrg1ID=$(resolve_downloaded_accession "$org1ID" "$org1SummaryJson" "$org1FASTA") || {
+    echo "Error: Could not resolve a versioned NCBI accession for $org1ID." >&2
+    exit 1
+}
+resolvedOrg2ID=$(resolve_downloaded_accession "$org2ID" "$org2SummaryJson" "$org2FASTA") || {
+    echo "Error: Could not resolve a versioned NCBI accession for $org2ID." >&2
+    exit 1
+}
+resolvedOrg3ID=$(resolve_downloaded_accession "$org3ID" "$org3SummaryJson" "$org3FASTA") || {
+    echo "Error: Could not resolve a versioned NCBI accession for $org3ID." >&2
+    exit 1
+}
 
 echo "Derived org1FullName: $org1FullName"
 echo "Derived org2FullName: $org2FullName"
@@ -251,134 +682,38 @@ org2ShortName=$(make_short_name "$org2FullNameWithSuffix" "2")
 org3ShortName=$(make_short_name "$org3FullNameWithSuffix" "3")
 
 short_names=("$org1ShortName" "$org2ShortName" "$org3ShortName")
-run_combo_dir="${org1ShortName}_${org2ShortName}_${org3ShortName}"
-run_dir_root="$out_dir_base/$run_combo_dir"
-run_date_dir_rel="$run_dir_root/$DATE"
-metadata_dir_rel="$run_date_dir_rel/metadata"
-
-if ! mkdir -p "$metadata_dir_rel"; then
-    echo "Error: Unable to create metadata directory at $metadata_dir_rel" >&2
-    exit 1
-fi
-
-run_date_dir="$(cd "$run_dir_root/$DATE" && pwd)"
-metadata_dir="$run_date_dir/metadata"
-
-# Check if GFF file exists in org1 (auto-detect)
-gffFilePath="$base_genomes/$org1FullName/genomic.gff"
-
-if [ -e "$gffFilePath" ]; then
-    org1GFF="$gffFilePath" # set $org1GFF as the path to the gff file
-    echo "GFF file found: $org1GFF"
-else
-    org1GFF="NO_GFF_FILE" # set a special flag to $org1GFF
-    echo "No GFF file found for $org1FullName. Please download the GFF file manually."
-fi
-
-echo "--- Preparing metadata artifacts in $metadata_dir"
-declare -a gff_paths=("$org1GFF" "" "")
-declare -a metadata_json_copies=("" "" "")
-
-for i in {0..2}; do
-    src_json=${summary_jsons[$i]}
-    short_name=${short_names[$i]}
-    accession=${ids[$i]}
-    if [ -n "$src_json" ] && [ -f "$src_json" ]; then
-        dest_json="$metadata_dir/${short_name}_${accession}.json"
-        if cp "$src_json" "$dest_json"; then
-            metadata_json_copies[$i]="$dest_json"
-        else
-            echo "Warning: Failed to copy metadata JSON for ${short_name} ($accession) to $dest_json" >&2
-        fi
-    else
-        echo "Warning: Source metadata JSON missing for ${short_name} ($accession) at ${src_json:-<empty>}" >&2
-    fi
-done
-
-manifest_path="$metadata_dir/metadata_manifest.json"
-python - "$manifest_path" "$DATE" "$run_combo_dir" "$run_date_dir" "$metadata_dir" \
-"${ids[0]}" "${names[0]}" "${short_names[0]}" "${fasta_paths[0]}" "${gff_paths[0]}" "${raw_names[0]}" "${ncbi_full_names[0]}" "${metadata_json_copies[0]}" \
-"${ids[1]}" "${names[1]}" "${short_names[1]}" "${fasta_paths[1]}" "${gff_paths[1]}" "${raw_names[1]}" "${ncbi_full_names[1]}" "${metadata_json_copies[1]}" \
-"${ids[2]}" "${names[2]}" "${short_names[2]}" "${fasta_paths[2]}" "${gff_paths[2]}" "${raw_names[2]}" "${ncbi_full_names[2]}" "${metadata_json_copies[2]}" <<'PY'
-import json
-import sys
+# Supply source metadata; sbst owns run allocation, locking, and publication.
+metadata_input=$(mktemp) || exit 1
+trap 'rm -f "$metadata_input"' EXIT
+python3 - "$metadata_input" "${summary_jsons[@]}" "${tax_jsons[@]}" \
+    "${raw_names[@]}" "${ncbi_full_names[@]}" "${short_names[@]}" <<'PYMETA'
+import json, sys
 from pathlib import Path
-
-def normalize(value, empty_as_none=False):
-    if value in ("", "null", "None"):
-        return None
-    if empty_as_none and value in ("NO_GFF_FILE",):
-        return None
-    return value
-
-manifest_path = Path(sys.argv[1])
-run_date = sys.argv[2]
-combo_dir = sys.argv[3]
-run_dir = sys.argv[4]
-metadata_dir = sys.argv[5]
-
-args = sys.argv[6:]
-slots = [
-    ("org1", "outgroup"),
-    ("org2", "ingroup"),
-    ("org3", "ingroup"),
-]
-chunk_size = 8
-organisms = []
-for idx, (slot, role) in enumerate(slots):
-    offset = idx * chunk_size
-    chunk = args[offset : offset + chunk_size]
-    accession, directory_name, short_name, fasta_path, gff_path, raw_name, ncbi_full, metadata_json = chunk
-    organisms.append(
-        {
-            "slot": slot,
-            "role": role,
-            "accession": normalize(accession),
-            "directory_name": normalize(directory_name),
-            "short_name": normalize(short_name),
-            "fasta_path": normalize(fasta_path),
-            "gff_path": normalize(gff_path, empty_as_none=True),
-            "raw_organism_name": normalize(raw_name),
-            "ncbi_full_name": normalize(ncbi_full),
-            "metadata_json": normalize(metadata_json),
-        }
-    )
-
-manifest = {
-    "date": run_date,
-    "combo_dir": combo_dir,
-    "run_dir": run_dir,
-    "metadata_dir": metadata_dir,
-    "organisms": organisms,
-}
-manifest_path.parent.mkdir(parents=True, exist_ok=True)
-manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-print(f"Wrote metadata manifest to {manifest_path}")
-PY
-
-# shellcheck disable=SC2181
-if [ $? -ne 0 ]; then
-    echo "Error: Failed to generate metadata manifest" >&2
-    exit 1
-fi
-
-# Copy taxonomy JSONs (downloaded by dwl_organism.sh) to metadata dir with short_name prefix
-for i in {0..2}; do
-    tax_src=${tax_jsons[$i]}
-    short_name=${short_names[$i]}
-    accession=${ids[$i]}
-    tax_dest="$metadata_dir/taxonomy_${short_name}_${accession}.json"
-    if [ -f "$tax_src" ] && [ ! -f "$tax_dest" ]; then
-        cp "$tax_src" "$tax_dest"
-    fi
+values = sys.argv[2:]
+Path(sys.argv[1]).write_text(json.dumps([
+    dict(metadata_json=values[i], taxonomy_json=values[i+3],
+         raw_organism_name=values[i+6], ncbi_full_name=values[i+9], short_name=values[i+12]) for i in range(3)]))
+PYMETA
+export EVOSUBSTER_METADATA_INPUT="$metadata_input"
+declare -a gff_paths=()
+resolved_ids=("$resolvedOrg1ID" "$resolvedOrg2ID" "$resolvedOrg3ID")
+for i in 0 1 2; do
+    gff=$(python3 "$SCRIPT_DIR/lib/run_manifest.py" bundle-gff "${fasta_paths[$i]}" "${resolved_ids[$i]}") || exit 1
+    gff_paths+=("$gff")
 done
+org1GFF="${gff_paths[0]}"
 
 # Run downstream pipeline (no checkInnerGroupIdt argument anymore)
 trisbst_args=()
 if [ -n "$OUT_DIR_OVERRIDE" ]; then
     trisbst_args+=("--out-dir" "$OUT_DIR_OVERRIDE")
 fi
+if [ -n "$TRAIN_CACHE_DIR_OVERRIDE" ]; then
+    trisbst_args+=("--train-cache-dir" "$TRAIN_CACHE_DIR_OVERRIDE")
+fi
+trisbst_args+=("--accession-ids" "$resolvedOrg1ID" "$resolvedOrg2ID" "$resolvedOrg3ID")
 trisbst_args+=("--thread" "$THREAD_NUM_OVERRIDE")
+trisbst_args+=("--org2-gff" "${gff_paths[1]}" "--org3-gff" "${gff_paths[2]}")
 if [ "$IDT_ONLY" -eq 1 ]; then
     trisbst_args+=("--idt-only")
 fi

@@ -33,8 +33,8 @@ def count(alnFile):
             gA_base = gSeqA[i]
             gB_base = gSeqB[i]
             gC_base = gSeqC[i]
-            # ignore indels
-            if gA_base == "-" or gB_base == "-" or gC_base == "-":
+            # Only canonical columns contribute to either numerator or denominator.
+            if any(base not in "ACGT" for base in (gA_base, gB_base, gC_base)):
                 continue
             # count substitutions
             if gA_base == gB_base and gB_base == gC_base:

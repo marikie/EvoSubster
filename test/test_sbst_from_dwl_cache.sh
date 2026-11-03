@@ -1,0 +1,459 @@
+#!/bin/bash
+
+set -u
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REAL_RSCRIPT=$(type -P Rscript)
+tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/evosubster-wrapper-cache.XXXXXX")
+trap 'rm -rf "$tmp_dir"' EXIT
+
+fail=0
+check() {
+    local description="$1"
+    shift
+    if "$@"; then
+        echo "ok: $description"
+    else
+        echo "FAIL: $description"
+        fail=$((fail + 1))
+    fi
+}
+
+# Build a minimal isolated checkout so absolute helper paths used by
+# sbst_fromDwl.sh can be replaced with deterministic process-boundary stubs.
+fixture_repo="$tmp_dir/repo"
+stub_bin="$tmp_dir/bin"
+mkdir -p "$fixture_repo/src/select" "$fixture_repo/src/lib" "$fixture_repo/config" "$stub_bin"
+cp "$ROOT_DIR/src/sbst_fromDwl.sh" "$fixture_repo/src/sbst_fromDwl.sh"
+cp "$ROOT_DIR/src/lib/train_cache.sh" "$fixture_repo/src/lib/train_cache.sh"
+cp "$ROOT_DIR/src/lib/last_options.sh" "$ROOT_DIR/src/lib/last_options.py" "$fixture_repo/src/lib/"
+cp "$ROOT_DIR/src/lib/selection_run.py" "$ROOT_DIR/src/lib/run_manifest.py" "$fixture_repo/src/lib/"
+cp "$ROOT_DIR/config/dwl_config.yaml" "$fixture_repo/config/dwl_config.yaml"
+
+cat > "$stub_bin/Rscript" <<'EOF'
+#!/bin/bash
+script="$1"
+shift
+printf '%s\n' "$script" "$@" > "$R_ARGS_LOG"
+if [ "${VALIDATE_IDENTITY_OPTIONS:-0}" -eq 1 ]; then
+    "$REAL_RSCRIPT" "$IDENTITY_PARSER" "$@" || exit 1
+fi
+printf '%s\n' "$EVOSUBSTER_LAST_OPTIONS" > "$R_ARGS_LOG.env"
+if [ "${SELECTOR_FAIL:-0}" -eq 1 ]; then
+    exit 42
+fi
+out_dir=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --out-dir)
+            out_dir="$2"
+            shift 2
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+mkdir -p "$out_dir"
+if [ "${SELECTOR_EMPTY:-0}" -eq 1 ]; then
+    printf '\n' > "$out_dir/selected_trios.tsv"
+else
+    printf 'out_acc\tin1_acc\tin2_acc\nGCA_000000011.1\tGCA_000000022.1\tGCA_000000033.1\n' \
+        > "$out_dir/selected_trios.tsv"
+fi
+EOF
+
+cat > "$fixture_repo/src/dwl_organism.sh" <<'EOF'
+#!/bin/bash
+acc="$1"
+shift
+out_dir=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --out-dir)
+            out_dir="$2"
+            shift 2
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+if [[ "$acc" =~ \.[0-9]+$ ]]; then
+    resolved_acc="$acc"
+else
+    resolved_acc="${acc}.9"
+fi
+org_name="Species_${resolved_acc//[._]/_}"
+org_dir="$out_dir/$org_name"
+mkdir -p "$org_dir"
+fasta="$org_dir/${resolved_acc}_genomic.fna"
+summary="$org_dir/summary.json"
+taxonomy="$org_dir/taxonomy.json"
+printf '>seq\nACGT\n' > "$fasta"
+if [[ "$resolved_acc" != GCA_000000022.* ]]; then
+    printf 'seq\ttest\tCDS\t1\t2\t.\t+\t0\tID=cds\n' > "$org_dir/genomic.gff"
+fi
+printf '{"reports":[{"accession":"%s"}]}\n' "$resolved_acc" > "$summary"
+printf '{}\n' > "$taxonomy"
+python3 "$(dirname "$0")/lib/run_manifest.py" bundle-save "$org_dir" "$resolved_acc" "$fasta" || exit 1
+printf '%s|%s|%s|%s|%s|%s\n' \
+    "$org_name" "$fasta" "$summary" "$org_name" "$org_name" "$taxonomy"
+EOF
+
+cat > "$fixture_repo/src/sbst.sh" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >> "$SBST_ARGS_LOG"
+printf '%s\n' "$EVOSUBSTER_LAST_OPTIONS" > "$SBST_ARGS_LOG.env"
+cp "$EVOSUBSTER_METADATA_INPUT" "$SBST_ARGS_LOG.metadata-input"
+printf '%s\n' "$LASTDB_ALIGNMENT_SEED|$LASTAL_QUERY_BATCH_SIZE|$LASTAL_SPLIT_MEMORY" > "$SBST_ARGS_LOG.defaults"
+if [[ "${FAIL_ACCESSION:-}" != "" && "$*" == *"$FAIL_ACCESSION"* ]]; then exit 42; fi
+EOF
+
+chmod +x \
+    "$stub_bin/Rscript" \
+    "$fixture_repo/src/dwl_organism.sh" \
+    "$fixture_repo/src/sbst.sh"
+
+PATH="$stub_bin:$PATH" \
+bash "$fixture_repo/src/sbst_fromDwl.sh" --help > "$tmp_dir/help.log" 2>&1
+help_exit=$?
+check "wrapper help describes the audit/optional-override Stage 0 policy" \
+    sh -c 'test "$1" -eq 0 && grep -Fq -- "metadata shortlist for QC audit and optional explicit strict override" "$2"' \
+    sh "$help_exit" "$tmp_dir/help.log"
+check "wrapper help documents complete Newick taxon labels and the legacy converter" \
+    sh -c 'test "$1" -eq 0 && grep -Fq -- "accession-free complete taxon names" "$2" && grep -Fq -- "strip_newick_accessions.py" "$2"' \
+    sh "$help_exit" "$tmp_dir/help.log"
+check "pipeline shell scripts use the documented python3 runtime" \
+    sh -c '! grep -En "(^|[[:space:]])python([[:space:]]|$)" "$@"' \
+    sh \
+    "$ROOT_DIR/src/sbst_fromDwl.sh" \
+    "$ROOT_DIR/src/sbst.sh" \
+    "$ROOT_DIR/src/generate_tsv_files.sh"
+
+tree_file="$tmp_dir/tree.nwk"
+printf '((A,B),C);\n' > "$tree_file"
+
+run_tree_mode() {
+    local output_dir="$1" custom_cache="${2:-}"
+    local r_log="$3" sbst_log="$4" keep_unused="${5:-0}"
+    local args=(
+        --tree "$tree_file"
+        20260723
+        --genome-dir "$tmp_dir/genomes"
+        --out-dir "$output_dir"
+        --idt-only
+    )
+    if [ -n "$custom_cache" ]; then
+        args+=(--train-cache-dir "$custom_cache")
+    fi
+    if [ "$keep_unused" -eq 1 ]; then
+        args+=(--keep-unused-species-data)
+    fi
+
+    PATH="$stub_bin:$PATH" \
+    R_ARGS_LOG="$r_log" \
+    SBST_ARGS_LOG="$sbst_log" \
+    bash "$fixture_repo/src/sbst_fromDwl.sh" "${args[@]}" \
+        > "$tmp_dir/wrapper.log" 2>&1
+}
+
+default_out="$tmp_dir/default-out"
+default_r_log="$tmp_dir/default-r.log"
+default_sbst_log="$tmp_dir/default-sbst.log"
+run_tree_mode "$default_out" "" "$default_r_log" "$default_sbst_log"
+default_exit=$?
+default_cache="$default_out/trio_selection/train_cache"
+if [ "$default_exit" -ne 0 ]; then
+    sed 's/^/wrapper stderr: /' "$tmp_dir/wrapper.log"
+fi
+
+check "tree mode completes with the default cache path" test "$default_exit" -eq 0
+check "default selector invocation relies on its documented cache default" \
+    sh -c "! grep -q -- '--train-cache-dir' \"\$1\"" sh "$default_r_log"
+check "default cache path is forwarded to the downstream pipeline" \
+    grep -Fq -- "--train-cache-dir $default_cache" "$default_sbst_log"
+check "selected accessions are forwarded explicitly to sbst.sh" \
+    grep -Fq -- "--accession-ids GCA_000000011.1 GCA_000000022.1 GCA_000000033.1" \
+    "$default_sbst_log"
+check "available ingroup GFF and missing annotation sentinel are forwarded" \
+    grep -Fq -- "--org2-gff NO_GFF_FILE --org3-gff $tmp_dir/genomes/Species_GCA_000000033_1/genomic.gff" \
+    "$default_sbst_log"
+check "wrapper supplies metadata without prewriting an unverified run" \
+    python3 - "$default_out" "$default_sbst_log.metadata-input" <<'PYTEST'
+import json, pathlib, sys
+assert not list(pathlib.Path(sys.argv[1]).rglob("metadata_manifest.json"))
+organisms = json.loads(pathlib.Path(sys.argv[2]).read_text())
+assert len(organisms) == 3
+assert all(entry["short_name"] and entry["metadata_json"] for entry in organisms)
+PYTEST
+
+custom_out="$tmp_dir/custom-out"
+custom_cache="$tmp_dir/custom-cache"
+custom_r_log="$tmp_dir/custom-r.log"
+custom_sbst_log="$tmp_dir/custom-sbst.log"
+run_tree_mode "$custom_out" "$custom_cache" "$custom_r_log" "$custom_sbst_log"
+custom_exit=$?
+if [ "$custom_exit" -ne 0 ]; then
+    sed 's/^/wrapper stderr: /' "$tmp_dir/wrapper.log"
+fi
+
+check "tree mode completes with a custom cache path" test "$custom_exit" -eq 0
+check "custom cache path is passed to the R selector" \
+    sh -c 'grep -Fxq -- "$1" "$2"' sh "$custom_cache" "$custom_r_log"
+check "the same custom cache path is passed to sbst.sh" \
+    grep -Fq -- "--train-cache-dir $custom_cache" "$custom_sbst_log"
+
+keep_out="$tmp_dir/keep-out"
+keep_r_log="$tmp_dir/keep-r.log"
+keep_sbst_log="$tmp_dir/keep-sbst.log"
+run_tree_mode "$keep_out" "" "$keep_r_log" "$keep_sbst_log" 1
+keep_exit=$?
+check "tree mode accepts the unused-species cleanup opt-out" test "$keep_exit" -eq 0
+check "tree mode forwards the cleanup opt-out to the R selector" \
+    grep -Fxq -- "--keep-unused-species-data" "$keep_r_log"
+
+failure_r_log="$tmp_dir/failure-r.log"
+failure_sbst_log="$tmp_dir/failure-sbst.log"
+PATH="$stub_bin:$PATH" \
+R_ARGS_LOG="$failure_r_log" \
+SBST_ARGS_LOG="$failure_sbst_log" \
+SELECTOR_FAIL=1 \
+bash "$fixture_repo/src/sbst_fromDwl.sh" \
+    --tree "$tree_file" 20260723 \
+    --genome-dir "$tmp_dir/failure-genomes" \
+    --out-dir "$tmp_dir/failure-out" \
+    --idt-only \
+    > "$tmp_dir/failure-wrapper.log" 2>&1
+failure_exit=$?
+check "selector cleanup failure makes tree mode fail" test "$failure_exit" -ne 0
+check "selector cleanup failure blocks every downstream sbst.sh call" \
+    test ! -s "$failure_sbst_log"
+
+empty_r_log="$tmp_dir/empty-r.log"
+empty_sbst_log="$tmp_dir/empty-sbst.log"
+PATH="$stub_bin:$PATH" \
+R_ARGS_LOG="$empty_r_log" \
+SBST_ARGS_LOG="$empty_sbst_log" \
+SELECTOR_EMPTY=1 \
+bash "$fixture_repo/src/sbst_fromDwl.sh" \
+    --tree "$tree_file" 20260723 \
+    --genome-dir "$tmp_dir/empty-genomes" \
+    --out-dir "$tmp_dir/empty-out" \
+    --idt-only \
+    > "$tmp_dir/empty-wrapper.log" 2>&1
+empty_exit=$?
+check "zero selected trios finish successfully after selector cleanup" test "$empty_exit" -eq 0
+check "zero selected trios do not start downstream sbst.sh" test ! -s "$empty_sbst_log"
+check "zero selected trios report that there is nothing to run" \
+    grep -Fq "selected no trios; nothing to run" "$tmp_dir/empty-wrapper.log"
+
+qc_file="$tmp_dir/external-qc.tsv"
+printf 'accession\tqc_busco_mode\nGCA_000000011.1\tgenome\n' > "$qc_file"
+quality_out="$tmp_dir/quality-out"
+quality_r_log="$tmp_dir/quality-r.log"
+quality_sbst_log="$tmp_dir/quality-sbst.log"
+PATH="$stub_bin:$PATH" \
+R_ARGS_LOG="$quality_r_log" \
+SBST_ARGS_LOG="$quality_sbst_log" \
+bash "$fixture_repo/src/sbst_fromDwl.sh" \
+    --tree "$tree_file" 20260723 \
+    --genome-dir "$tmp_dir/quality-genomes" \
+    --out-dir "$quality_out" \
+    --stage0-top-k 4 \
+    --assembly-qc "$qc_file" \
+    --idt-only \
+    > "$tmp_dir/quality-wrapper.log" 2>&1
+quality_exit=$?
+
+check "tree wrapper accepts Stage 0 quality-ranking options" test "$quality_exit" -eq 0
+check "tree wrapper forwards the Stage 0 shortlist size" \
+    sh -c 'grep -Fxq -- "$1" "$2"' sh 4 "$quality_r_log"
+check "tree wrapper forwards the external assembly-QC table" \
+    sh -c 'grep -Fxq -- "$1" "$2"' sh "$qc_file" "$quality_r_log"
+check "QC-only tree wrapper does not forward the explicit override flag" \
+    sh -c '! grep -Fxq -- "--allow-qc-override" "$1"' sh "$quality_r_log"
+
+override_out="$tmp_dir/override-out"
+override_r_log="$tmp_dir/override-r.log"
+override_sbst_log="$tmp_dir/override-sbst.log"
+PATH="$stub_bin:$PATH" \
+R_ARGS_LOG="$override_r_log" \
+SBST_ARGS_LOG="$override_sbst_log" \
+bash "$fixture_repo/src/sbst_fromDwl.sh" \
+    --tree "$tree_file" 20260723 \
+    --genome-dir "$tmp_dir/override-genomes" \
+    --out-dir "$override_out" \
+    --assembly-qc "$qc_file" \
+    --allow-qc-override \
+    --idt-only \
+    > "$tmp_dir/override-wrapper.log" 2>&1
+override_exit=$?
+
+check "tree wrapper accepts an explicit strict QC override" test "$override_exit" -eq 0
+check "tree wrapper forwards the explicit strict QC override flag" \
+    grep -Fxq -- "--allow-qc-override" "$override_r_log"
+
+unversioned_log="$tmp_dir/unversioned-sbst.log"
+PATH="$stub_bin:$PATH" \
+SBST_ARGS_LOG="$unversioned_log" \
+bash "$fixture_repo/src/sbst_fromDwl.sh" \
+    20260723 GCA_000000011 GCA_000000022 GCA_000000033 \
+    --genome-dir "$tmp_dir/unversioned-genomes" \
+    --out-dir "$tmp_dir/unversioned-out" \
+    --idt-only \
+    > "$tmp_dir/unversioned-wrapper.log" 2>&1
+unversioned_exit=$?
+
+check "single-trio wrapper preserves support for unversioned requested accessions" \
+    test "$unversioned_exit" -eq 0
+check "single-trio wrapper forwards resolved versioned accessions" \
+    grep -Fq -- "--accession-ids GCA_000000011.9 GCA_000000022.9 GCA_000000033.9" \
+    "$unversioned_log"
+
+# Keep the real R argument parser in this integration test; only external work
+# (downloads and downstream analysis) is stubbed out.
+cat > "$tmp_dir/parse_identity.R" <<'EOF'
+source(Sys.getenv("REAL_SELECTOR"))
+opts <- parse_args(commandArgs(TRUE))
+cat(opts$ingroup_idt_threshold, opts$outgroup_idt_threshold,
+    opts$min_idt_gap_between_out_in, sep = "\t", file = Sys.getenv("IDENTITY_LOG"))
+EOF
+for style in spaced equals; do
+    if [ "$style" = spaced ]; then
+        identity_args=(--idt-threshold 99 --ingroup-idt-threshold 95
+                       --outgroup-idt-threshold 84 --min-idt-gap-between-out-in 10)
+    else
+        identity_args=(--ingroup-idt-threshold=95 --outgroup-idt-threshold=84
+                       --min-idt-gap-between-out-in=10 --idt-threshold=99)
+    fi
+    PATH="$stub_bin:$PATH" REAL_RSCRIPT="$REAL_RSCRIPT" \
+    REAL_SELECTOR="$ROOT_DIR/src/select/trio_selection.R" \
+    IDENTITY_PARSER="$tmp_dir/parse_identity.R" \
+    VALIDATE_IDENTITY_OPTIONS=1 IDENTITY_LOG="$tmp_dir/identity-$style.tsv" \
+    R_ARGS_LOG="$tmp_dir/identity-$style-r.log" SBST_ARGS_LOG="$tmp_dir/identity-$style-sbst.log" \
+    SELECTOR_EMPTY=1 \
+    bash "$fixture_repo/src/sbst_fromDwl.sh" --tree "$tree_file" \
+        --genome-dir "$tmp_dir/identity-genomes" --out-dir "$tmp_dir/identity-out" \
+        "${identity_args[@]}" > "$tmp_dir/identity-$style.log" 2>&1
+    identity_exit=$?
+    if [ "$identity_exit" -ne 0 ]; then
+        cat "$tmp_dir/identity-$style.log"
+    fi
+    check "tree wrapper accepts identity options ($style)" test "$identity_exit" -eq 0
+    check "R receives independent identity settings ($style)" \
+        test "$(cat "$tmp_dir/identity-$style.tsv" 2>/dev/null)" = $'95\t84\t10'
+done
+
+for option in --idt-threshold --ingroup-idt-threshold --outgroup-idt-threshold --min-idt-gap-between-out-in; do
+    for value in -1 100.1 nan inf junk ''; do
+        invalid_args=("$option=$value")
+        PATH="$stub_bin:$PATH" R_ARGS_LOG="$tmp_dir/invalid-r.log" \
+        bash "$fixture_repo/src/sbst_fromDwl.sh" --tree "$tree_file" \
+            --genome-dir "$tmp_dir/invalid-genomes" --out-dir "$tmp_dir/invalid-out" \
+            "${invalid_args[@]}" > "$tmp_dir/invalid-identity.log" 2>&1
+        invalid_exit=$?
+        check "wrapper rejects $option=$value before creating data directories" \
+            sh -c 'test "$1" -ne 0 && test ! -e "$2" && test ! -e "$3" && grep -Fq -- "$4" "$5"' \
+            sh "$invalid_exit" "$tmp_dir/invalid-out" "$tmp_dir/invalid-genomes" \
+            "$option" "$tmp_dir/invalid-identity.log"
+    done
+    PATH="$stub_bin:$PATH" bash "$fixture_repo/src/sbst_fromDwl.sh" "$option" \
+        > "$tmp_dir/missing-identity.log" 2>&1
+    check "wrapper rejects missing $option value" test "$?" -ne 0
+done
+
+PATH="$stub_bin:$PATH" \
+R_ARGS_LOG="$tmp_dir/options-r.log" \
+SBST_ARGS_LOG="$tmp_dir/options-sbst.log" \
+LASTDB_ALIGNMENT_SEED=RY4 LASTAL_QUERY_BATCH_SIZE=8K LASTAL_SPLIT_MEMORY=94G \
+bash "$fixture_repo/src/sbst_fromDwl.sh" --tree "$tree_file" 20260723 \
+    --genome-dir "$tmp_dir/options-genomes" --out-dir "$tmp_dir/options-out" \
+    --lastdb-options '-uRY4' --lastal-options '-H2 -C1' \
+    --last-train-options '--sample-number=1000' --last-split-options '-m0.1' \
+    > "$tmp_dir/options-wrapper.log" 2>&1
+check "tree mode accepts all four LAST argument strings" test "$?" -eq 0
+check "tree selection and each trio inherit identical LAST settings" \
+    cmp "$tmp_dir/options-r.log.env" "$tmp_dir/options-sbst.log.env"
+check "LAST settings preserve the complete argument string" \
+    grep -Fq -- '"lastal": "-H2 -C1"' "$tmp_dir/options-r.log.env"
+
+
+# A saved tree selection can be resumed with no date or path arguments.
+resume_tsv="$tmp_dir/options-out/trio_selection/selected_trios.tsv"
+PATH="$stub_bin:$PATH" SELECTOR_FAIL=1 R_ARGS_LOG="$tmp_dir/unexpected-selector.log" \
+SBST_ARGS_LOG="$tmp_dir/resume-sbst.log" \
+LASTDB_ALIGNMENT_SEED=RY128 LASTAL_QUERY_BATCH_SIZE=1M LASTAL_SPLIT_MEMORY=8T \
+bash "$fixture_repo/src/sbst_fromDwl.sh" --trios "$resume_tsv" > "$tmp_dir/resume.log" 2>&1
+check "saved TSV resumes without invoking selection" \
+    sh -c 'test "$1" -eq 0 && test ! -e "$2"' sh "$?" "$tmp_dir/unexpected-selector.log"
+check "resume restores LAST options" cmp "$tmp_dir/options-sbst.log.env" "$tmp_dir/resume-sbst.log.env"
+check "resume restores LAST environment defaults over the current environment" \
+    cmp "$tmp_dir/options-sbst.log.defaults" "$tmp_dir/resume-sbst.log.defaults"
+check "resume restores date and cache path" \
+    sh -c 'grep -Fq 20260723 "$1" && grep -Fq -- "$2" "$1"' \
+    sh "$tmp_dir/resume-sbst.log" "$tmp_dir/options-out/trio_selection/train_cache"
+check "resume does not inherit idt-only" sh -c '! grep -q -- --idt-only "$1"' sh "$tmp_dir/resume-sbst.log"
+
+# LAST overrides should still go through the existing output compatibility guard.
+PATH="$stub_bin:$PATH" SBST_ARGS_LOG="$tmp_dir/conflict-sbst.log" \
+bash "$fixture_repo/src/sbst_fromDwl.sh" --trios="$resume_tsv" --lastal-options=-H3 \
+    > "$tmp_dir/conflict.log" 2>&1
+check "changed settings reach downstream keyed run allocation" test "$?" -eq 0
+
+PATH="$stub_bin:$PATH" SBST_ARGS_LOG="$tmp_dir/override-resume.log" \
+bash "$fixture_repo/src/sbst_fromDwl.sh" --trios="$resume_tsv" newdate \
+    --out-dir "$tmp_dir/new resume output" --thread 4 --lastal-options=-H3 \
+    > "$tmp_dir/override-resume-wrapper.log" 2>&1
+check "explicit settings override saved settings into a new output" test "$?" -eq 0
+check "date and thread overrides reach downstream" \
+    sh -c 'grep -q newdate "$1" && grep -q -- "--thread 4" "$1"' sh "$tmp_dir/override-resume.log"
+check "LAST override reaches downstream" grep -Fq '"lastal": "-H3"' "$tmp_dir/override-resume.log.env"
+
+# Minimal legacy TSVs do not need an accompanying config, but do need DATE.
+legacy="$tmp_dir/legacy.tsv"
+printf 'in2_acc\tnote\tout_acc\tin1_acc\nGCA_000000033.1\textra\tGCA_000000011.1\tGCA_000000022.1\nGCA_000000066.1\textra\tGCA_000000044.1\tGCA_000000055.1\n' > "$legacy"
+PATH="$stub_bin:$PATH" bash "$fixture_repo/src/sbst_fromDwl.sh" --trios "$legacy" \
+    > "$tmp_dir/legacy-missing-date.log" 2>&1
+check "legacy TSV requires an explicit date" test "$?" -ne 0
+PATH="$stub_bin:$PATH" SBST_ARGS_LOG="$tmp_dir/legacy-sbst.log" FAIL_ACCESSION=GCA_000000011.1 \
+bash "$fixture_repo/src/sbst_fromDwl.sh" --trios "$legacy" 20260723 \
+    --genome-dir "$tmp_dir/legacy-genomes" --out-dir "$tmp_dir/legacy-out" \
+    > "$tmp_dir/legacy.log" 2>&1
+check "one failure makes batch return failure" test "$?" -ne 0
+check "later trios still run and appear in the final summary" \
+    sh -c 'grep -q "FAILED GCA_000000011.1" "$1" && grep -q "OK GCA_000000044.1" "$1" && grep -q "2 trio(s); 1 failed" "$1"' sh "$tmp_dir/legacy.log"
+
+printf 'GCA_000000066.1\textra\tINVALID\tGCA_000000055.1\n' >> "$legacy"
+PATH="$stub_bin:$PATH" SBST_ARGS_LOG="$tmp_dir/invalid-tsv-sbst.log" \
+bash "$fixture_repo/src/sbst_fromDwl.sh" --trios "$legacy" 20260723 \
+    --out-dir "$tmp_dir/invalid-tsv-out" > "$tmp_dir/invalid-tsv.log" 2>&1
+check "all TSV rows are validated before creating outputs or launching a trio" \
+    sh -c 'test "$1" -ne 0 && test ! -e "$2" && test ! -s "$3" && grep -q "line 4" "$4"' \
+    sh "$?" "$tmp_dir/invalid-tsv-out" "$tmp_dir/invalid-tsv-sbst.log" "$tmp_dir/invalid-tsv.log"
+
+for conflict in tree accessions config; do
+    case "$conflict" in
+        tree) args=(--trios "$resume_tsv" --tree "$tree_file") ;;
+        accessions) args=(--trios "$resume_tsv" date GCA_1.1 GCA_2.1 GCA_3.1) ;;
+        config) args=(--selection-config missing.json date GCA_1.1 GCA_2.1 GCA_3.1) ;;
+    esac
+    PATH="$stub_bin:$PATH" bash "$fixture_repo/src/sbst_fromDwl.sh" "${args[@]}" > "$tmp_dir/conflict-$conflict.log" 2>&1
+    check "reject incompatible modes: $conflict" test "$?" -ne 0
+done
+
+# An unsuccessful new selection invalidates the previous resume settings.
+PATH="$stub_bin:$PATH" SELECTOR_FAIL=1 R_ARGS_LOG="$tmp_dir/stale-r.log" \
+bash "$fixture_repo/src/sbst_fromDwl.sh" --tree "$tree_file" 20260723 \
+    --genome-dir "$tmp_dir/genomes" --out-dir "$default_out" > "$tmp_dir/stale.log" 2>&1
+check "failed selection removes stale resume settings" \
+    sh -c 'test "$1" -ne 0 && test ! -e "$2"' sh "$?" "$default_out/trio_selection/selection_run.json"
+
+if [ "$fail" -gt 0 ]; then
+    echo
+    echo "$fail test(s) FAILED"
+    exit 1
+fi
+
+echo
+echo "All sbst_fromDwl cache-forwarding tests passed."

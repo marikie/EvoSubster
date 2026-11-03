@@ -1,0 +1,22 @@
+# Project policy migrated from .claude/settings.json.
+# Exact command prefixes, including the project RTK wrappers.
+# These rules do not inspect arbitrary script bodies or reordered arguments.
+
+prefix_rule(pattern=["rm", "-rf"], decision="forbidden", justification="Forbidden by EvoSubster project policy; use a non-destructive operation.")
+prefix_rule(pattern=["git", "push", "--force"], decision="forbidden", justification="Forbidden by EvoSubster project policy; use a non-destructive operation.")
+prefix_rule(pattern=["git", "push", "-f"], decision="forbidden", justification="Forbidden by EvoSubster project policy; use a non-destructive operation.")
+prefix_rule(pattern=["git", "reset", "--hard"], decision="forbidden", justification="Forbidden by EvoSubster project policy; use a non-destructive operation.")
+prefix_rule(pattern=["git", "clean", "-f"], decision="forbidden", justification="Forbidden by EvoSubster project policy; use a non-destructive operation.")
+prefix_rule(pattern=["git", "clean", "-fd"], decision="forbidden", justification="Forbidden by EvoSubster project policy; use a non-destructive operation.")
+prefix_rule(pattern=["rtk", "rm", "-rf"], decision="forbidden", justification="Forbidden by EvoSubster project policy; use a non-destructive operation.")
+prefix_rule(pattern=["rtk", "git", "push", "--force"], decision="forbidden", justification="Forbidden by EvoSubster project policy; use a non-destructive operation.")
+prefix_rule(pattern=["rtk", "git", "push", "-f"], decision="forbidden", justification="Forbidden by EvoSubster project policy; use a non-destructive operation.")
+prefix_rule(pattern=["rtk", "git", "reset", "--hard"], decision="forbidden", justification="Forbidden by EvoSubster project policy; use a non-destructive operation.")
+prefix_rule(pattern=["rtk", "git", "clean", "-f"], decision="forbidden", justification="Forbidden by EvoSubster project policy; use a non-destructive operation.")
+prefix_rule(pattern=["rtk", "git", "clean", "-fd"], decision="forbidden", justification="Forbidden by EvoSubster project policy; use a non-destructive operation.")
+prefix_rule(pattern=["rtk", "proxy", "rm", "-rf"], decision="forbidden", justification="Forbidden by EvoSubster project policy; use a non-destructive operation.")
+prefix_rule(pattern=["rtk", "proxy", "git", "push", "--force"], decision="forbidden", justification="Forbidden by EvoSubster project policy; use a non-destructive operation.")
+prefix_rule(pattern=["rtk", "proxy", "git", "push", "-f"], decision="forbidden", justification="Forbidden by EvoSubster project policy; use a non-destructive operation.")
+prefix_rule(pattern=["rtk", "proxy", "git", "reset", "--hard"], decision="forbidden", justification="Forbidden by EvoSubster project policy; use a non-destructive operation.")
+prefix_rule(pattern=["rtk", "proxy", "git", "clean", "-f"], decision="forbidden", justification="Forbidden by EvoSubster project policy; use a non-destructive operation.")
+prefix_rule(pattern=["rtk", "proxy", "git", "clean", "-fd"], decision="forbidden", justification="Forbidden by EvoSubster project policy; use a non-destructive operation.")

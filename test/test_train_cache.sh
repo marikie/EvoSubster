@@ -1,0 +1,249 @@
+#!/bin/bash
+
+set -u
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TRAIN_CACHE_LIB="$ROOT_DIR/src/lib/train_cache.sh"
+
+fail=0
+check() {
+    local description="$1"
+    shift
+    if "$@"; then
+        echo "ok: $description"
+    else
+        echo "FAIL: $description"
+        fail=$((fail + 1))
+    fi
+}
+
+if [ ! -f "$TRAIN_CACHE_LIB" ]; then
+    echo "FAIL: train-cache helper exists at $TRAIN_CACHE_LIB"
+    exit 1
+fi
+# shellcheck source=../src/lib/train_cache.sh
+source "$TRAIN_CACHE_LIB"
+
+tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/evosubster-train-cache.XXXXXX")
+trap 'rm -rf "$tmp_dir"' EXIT
+
+write_valid_train() {
+    local path="$1" identity="${2:-95.5}"
+    cat > "$path" <<EOF
+# substitution percent identity: 91.0
+# count matrix (intermediate training iteration)
+# score matrix (query letters = columns, reference letters = rows):
+# substitution percent identity: $identity
+# ref letter %: 25.0 25.0 25.0 25.0
+# qry letter %: 25.0 25.0 25.0 25.0
+#last -t4.5
+#last -a 20
+#last -A 20
+#last -b 1
+#last -B 1
+#last -S 1
+# score matrix (query letters = columns, reference letters = rows):
+       A      C      G      T
+A      6    -10     -7    -11
+C    -10      6    -11     -7
+G     -7    -11      6    -10
+T    -11     -7    -10      6
+EOF
+}
+
+write_truncated_train() {
+    local path="$1"
+    cat > "$path" <<'EOF'
+# substitution percent identity: 91.0
+# count matrix (intermediate training iteration)
+# score matrix (query letters = columns, reference letters = rows):
+EOF
+}
+
+# Strict accession extraction must never turn an arbitrary FASTA name into a cache key.
+check "extracts a complete NCBI accession from a downloader-style filename" \
+    test "$(extract_ncbi_accession_from_path "/genomes/GCA_012345678.9_genomic.fna")" = \
+    "GCA_012345678.9"
+check "rejects a custom FASTA filename as an accession source" \
+    test -z "$(extract_ncbi_accession_from_path "/genomes/custom_species.fna")"
+check "rejects an accession without a version" \
+    test -z "$(extract_ncbi_accession_from_path "/genomes/GCF_012345678_genomic.fna")"
+
+cache_dir="$tmp_dir/cache"
+dest_dir="$tmp_dir/dest"
+mkdir -p "$cache_dir" "$dest_dir"
+ref_fasta="$tmp_dir/reference.fa"
+query_fasta="$tmp_dir/query.fa"
+printf '>ref\nACGT\n' > "$ref_fasta"
+printf '>query\nAGGT\n' > "$query_fasta"
+namespace=$(python3 "$ROOT_DIR/src/lib/run_manifest.py" training-directory "$cache_dir" "$ref_fasta" "$query_fasta" GCA_000000001.1 GCA_000000002.1)
+mkdir -p "$namespace"
+
+
+# Forward-orientation reuse copies validated content and survives cache cleanup.
+forward_cache="$namespace/GCA_000000001.12GCA_000000002.1.train"
+forward_dest="$dest_dir/forward.train"
+write_valid_train "$forward_cache"
+python3 "$ROOT_DIR/src/lib/run_manifest.py" seal-file "$forward_cache"
+reuse_cached_train "$cache_dir" "20260723" \
+    "GCA_000000001.1" "GCA_000000002.1" "$forward_dest" "$ref_fasta" "$query_fasta"
+check "reuses a forward-orientation cache entry" test -f "$forward_dest"
+check "materializes a regular file instead of a symlink" test ! -L "$forward_dest"
+reuse_cached_train "$cache_dir" "20260724" \
+    "GCA_000000001.1" "GCA_000000002.1" "$dest_dir/next-day.train" "$ref_fasta" "$query_fasta"
+check "reuses the same cache on another run date" is_valid_train_file "$dest_dir/next-day.train"
+rm -f "$forward_cache"
+check "reused output remains valid after cache cleanup" is_valid_train_file "$forward_dest"
+
+# Reverse orientation must not use parameters trained in the opposite direction.
+reverse_cache="$namespace/GCA_000000001.12GCA_000000002.1.train"
+reverse_dest="$dest_dir/reverse.train"
+write_valid_train "$reverse_cache"
+python3 "$ROOT_DIR/src/lib/run_manifest.py" seal-file "$reverse_cache"
+reuse_cached_train "$cache_dir" "20260723" \
+    "GCA_000000002.1" "GCA_000000001.1" "$reverse_dest"
+check "skips a reverse-orientation cache entry" test ! -e "$reverse_dest"
+
+# A dangling destination from an older symlink-based run must be recoverable.
+dangling_dest="$dest_dir/dangling.train"
+ln -s "$tmp_dir/missing-cache.train" "$dangling_dest"
+reuse_cached_train "$cache_dir" "20260723" \
+    "GCA_000000001.1" "GCA_000000002.1" "$dangling_dest" "$ref_fasta" "$query_fasta"
+check "replaces a dangling destination link" test -f "$dangling_dest"
+check "recovered destination is no longer a symlink" test ! -L "$dangling_dest"
+
+# A valid symlink created by the previous implementation is converted in place
+# so upgrading the code also makes existing outputs independent of the cache.
+legacy_cache="$cache_dir/GCA_000000005.12GCA_000000006.1.train"
+legacy_dest="$dest_dir/legacy.train"
+write_valid_train "$legacy_cache"
+ln -s "$legacy_cache" "$legacy_dest"
+reuse_cached_train "$cache_dir" "20260723" \
+    "GCA_000000005.1" "GCA_000000006.1" "$legacy_dest"
+rm -f "$legacy_cache"
+check "materializes a valid legacy cache symlink" test ! -L "$legacy_dest"
+check "materialized legacy output survives cache cleanup" is_valid_train_file "$legacy_dest"
+
+# Partial cache files must not be reused or leave a destination that makes last_train skip.
+invalid_cache="$cache_dir/GCA_000000003.12GCA_000000004.1.train"
+invalid_dest="$dest_dir/invalid.train"
+write_truncated_train "$invalid_cache"
+printf 'partial destination\n' > "$invalid_dest"
+reuse_cached_train "$cache_dir" "20260723" \
+    "GCA_000000003.1" "GCA_000000004.1" "$invalid_dest"
+check "removes an invalid destination before fresh training" test ! -e "$invalid_dest"
+
+out_of_range_train="$cache_dir/out-of-range.train"
+write_valid_train "$out_of_range_train" 101
+check "rejects an out-of-range final identity" \
+    bash -c 'source "$1"; ! is_valid_train_file "$2"' \
+    bash "$TRAIN_CACHE_LIB" "$out_of_range_train"
+
+# sbst.sh must use accessions supplied by its downloader caller even when FASTA
+# basenames are custom, and it must attempt cache reuse for all three pairs.
+stub_bin="$tmp_dir/bin"
+stub_align="$tmp_dir/align"
+stub_metrics="$tmp_dir/metrics"
+pipeline_out="$tmp_dir/pipeline-out"
+pipeline_cache="$tmp_dir/pipeline-cache"
+pipeline_log="$tmp_dir/last-train.log"
+mkdir -p "$stub_bin" "$stub_align" "$stub_metrics" "$pipeline_out" "$pipeline_cache"
+
+cat > "$stub_bin/lastal" <<'EOF'
+#!/bin/bash
+echo "lastal test stub"
+EOF
+cat > "$stub_bin/readlink" <<'EOF'
+#!/bin/bash
+echo "readlink -f is unavailable in this compatibility test" >&2
+exit 64
+EOF
+cat > "$stub_metrics/gc_content.sh" <<'EOF'
+#!/bin/bash
+echo "GC 0.5"
+EOF
+cat > "$stub_align/last_train.sh" <<'EOF'
+#!/bin/bash
+dest="$6/${4}2${5}_${1}.train"
+if [ -s "$dest" ] && grep -Fq '# substitution percent identity:' "$dest"; then
+    echo "reused" >> "$TRAIN_TEST_LOG"
+else
+    echo "fresh" >> "$TRAIN_TEST_LOG"
+    cat > "$dest" <<'TRAIN'
+# substitution percent identity: 90
+#last -t4.5
+#last -a 20
+#last -A 20
+#last -b 1
+#last -B 1
+#last -S 1
+# score matrix (query letters = columns, reference letters = rows):
+       A      C      G      T
+A      6    -10     -7    -11
+C    -10      6    -11     -7
+G     -7    -11      6    -10
+T    -11     -7    -10      6
+TRAIN
+fi
+EOF
+chmod +x \
+    "$stub_bin/lastal" \
+    "$stub_bin/readlink" \
+    "$stub_metrics/gc_content.sh" \
+    "$stub_align/last_train.sh"
+
+mkdir -p "$tmp_dir/Genus_alpha" "$tmp_dir/Genus_beta" "$tmp_dir/Genus_gamma"
+fasta1="$tmp_dir/Genus_alpha/custom-outgroup.fa"
+fasta2="$tmp_dir/Genus_beta/custom-ingroup-a.fa"
+fasta3="$tmp_dir/Genus_gamma/custom-ingroup-b.fa"
+printf '>a\nACGT\n' > "$fasta1"
+printf '>b\nACGT\n' > "$fasta2"
+printf '>c\nACGT\n' > "$fasta3"
+
+acc1="GCA_000000011.1"
+acc2="GCA_000000022.1"
+acc3="GCA_000000033.1"
+for spec in "1 2 $acc1 $acc2 91" "1 3 $acc1 $acc3 92" "2 3 $acc2 $acc3 93"; do
+    read -r first second ref_acc query_acc identity <<< "$spec"
+    ref_var="fasta$first"; query_var="fasta$second"
+    namespace=$(PATH="$stub_bin:$PATH" python3 "$ROOT_DIR/src/lib/run_manifest.py" training-directory "$pipeline_cache" "${!ref_var}" "${!query_var}" "$ref_acc" "$query_acc")
+    mkdir -p "$namespace"
+    profile="$namespace/${ref_acc}2${query_acc}.train"
+    write_valid_train "$profile" "$identity"
+    python3 "$ROOT_DIR/src/lib/run_manifest.py" seal-file "$profile"
+done
+
+PATH="$stub_bin:$PATH" \
+ALIGN_DIR_OVERRIDE="$stub_align" \
+METRICS_DIR_OVERRIDE="$stub_metrics" \
+TRAIN_TEST_LOG="$pipeline_log" \
+bash "$ROOT_DIR/src/sbst.sh" \
+    --train-cache-dir "$pipeline_cache" \
+    --accession-ids "$acc1" "$acc2" "$acc3" \
+    --out-dir "$pipeline_out" \
+    --idt-only \
+    20260723 "$fasta1" "$fasta2" "$fasta3" NO_GFF_FILE \
+    > "$tmp_dir/sbst.log" 2>&1
+pipeline_status=$?
+
+check "sbst.sh accepts explicit accessions for custom FASTA names" \
+    test "$pipeline_status" -eq 0
+reuse_count=$(grep -c '^reused$' "$pipeline_log" 2>/dev/null || true)
+fresh_count=$(grep -c '^fresh$' "$pipeline_log" 2>/dev/null || true)
+reuse_count=${reuse_count:-0}
+fresh_count=${fresh_count:-0}
+check "sbst.sh reuses cached parameters for all three pairwise trainings" \
+    test "$reuse_count" -eq 3
+check "cache reuse does not require readlink -f" \
+    sh -c "! grep -q 'readlink -f is unavailable' \"\$1\"" sh "$tmp_dir/sbst.log"
+check "explicit-accession cache hits avoid every fresh last-train run" \
+    test "$pipeline_status" -eq 0 -a "$fresh_count" -eq 0
+
+if [ "$fail" -gt 0 ]; then
+    echo
+    echo "$fail test(s) FAILED"
+    exit 1
+fi
+
+echo
+echo "All train-cache tests passed."

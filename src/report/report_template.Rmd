@@ -231,6 +231,14 @@ if (length(summary_data$datasets) == 0) {
           } else {
             paste(gc_vals, collapse = "\n")
           }
+        }),
+        coding_region_percentage = map_chr(slot, ~ {
+          coding_vals <- get_species_entry(.x)$coding_region_percentage %||% character()
+          if (length(coding_vals) == 0) {
+            NA_character_
+          } else {
+            sub("^Coding region percentage: ", "", paste(coding_vals, collapse = "\n"))
+          }
         })
       )
 
@@ -243,7 +251,8 @@ if (length(summary_data$datasets) == 0) {
           accession = missing_placeholder,
           organism = missing_placeholder,
           substitution_ratio = missing_placeholder,
-          gc_content = missing_placeholder
+          gc_content = missing_placeholder,
+          coding_region_percentage = missing_placeholder
         )
       ) %>%
       mutate(
@@ -263,11 +272,13 @@ if (length(summary_data$datasets) == 0) {
           "Accession",
           "Organism",
           "Substitution Ratio",
-          "GC Content"
+          "GC Content",
+          "Coding Region (%)"
         )
       )
     )
     cat("\n")
+    cat("Coding region percentage = union length of GFF CDS regions / whole genome FASTA length (including N) x 100. Overlapping CDS annotations are counted once.\n\n")
 
     short_labels <- ifelse(
       is.na(species_rows$short_name) | species_rows$short_name == "",
@@ -338,6 +349,33 @@ if (length(summary_data$datasets) == 0) {
       dinuc_ncds_tsv = "Dinuc (Non-coding): "
     )
 
+    render_pdf_group <- function(paths, pdf_key) {
+      nice_label <- pdf_label_map[[pdf_key]]
+      if (is.null(nice_label)) {
+        nice_label <- pdf_key %>%
+          str_replace_all("_", " ") %>%
+          str_to_title()
+      }
+
+      if (length(paths) == 0) {
+        cat(glue("\n\n**{nice_label}** (not found)\n\n"))
+        return(invisible(NULL))
+      }
+
+      cat(glue("\n\n**{nice_label}**\n\n"))
+      walk(paths, function(pdf_path) {
+        cat(glue("<span style=\"font-size:10.5pt\">{basename(pdf_path)}</span>\n\n"))
+        preview <- render_pdf_preview(pdf_path, preview_dir, images_dir)
+        if (is.null(preview)) {
+          cat("(Failed to generate preview)\n\n")
+        } else {
+          preview_rel <- file.path(images_rel_base, basename(preview))
+          cat(glue("\n![]({preview_rel}){{width=16.5cm}}\n\n"))
+        }
+      })
+      invisible(NULL)
+    }
+
     pwalk(species_sections, function(slot, label, organism_name) {
       species <- ds[[slot]]
       heading <- format_heading(label, organism_name)
@@ -367,32 +405,7 @@ if (length(summary_data$datasets) == 0) {
       pdfs <- species$pdfs
       pdf_keys <- names(pdfs)
       if (is.null(pdf_keys) || !length(pdf_keys)) {
-        # Fallback: if pdfs is not a named list, keep the existing order.
-        iwalk(pdfs, function(paths, pdf_key) {
-          nice_label <- pdf_label_map[[pdf_key]]
-          if (is.null(nice_label)) {
-            nice_label <- pdf_key %>%
-              str_replace_all("_", " ") %>%
-              str_to_title()
-          }
-
-          if (length(paths) == 0) {
-            cat(glue("\n\n**{nice_label}** (not found)\n\n"))
-          } else {
-            cat(glue("\n\n**{nice_label}**\n\n"))
-            walk(paths, function(pdf_path) {
-              display_label <- basename(pdf_path)
-              cat(glue("<span style=\"font-size:10.5pt\">{display_label}</span>\n\n"))
-              preview <- render_pdf_preview(pdf_path, preview_dir, images_dir)
-              if (!is.null(preview)) {
-                preview_rel <- file.path(images_rel_base, basename(preview))
-                cat(glue("\n![]({preview_rel}){{width=16.5cm}}\n\n"))
-              } else {
-                cat("(Failed to generate preview)\n\n")
-              }
-            })
-          }
-        })
+        iwalk(pdfs, render_pdf_group)
         cat("\n")
         return(NULL)
       }
@@ -402,32 +415,7 @@ if (length(summary_data$datasets) == 0) {
         setdiff(pdf_keys, preferred_pdf_order)
       )
 
-      walk(ordered_keys, function(pdf_key) {
-        paths <- pdfs[[pdf_key]]
-        nice_label <- pdf_label_map[[pdf_key]]
-        if (is.null(nice_label)) {
-          nice_label <- pdf_key %>%
-            str_replace_all("_", " ") %>%
-            str_to_title()
-        }
-
-        if (length(paths) == 0) {
-          cat(glue("\n\n**{nice_label}** (not found)\n\n"))
-        } else {
-          cat(glue("\n\n**{nice_label}**\n\n"))
-          walk(paths, function(pdf_path) {
-            display_label <- basename(pdf_path)
-            cat(glue("<span style=\"font-size:10.5pt\">{display_label}</span>\n\n"))
-            preview <- render_pdf_preview(pdf_path, preview_dir, images_dir)
-            if (!is.null(preview)) {
-              preview_rel <- file.path(images_rel_base, basename(preview))
-              cat(glue("\n![]({preview_rel}){{width=16.5cm}}\n\n"))
-            } else {
-              cat("(Failed to generate preview)\n\n")
-            }
-          })
-        }
-      })
+      walk(ordered_keys, ~ render_pdf_group(pdfs[[.x]], .x))
 
       cat("\n")
     })

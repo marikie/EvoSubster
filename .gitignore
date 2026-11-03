@@ -1,9 +1,11 @@
 # Large data (Noble: don't track generated/large files)
+AI_outputs/
 results/
 genomes/
 log/
 eg_results/Arccen1_Ampcit2_Ampzal3/20260418/intermediateFiles/
 eg_results/Arccen1_Ampcit2_Ampzal3/20260418/metadata/
+.venv
 
 # Large intermediate files
 *.maf
@@ -38,10 +40,12 @@ doc/*.log
 tasks/
 
 # Temporary
+.worktrees/
 test_genomes/
 test_results/
 bench_genomes/
 bench_results/
+tmp/
 
 # Large documents
 *.pdf
@@ -51,3 +55,10 @@ bench_results/
 
 # .md files (documentation, not code)
 AGENTS.md
+
+# Sample data and standalone docs kept local-only, not tracked in git
+/Primates_tree.nwk
+/Eupercaria_tree_spname_only.nwk
+/trio_candidates.txt
+/sbst_fromDwl_tree_mode.html
+/trio_selection.html

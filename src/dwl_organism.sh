@@ -9,6 +9,8 @@
 #   --no-genome      Skip genome download
 #   --no-taxonomy    Skip taxonomy download
 #   --tax-out FILE   Taxonomy JSON output path (default: <out-dir>/<dir_name>/taxonomy_<accession>.json)
+#   --artifact-manifest FILE
+#                    Write newly created artifacts as an atomic TSV manifest
 #
 # Stdout on success (pipe-separated):
 #   dir_name|fasta_path|summary_json_path|raw_organism_name|ncbi_full_name|taxonomy_json_path
@@ -24,6 +26,134 @@ sanitize_for_path() {
     name=${name// /_}
     name=${name//[^A-Za-z0-9._-]/_}
     echo "$name"
+}
+
+curl_with_retry() {
+    local attempt=1
+    local max_attempts=4
+    local status
+    local retry_option=""
+
+    while true; do
+        if [ -n "$retry_option" ]; then
+            curl "$retry_option" "$@" && return 0
+            status=$?
+        elif curl "$@"; then
+            return 0
+        else
+            status=$?
+        fi
+
+        case "$status" in
+            5|6|7|18|22|28|35|52|55|56|92) ;;
+            *) return "$status" ;;
+        esac
+        [ "$attempt" -ge "$max_attempts" ] && return "$status"
+
+        echo "Warning: NCBI request failed (curl exit $status); retrying with HTTP/1.1 ($((attempt + 1))/$max_attempts)..." >&2
+        sleep 2
+        retry_option="--http1.1"
+        attempt=$((attempt + 1))
+    done
+}
+
+snapshot_relative_paths() {
+    local root="$1"
+    local output="$2"
+
+    : > "$output" || return 1
+    if [ -d "$root" ]; then
+        (
+            cd "$root" || exit 1
+            find . -mindepth 1 -print | LC_ALL=C sort
+        ) > "$output"
+    fi
+}
+
+write_artifact_manifest() {
+    local manifest_path="$1"
+    local org_dir="$2"
+    local dir_name="$3"
+    local org_dir_preexisting="$4"
+    local before_snapshot="$5"
+    local manifest_dir
+    local path
+    local relative_path
+    local artifact_type
+
+    ARTIFACT_AFTER_SNAPSHOT=$(mktemp) || {
+        echo "Error: Unable to create artifact snapshot." >&2
+        return 1
+    }
+    snapshot_relative_paths "$org_dir" "$ARTIFACT_AFTER_SNAPSHOT" || {
+        echo "Error: Unable to snapshot artifacts in $org_dir" >&2
+        return 1
+    }
+
+    manifest_dir=$(dirname "$manifest_path")
+    mkdir -p "$manifest_dir" || {
+        echo "Error: Unable to create artifact manifest directory $manifest_dir" >&2
+        return 1
+    }
+    ARTIFACT_TMP_MANIFEST=$(mktemp "${manifest_path}.tmp.XXXXXX") || {
+        echo "Error: Unable to create temporary artifact manifest for $manifest_path" >&2
+        return 1
+    }
+
+    printf 'accession\tartifact_type\trelative_path\n' > "$ARTIFACT_TMP_MANIFEST" || {
+        echo "Error: Unable to write artifact manifest $manifest_path" >&2
+        return 1
+    }
+    if [ "$org_dir_preexisting" -eq 0 ]; then
+        printf '%s\tdirectory_tree\t%s\n' "$ACCESSION" "$dir_name" \
+            >> "$ARTIFACT_TMP_MANIFEST" || {
+            echo "Error: Unable to write artifact manifest $manifest_path" >&2
+            return 1
+        }
+    else
+        while IFS= read -r path; do
+            [ -n "$path" ] || continue
+            if grep -Fqx -- "$path" "$before_snapshot"; then
+                continue
+            fi
+
+            relative_path=${path#./}
+            if [ -L "$org_dir/$relative_path" ]; then
+                artifact_type="symlink"
+            elif [ -d "$org_dir/$relative_path" ]; then
+                artifact_type="directory"
+            elif [ -f "$org_dir/$relative_path" ]; then
+                artifact_type="file"
+            else
+                echo "Error: Unsupported artifact type at $org_dir/$relative_path" >&2
+                return 1
+            fi
+            printf '%s\t%s\t%s/%s\n' \
+                "$ACCESSION" "$artifact_type" "$dir_name" "$relative_path" \
+                >> "$ARTIFACT_TMP_MANIFEST" || {
+                echo "Error: Unable to write artifact manifest $manifest_path" >&2
+                return 1
+            }
+        done < "$ARTIFACT_AFTER_SNAPSHOT"
+    fi
+
+    mv "$ARTIFACT_TMP_MANIFEST" "$manifest_path" || {
+        echo "Error: Unable to finalize artifact manifest $manifest_path" >&2
+        return 1
+    }
+    ARTIFACT_TMP_MANIFEST=""
+}
+
+cleanup_artifact_tracking() {
+    if [ -n "${ARTIFACT_BEFORE_SNAPSHOT:-}" ]; then
+        rm -f "$ARTIFACT_BEFORE_SNAPSHOT"
+    fi
+    if [ -n "${ARTIFACT_AFTER_SNAPSHOT:-}" ]; then
+        rm -f "$ARTIFACT_AFTER_SNAPSHOT"
+    fi
+    if [ -n "${ARTIFACT_TMP_MANIFEST:-}" ]; then
+        rm -f "$ARTIFACT_TMP_MANIFEST"
+    fi
 }
 
 # Check whether a usable genomic FASTA already exists in org_dir for given accession
@@ -82,7 +212,7 @@ get_org_info_from_ncbi() {
         return 1
     }
 
-    if ! curl -sS --fail "https://api.ncbi.nlm.nih.gov/datasets/v2/genome/accession/$accession/dataset_report" > "$tmp_json"; then
+    if ! curl_with_retry -sS --fail "https://api.ncbi.nlm.nih.gov/datasets/v2/genome/accession/$accession/dataset_report" > "$tmp_json"; then
         echo "Error: Failed to fetch genome summary for $accession" >&2
         rm -f "$tmp_json"
         return 1
@@ -142,7 +272,7 @@ get_org_info_from_ncbi() {
 }
 
 # Unzip ncbi_dataset.zip in org_dir and move genome files up
-process_genome_zip() {
+process_genome_zip() (
     # Resolve to absolute path so it stays valid after cd
     local org_dir
     org_dir="$(cd "$1" && pwd)" || {
@@ -186,7 +316,7 @@ process_genome_zip() {
     cd "$org_dir" || return 1
     rm -rf ncbi_dataset || echo "Warning: Could not remove ncbi_dataset directory" >&2
     echo "Successfully processed genome data for accession $accession"
-}
+)
 
 # --- argument parsing ---
 
@@ -196,7 +326,13 @@ OVERRIDE_NAME=""
 NO_GENOME=0
 NO_TAXONOMY=0
 TAX_OUT_OVERRIDE=""
+ARTIFACT_MANIFEST=""
+ARTIFACT_BEFORE_SNAPSHOT=""
+ARTIFACT_AFTER_SNAPSHOT=""
+ARTIFACT_TMP_MANIFEST=""
 FORCE=0
+
+trap cleanup_artifact_tracking EXIT
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -237,6 +373,18 @@ while [[ $# -gt 0 ]]; do
             TAX_OUT_OVERRIDE="${1#*=}"
             shift
             ;;
+        --artifact-manifest)
+            ARTIFACT_MANIFEST="${2:?--artifact-manifest requires a path}"
+            shift 2
+            ;;
+        --artifact-manifest=*)
+            ARTIFACT_MANIFEST="${1#*=}"
+            if [ -z "$ARTIFACT_MANIFEST" ]; then
+                echo "Error: --artifact-manifest requires a path" >&2
+                exit 1
+            fi
+            shift
+            ;;
         -*)
             echo "Error: Unknown option $1" >&2
             exit 1
@@ -254,17 +402,20 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [ -z "$ACCESSION" ]; then
-    echo "Usage: $(basename "$0") <ACCESSION> [--out-dir DIR] [--name NAME] [--no-genome] [--no-taxonomy] [--tax-out FILE] [--force]" >&2
+    echo "Usage: $(basename "$0") <ACCESSION> [--out-dir DIR] [--name NAME] [--no-genome] [--no-taxonomy] [--tax-out FILE] [--artifact-manifest FILE] [--force]" >&2
     exit 1
 fi
 
 # Load fasta pattern from config (fall back to default)
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 config_file="$ROOT_DIR/config/dwl_config.yaml"
+FASTA_PATTERN_TMPL=""
 if command -v yq >/dev/null 2>&1 && [ -f "$config_file" ]; then
-    FASTA_PATTERN_TMPL=$(yq eval '.patterns.fasta' "$config_file" 2>/dev/null)
+    FASTA_PATTERN_TMPL=$(yq eval '.patterns.fasta' "$config_file" 2>/dev/null) || FASTA_PATTERN_TMPL=""
 fi
-[ -z "$FASTA_PATTERN_TMPL" ] && FASTA_PATTERN_TMPL='{org_id}*.fna'
+if [ -z "$FASTA_PATTERN_TMPL" ] || [ "$FASTA_PATTERN_TMPL" = "null" ]; then
+    FASTA_PATTERN_TMPL='{org_id}*.fna'
+fi
 
 # Build download query params from config annotation types
 DWL_QUERY_PARAMS=""
@@ -280,22 +431,38 @@ DWL_QUERY_PARAMS="${DWL_QUERY_PARAMS#&}"
 
 mkdir -p "$OUT_DIR"
 # Temporary dest_dir placeholder; real dir determined after name resolution
-tmp_dest="$OUT_DIR/__tmp_dwl_${ACCESSION}"
-mkdir -p "$tmp_dest"
+tmp_dest=$(mktemp -d "$OUT_DIR/.summary-staging-XXXXXX") || exit 1
 
 ncbi_info=$(get_org_info_from_ncbi "$ACCESSION" "$OVERRIDE_NAME" "$tmp_dest") || exit 1
 
 IFS='|' read -r dir_name summary_json_path raw_organism_name ncbi_full_name tax_id <<< "$ncbi_info"
+REQUESTED_ACCESSION="$ACCESSION"
+ACCESSION=$(jq -r '.reports[0].accession // empty' "$summary_json_path") || exit 1
+if [[ ! "$ACCESSION" =~ ^(GCA|GCF)_[0-9]+\.[0-9]+$ ]]; then
+    echo "Error: summary did not resolve an exact versioned assembly accession." >&2
+    exit 1
+fi
+
 
 # Move summary JSON to final org dir
-org_dir="$OUT_DIR/$dir_name"
+org_dir="$OUT_DIR/assemblies/$ACCESSION"
+mkdir -p "$OUT_DIR/assemblies" || exit 1
+exec 7>"$OUT_DIR/assemblies/.${ACCESSION}.download.lock"
+flock 7 || exit 1
+org_dir_preexisting=0
+if [ -n "$ARTIFACT_MANIFEST" ] && { [ -e "$org_dir" ] || [ -L "$org_dir" ]; }; then
+    org_dir_preexisting=1
+    ARTIFACT_BEFORE_SNAPSHOT=$(mktemp) || {
+        echo "Error: Unable to create artifact snapshot." >&2
+        exit 1
+    }
+    snapshot_relative_paths "$org_dir" "$ARTIFACT_BEFORE_SNAPSHOT" || {
+        echo "Error: Unable to snapshot existing artifacts in $org_dir" >&2
+        exit 1
+    }
+fi
 mkdir -p "$org_dir"
 final_summary_json="$org_dir/${ACCESSION}.json"
-if [ "$summary_json_path" != "$final_summary_json" ]; then
-    mv "$summary_json_path" "$final_summary_json" 2>/dev/null || cp "$summary_json_path" "$final_summary_json"
-fi
-rmdir "$tmp_dest" 2>/dev/null || true
-summary_json_path="$final_summary_json"
 
 echo "Organism: $ncbi_full_name (dir: $dir_name)" >&2
 
@@ -304,9 +471,9 @@ echo "Organism: $ncbi_full_name (dir: $dir_name)" >&2
 fasta_path=""
 if [ "$NO_GENOME" -eq 0 ]; then
     _need_download=1
-    if [ "$FORCE" -eq 0 ] && has_fasta_files "$org_dir" "$ACCESSION"; then
-        _existing=$(find_first_fasta "$org_dir" "$ACCESSION")
-        if is_valid_fasta "$_existing"; then
+    if [ "$FORCE" -eq 0 ] && has_fasta_files "$org_dir/genome" "$ACCESSION"; then
+        _existing=$(find_first_fasta "$org_dir/genome" "$ACCESSION")
+        if is_valid_fasta "$_existing" && python3 "$SCRIPT_DIR/lib/run_manifest.py" bundle-gff "$_existing" "$ACCESSION" >/dev/null; then
             echo "Genome files already exist for $dir_name; skipping download." >&2
             _need_download=0
         else
@@ -315,9 +482,10 @@ if [ "$NO_GENOME" -eq 0 ]; then
     fi
     if [ "$_need_download" -eq 1 ]; then
         echo "Downloading genome for $dir_name ($ACCESSION)..." >&2
+        staging_dir=$(mktemp -d "$org_dir/.genome-staging-XXXXXX") || exit 1
         (
-            cd "$org_dir"
-            if ! curl -sS --fail -o ncbi_dataset.zip \
+            cd "$staging_dir"
+            if ! curl_with_retry -sS --fail -o ncbi_dataset.zip \
                 "https://api.ncbi.nlm.nih.gov/datasets/v2/genome/accession/$ACCESSION/download?${DWL_QUERY_PARAMS}"; then
                 echo "Error: Failed to download genome for $ACCESSION" >&2
                 exit 1
@@ -327,13 +495,34 @@ if [ "$NO_GENOME" -eq 0 ]; then
                 exit 1
             fi
         ) || exit 1
-        process_genome_zip "$org_dir" "$ACCESSION" >&2 || exit 1
+        process_genome_zip "$staging_dir" "$ACCESSION" >&2 || exit 1
+        staged_fasta=$(find_first_fasta "$staging_dir" "$ACCESSION")
+        is_valid_fasta "$staged_fasta" || exit 1
+        python3 "$SCRIPT_DIR/lib/run_manifest.py" bundle-save "$staging_dir" "$ACCESSION" "$staged_fasta" || exit 1
+        mkdir -p "$org_dir/versions" || exit 1
+        version_name="$(basename "$staging_dir")"
+        mv "$staging_dir" "$org_dir/versions/$version_name" || exit 1
+        python3 - "$org_dir" "$version_name" <<'PYPUBLISH' || exit 1
+import os, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+temporary = root / ('.genome-pointer-' + str(os.getpid()))
+temporary.symlink_to('versions/' + sys.argv[2], target_is_directory=True)
+os.replace(temporary, root / 'genome')
+PYPUBLISH
+
     fi
-    fasta_path=$(find_first_fasta "$org_dir" "$ACCESSION")
+    fasta_path=$(find_first_fasta "$org_dir/genome" "$ACCESSION")
     if [ -z "$fasta_path" ]; then
         echo "Warning: No FASTA file found in $org_dir after download." >&2
     fi
 fi
+
+if [ "$summary_json_path" != "$final_summary_json" ]; then
+    mv "$summary_json_path" "$final_summary_json" 2>/dev/null || cp "$summary_json_path" "$final_summary_json" || exit 1
+fi
+rmdir "$tmp_dest" 2>/dev/null || true
+summary_json_path="$final_summary_json"
 
 # --- step 3: taxonomy download ---
 
@@ -354,7 +543,7 @@ if [ "$NO_TAXONOMY" -eq 0 ]; then
         echo "Downloading taxonomy for tax_id=$tax_id..." >&2
         tmp_tax=$(mktemp) || { echo "Warning: Cannot create tmpfile for taxonomy." >&2; tax_json_path=""; }
         if [ -n "$tmp_tax" ]; then
-            if curl -sS --fail "https://api.ncbi.nlm.nih.gov/datasets/v2/taxonomy/taxon/$tax_id/dataset_report" > "$tmp_tax" && [ -s "$tmp_tax" ]; then
+            if curl_with_retry -sS --fail "https://api.ncbi.nlm.nih.gov/datasets/v2/taxonomy/taxon/$tax_id/dataset_report" > "$tmp_tax" && [ -s "$tmp_tax" ]; then
                 mv "$tmp_tax" "$tax_json_path" 2>/dev/null || {
                     cp "$tmp_tax" "$tax_json_path"
                     rm -f "$tmp_tax"
@@ -367,6 +556,14 @@ if [ "$NO_TAXONOMY" -eq 0 ]; then
             fi
         fi
     fi
+fi
+
+# --- optional artifact manifest ---
+
+if [ -n "$ARTIFACT_MANIFEST" ]; then
+    write_artifact_manifest \
+        "$ARTIFACT_MANIFEST" "$org_dir" "assemblies/$ACCESSION" "$org_dir_preexisting" \
+        "$ARTIFACT_BEFORE_SNAPSHOT" || exit 1
 fi
 
 # --- stdout: pipe-separated result ---

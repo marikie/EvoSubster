@@ -1,77 +1,100 @@
 import math
 import os
-import sys
+import re
+import shutil
+import subprocess
+import tempfile
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "statistics"))
 
-import chi2_context as script
-
-TSV_CTX = "./fixtures/chi2_ctx.tsv"
-
-# Expected values for the C>A group (computed by hand):
-#   r_hat = (100+50+100+50) / (4*10000) = 300/40000 = 0.0075
-#   E for each context = 75
-#   contrib per context = 25^2/75 = 625/75
-#   chi2 = 4 * 625/75 = 100/3, df = 3
-#   eta2 = (100/3) / (100/3 + 300) = 0.1
-EXPECTED_CHI2 = 100 / 3
-EXPECTED_ETA2 = 0.1
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SCRIPT_PATH = os.path.join(ROOT_DIR, "src", "statistics", "chi2_context.R")
+RSCRIPT = shutil.which("Rscript")
 
 
-class TestCentralMut(unittest.TestCase):
-    def test_parse_standard(self):
-        self.assertEqual(script.central_mut("A[C>A]A"), "C>A")
-        self.assertEqual(script.central_mut("T[T>G]C"), "T>G")
-        self.assertEqual(script.central_mut("G[C>T]T"), "C>T")
+@unittest.skipUnless(RSCRIPT, "Rscript is required for chi2_context.R tests")
+class Chi2ContextRTest(unittest.TestCase):
+    def run_script(self, rows, label=""):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            input_path = os.path.join(tmp_dir, "contexts.tsv")
+            with open(input_path, "w", encoding="utf-8") as handle:
+                handle.write("mutType\tmutNum\ttotalRootNum\n")
+                for mut_type, mut_num, root_num in rows:
+                    handle.write(f"{mut_type}\t{mut_num}\t{root_num}\n")
 
+            command = [RSCRIPT, SCRIPT_PATH, input_path]
+            if label:
+                command.append(label)
+            return subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
 
-class TestGroupByCentral(unittest.TestCase):
-    def test_grouping(self):
-        data = script.load_tsv(TSV_CTX)
-        groups = script.group_by_central(data)
-        self.assertIn("C>A", groups)
-        self.assertEqual(len(groups["C>A"]), 4)
+    def parse_result(self, stdout, mutation_type):
+        pattern = re.compile(
+            rf"^{re.escape(mutation_type)}\s+"
+            r"(?P<method>\w+)\s+"
+            r"(?P<statistic>\S+)\s+"
+            r"(?P<df>\S+)\s+"
+            r"(?P<p_value>\S+)",
+            re.MULTILINE,
+        )
+        match = pattern.search(stdout)
+        self.assertIsNotNone(match, stdout)
+        return match.groupdict()
 
-    def test_only_one_central_type(self):
-        data = script.load_tsv(TSV_CTX)
-        groups = script.group_by_central(data)
-        self.assertEqual(list(groups.keys()), ["C>A"])
+    def test_chisq_result_matches_contingency_table(self):
+        rows = [
+            ("A[C>A]A", 100, 10000),
+            ("C[C>A]A", 50, 10000),
+            ("G[C>A]A", 100, 10000),
+            ("T[C>A]A", 50, 10000),
+        ]
 
+        result = self.run_script(rows, label="synthetic")
 
-class TestComputeChi2Context(unittest.TestCase):
-    def setUp(self):
-        data = script.load_tsv(TSV_CTX)
-        self.groups = script.group_by_central(data)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("synthetic", result.stdout)
+        parsed = self.parse_result(result.stdout, "C>A")
+        self.assertEqual(parsed["method"], "chisq")
+        self.assertEqual(int(parsed["df"]), 3)
 
-    def test_chi2_stat(self):
-        chi2_stat, df, _, _ = script.compute_chi2_context(self.groups["C>A"])
-        self.assertAlmostEqual(chi2_stat, EXPECTED_CHI2, places=4)
-        self.assertEqual(df, 3)
+        expected_mut = 75.0
+        expected_non = 9925.0
+        expected_chi2 = sum(
+            ((mut - expected_mut) ** 2 / expected_mut)
+            + (((root - mut) - expected_non) ** 2 / expected_non)
+            for _, mut, root in rows
+        )
+        self.assertAlmostEqual(
+            float(parsed["statistic"]),
+            expected_chi2,
+            places=4,
+        )
+        self.assertLess(float(parsed["p_value"]), 0.05)
 
-    def test_eta2(self):
-        _, _, _, eta2 = script.compute_chi2_context(self.groups["C>A"])
-        self.assertAlmostEqual(eta2, EXPECTED_ETA2, places=4)
+    def test_uniform_context_rates_give_zero_chi_square(self):
+        rows = [
+            ("A[C>A]A", 75, 10000),
+            ("C[C>A]A", 75, 10000),
+            ("G[C>A]A", 75, 10000),
+            ("T[C>A]A", 75, 10000),
+        ]
 
-    def test_p_value_significant(self):
-        _, _, p_value, _ = script.compute_chi2_context(self.groups["C>A"])
-        self.assertLess(p_value, 0.05)
+        result = self.run_script(rows)
 
-    def test_uniform_rates_give_zero_chi2(self):
-        uniform = {
-            "A[C>A]A": (75.0, 10000.0),
-            "C[C>A]A": (75.0, 10000.0),
-            "G[C>A]A": (75.0, 10000.0),
-            "T[C>A]A": (75.0, 10000.0),
-        }
-        chi2_stat, _, _, _ = script.compute_chi2_context(uniform)
-        self.assertAlmostEqual(chi2_stat, 0.0, places=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        parsed = self.parse_result(result.stdout, "C>A")
+        self.assertEqual(parsed["method"], "chisq")
+        self.assertTrue(math.isclose(float(parsed["statistic"]), 0.0, abs_tol=1e-10))
 
-    def test_empty_contexts_returns_nan(self):
-        empty = {"A[C>A]A": (0.0, 0.0)}
-        chi2_stat, df, p_value, eta2 = script.compute_chi2_context(empty)
-        self.assertTrue(math.isnan(chi2_stat))
-        self.assertEqual(df, 0)
+    def test_rejects_input_without_positive_root_counts(self):
+        result = self.run_script([("A[C>A]A", 0, 0)])
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("No rows with totalRootNum > 0", result.stderr)
 
 
 if __name__ == "__main__":
