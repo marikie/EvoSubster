@@ -200,12 +200,8 @@ select_trio_for_pair <- function(tree, leaves, couple, opts, get_identity, tmp_i
       chosen <- verdict
       break
     }
-    if (identical(verdict$idt_threshold_condition, "FALSE")) {
-      # too far: an outgroup-ingroup identity fell below the threshold, and every
-      # farther candidate is more diverged still -> the window has closed.
-      break
-    }
-    # else "too close" (configured gap failed) -> try the next, farther candidate.
+    # Candidate order is not monotonic in measured sequence identity.
+    # Keep evaluating candidates until a pass or the configured attempt limit.
   }
   list(status = if (is.null(chosen)) "no_valid_outgroup" else "selected",
        chosen = chosen, infoA = infoA, infoB = infoB, tries = tries)

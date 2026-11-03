@@ -183,8 +183,8 @@ counting_fetch$get_identity <- function(a, b) {
   mock_get_identity(a, b)
 }
 sel <- select_trios(tree, leaves, modifyList(opts, list(outgroup_idt_threshold = 89)), counting_fetch)
-check(nrow(sel) == 0 && !any(c("a|d", "b|d") %in% seen),
-      "outgroup threshold equality stops the search before farther candidates")
+check(all(c("a|d", "b|d") %in% seen),
+      "outgroup threshold equality continues to other candidates")
 
 idt_tbl[c("a|b", "a|c", "b|c")] <- c(79, 75, 75)
 sel <- select_trios(tree, leaves,

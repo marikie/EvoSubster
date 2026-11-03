@@ -91,7 +91,7 @@ parse_args <- function(argv) {
       "--ingroup-idt-threshold" = { opts$ingroup_idt_threshold <- as.numeric(take()); i <- i + 2 },
       "--outgroup-idt-threshold" = { opts$outgroup_idt_threshold <- as.numeric(take()); i <- i + 2 },
       "--min-idt-gap-between-out-in" = { opts$min_idt_gap_between_out_in <- as.numeric(take()); i <- i + 2 },
-      "--max-outgroup-tries" = { opts$max_outgroup_tries <- as.integer(take()); i <- i + 2 },
+      "--max-outgroup-tries" = { opts$max_outgroup_tries <- take(); i <- i + 2 },
       "--ingroup-pairing"    = { opts$ingroup_pairing <- take(); i <- i + 2 },
       "--min-rel-contig-n50" = { opts$min_rel_contig_n50 <- as.numeric(take()); i <- i + 2 },
       "--stage0-top-k"       = { opts$stage0_top_k <- as.integer(take()); i <- i + 2 },
@@ -132,6 +132,11 @@ parse_args <- function(argv) {
 }
 
 normalize_identity_options <- function(opts) {
+  tries <- suppressWarnings(as.numeric(opts$max_outgroup_tries))
+  if (length(tries) != 1L || !is.finite(tries) || tries <= 0 || tries != floor(tries)) {
+    stop("--max-outgroup-tries must be a positive integer.", call.=FALSE)
+  }
+  opts$max_outgroup_tries <- tries
   # Resolve only after parsing: individual settings win regardless of CLI order.
   if (is.null(opts$ingroup_idt_threshold)) opts$ingroup_idt_threshold <- opts$idt_threshold
   if (is.null(opts$outgroup_idt_threshold)) opts$outgroup_idt_threshold <- opts$idt_threshold
