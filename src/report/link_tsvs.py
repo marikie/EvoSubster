@@ -35,46 +35,32 @@ def create_symlink(src: Path, dest: Path) -> None:
 
 
 def process_links(input_dir: Path, output_dir: Path, pattern: str) -> None:
-    ensure_directory(output_dir)
-
-    total_found = 0
-    created_links = 0
-    replaced_links = 0
-    skipped_entries = 0
-
-    for src in iter_matching_files(input_dir, pattern):
-        total_found += 1
+    input_dir = input_dir.resolve()
+    output_dir = output_dir.resolve()
+    if input_dir == output_dir:
+        raise ValueError("Input and output directories must be different")
+    planned = {}
+    for src in sorted(iter_matching_files(input_dir, pattern)):
+        if output_dir == src or output_dir in src.parents:
+            continue
+        if not src.is_file():
+            continue
+        source = src.resolve()
         dest = output_dir / src.name
-
+        if dest in planned and planned[dest] != source:
+            raise ValueError(f"Conflicting source basename: {src.name}")
         if dest.exists() or dest.is_symlink():
-            if dest.is_dir() and not dest.is_symlink():
-                print(
-                    f"Warning: destination is a directory, skipping: {dest}",
-                    file=sys.stderr,
-                )
-                skipped_entries += 1
-                continue
-            try:
-                dest.unlink()
-                replaced_links += 1
-            except OSError as exc:
-                print(
-                    f"Warning: failed to remove existing entry {dest}: {exc}",
-                    file=sys.stderr,
-                )
-                skipped_entries += 1
-                continue
-
-        create_symlink(src, dest)
-        created_links += 1
-
-    print(f"Input directory: {input_dir}")
-    print(f"Output directory: {output_dir}")
-    print(f"Pattern: {pattern}")
-    print(f"Total matches found: {total_found}")
-    print(f"New symlinks created: {created_links}")
-    print(f"Existing entries replaced: {replaced_links}")
-    print(f"Entries skipped: {skipped_entries}")
+            if not dest.is_symlink() or dest.resolve() != source:
+                raise ValueError(f"Destination already belongs to another file: {dest}")
+        planned[dest] = source
+    ensure_directory(output_dir)
+    created = 0
+    for dest, source in planned.items():
+        if dest.is_symlink():
+            continue
+        create_symlink(source, dest)
+        created += 1
+    print(f"New symlinks created: {created}")
 
 
 def main() -> None:
