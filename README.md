@@ -632,3 +632,47 @@ Dinucleotide substitution spectrum for _Amphilophus zaliosus_ (whole genome):
 
 Dinucleotide substitution spectrum for _Amphilophus zaliosus_ (non-coding region):
 ![ampZal_dinuc](./eg_results/Arccen1_Ampcit2_Ampzal3/20260418/figs/Ampzal3/dinuc/GCA_015108585.1_Ampzal3_20260418_dinuc_ncds.tsv-1.png)
+
+### Spectrum shape clustering and taxonomy
+
+`src/visualize/spectrum_shape.R` generates a dendrogram heatmap, UMAP plots colored
+by taxonomy and cluster, and representative 96-channel spectra with median/IQR.
+It requires R packages `argparse`, `jsonlite`, `cluster`, `ggplot2`, `uwot`,
+`ComplexHeatmap` (Bioconductor), and `circlize`.
+
+```bash
+rtk proxy Rscript src/visualize/spectrum_shape.R results/all \
+  --taxonomy-levels phylum,class,order --clusters auto --random-state 42
+```
+
+Input requires completed v2 manifests with verified artifacts; legacy result
+folders must be rerun with the current pipeline. Latest completed runs are selected
+by the shared manifest helper. Noncoding channels are the default; pass
+`--tsv-pattern '*.tsv'` for genomic channels. Taxonomy is annotation only and missing
+labels become Unknown, without downloads. Each ingroup/run remains a separate sample.
+No genus/identity filter is applied.
+
+The log2 ratio matches the existing bar plot: rate divided by the arithmetic mean
+of positive rates, then log2. Samples with any zero, invalid, missing, or duplicate
+channel are excluded without pseudocounts; inspect `exclusions.csv` and
+`taxonomy_counts.csv` for resulting sample loss. The 96 columns retain the six
+substitution classes and 16 contexts, without column standardization.
+
+Default clustering uses Euclidean distance and Ward D2; `--method correlation`
+uses 1-Pearson correlation and average linkage. Auto selects the best mean
+silhouette across 2 through min(10,n-1); change the cap with `--max-clusters` or
+choose `--clusters N`. Two samples or all-zero distances default to one cluster.
+UMAP is skipped below four samples; its coordinates never determine clusters.
+Fixed seed and single-threaded UMAP permit repeatable comparisons within an environment.
+
+Output defaults to `<INPUT_DIR>/spectrum_shape`; use `--output-dir` to select a
+fresh empty directory for each run. PDF/PNG figures share scales, accompanied by
+CSV matrices, assignments, distances, scores, medoids, summaries, taxonomy
+composition, and UMAP coordinates. Settings and package versions are recorded.
+The dendrogram represents spectral similarity, not evolutionary ancestry.
+Existing PCA and bar-plot scripts are unchanged.
+
+If dependencies are installed in the project-local R library, invoke with
+`R_LIBS="$PWD/.venv/spectrum-shape-r-library" Rscript src/visualize/spectrum_shape.R ...`.
+On R 4.1, compatible versions include ComplexHeatmap 2.10.0, GlobalOptions 0.1.2,
+circlize 0.4.16, and GetoptLong 1.0.5; newer releases can require a newer R version.
