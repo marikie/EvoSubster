@@ -1,3 +1,13 @@
+shape_run_time <- function(labels) {
+  matches <- regexec("(?:^|_)([0-9]{8})(?:_([0-9]{6}))?(?:$|_)", labels, perl = TRUE)
+  values <- regmatches(labels, matches)
+  as.numeric(vapply(values, function(v) {
+    if (length(v) < 2) return(NA_real_)
+    clock <- if (length(v) >= 3 && nzchar(v[3])) v[3] else "000000"
+    as.numeric(as.POSIXct(paste0(v[2], clock), format = "%Y%m%d%H%M%S", tz = "UTC"))
+  }, numeric(1)))
+}
+
 shape_region <- function(region = NULL, pattern = NULL) {
   mapped <- if (is.null(pattern)) NULL else if (pattern == "*.tsv") "whole" else "noncoding"
   if (!is.null(region) && !is.null(mapped) && region != mapped) stop("Conflicting --region and --tsv-pattern")
@@ -12,12 +22,12 @@ shape_sha256 <- function(path) {
   sub(" .*", "", value[[1]])
 }
 
-shape_legacy_ingest <- function(input, region, levels, method, run_pattern = "*") {
+shape_legacy_ingest <- function(input, region, levels, method, run_pattern = "*", selected_runs = NULL) {
   vectors <- list()
   records <- list()
   decisions <- list()
   sources <- list()
-  trios <- list.dirs(input, recursive = FALSE, full.names = TRUE)
+  trios <- if (is.null(selected_runs)) list.dirs(input, recursive = FALSE, full.names = TRUE) else names(selected_runs)
   trios <- sort(unique(normalizePath(trios, mustWork = TRUE)))
   add_record <- function(trio, run, entry = NULL, reason = "", candidates = character()) {
     slot <- if (is.null(entry$slot)) "unknown" else entry$slot
@@ -78,13 +88,12 @@ shape_legacy_ingest <- function(input, region, levels, method, run_pattern = "*"
   }
   for (trio_path in trios) {
     trio <- trio_path
-    runs <- list.dirs(trio_path, recursive = FALSE, full.names = TRUE)
+    runs <- if (is.null(selected_runs)) list.dirs(trio_path, recursive = FALSE, full.names = TRUE) else selected_runs[[trio_path]]
     runs <- runs[grepl(glob2rx(run_pattern), basename(runs))]
     if (!length(runs)) next
     labels <- basename(runs)
-    dates <- sub(".*?([0-9]{8}).*", "\\1", labels, perl = TRUE)
-    parsed <- suppressWarnings(as.Date(dates, "%Y%m%d"))
-    valid <- grepl("[0-9]{8}", labels) & !is.na(parsed)
+    parsed <- shape_run_time(labels)
+    valid <- !is.na(parsed)
     reason <- ""
     if (!all(valid)) reason <- "Run date unavailable or invalid"
     latest <- if (all(valid)) runs[parsed == max(parsed)] else runs

@@ -700,3 +700,12 @@ Local metadata replaces stale absolute paths, missing taxonomy becomes Unknown,
 and no downloads occur. `run_decisions.csv` records run selection; sample records
 include input and metadata SHA256 hashes. Legacy inputs do not receive v2
 completion/provenance verification. Existing v2 validation remains the default.
+
+For a cohort containing legacy runs and newer validated v2 runs, use
+`--input-mode mixed --run-pattern "bench_*"`. Matching run names may include
+an optional `_HHMMSS` after the date; only the newest timestamp per trio is used.
+A selection symlink can point to an unmodified v2 run. Its alias, resolved run
+path and logical trio are exported separately. Selected v2 runs must validate and
+have complete status; validation failure does not fall back to legacy. Missing
+regions never fall back to an older run. Ordered accessions are checked against
+older cohort metadata when a v2 run replaces a legacy result.

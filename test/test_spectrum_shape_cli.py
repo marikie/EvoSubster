@@ -10,6 +10,78 @@ import collect_run_summary
 ROOT = Path(__file__).resolve().parents[1]
 
 class SpectrumShapeCliTest(unittest.TestCase):
+    def test_mixed_v2_alias_and_timestamp(self):
+        with tempfile.TemporaryDirectory(prefix="mixed-", dir=ROOT / "tmp/codex") as work:
+            work = Path(work)
+            run = create_run(work / "v2")
+            manifest = json.loads((run / "metadata/metadata_manifest.json").read_text())
+            trio = work / "cohort/trio"
+            old = trio / "bench_20260101/metadata"
+            old.mkdir(parents=True)
+            (old / "metadata_manifest.json").write_text(json.dumps({"organisms": manifest["organisms"]}))
+            legacy_counts = old.parent / "statistics/singlenuc"
+            legacy_counts.mkdir(parents=True)
+            channels_before = [f"{a}[{v}]{b}" for v in ("C>A","C>G","C>T","T>A","T>C","T>G") for a in "ACGT" for b in "ACGT"]
+            for entry in manifest["organisms"]:
+                if entry["role"] == "ingroup":
+                    name = entry["accession"] + "_" + entry["short_name"] + "_old_ncds.tsv"
+                    (legacy_counts / name).write_text("mutType\tmutNum\ttotalRootNum\n" + "".join(f"{c}\t1\t100\n" for c in channels_before))
+            alias = trio / "bench_20260101_120000"
+            alias.symlink_to(run.resolve(), target_is_directory=True)
+            expression = "source('src/visualize/spectrum_shape.R'); x<-shape_mixed_ingest(commandArgs(TRUE)[1], 'whole', 'phylum', 'ward', 'bench_*', file.path(.shape_dir,'..','lib','run_manifest.py')); stopifnot(nrow(x$records)==2, all(x$records$input_format=='v2'), grepl('120000',x$run_decisions$selected_run));"
+            result = subprocess.run(["Rscript", "-e", expression, str(work / "cohort")], cwd=ROOT, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            cli = subprocess.run(["Rscript", str(ROOT / "src/visualize/spectrum_shape.R"), str(work / "cohort"), "--input-mode", "mixed", "--region", "whole", "--output-dir", str(work / "mixed-output")], capture_output=True, text=True)
+            # Fixture spectra may be incomplete, but settings are always audited.
+            settings = json.loads((work / "mixed-output/settings.json").read_text())
+            self.assertEqual(settings["provenance"], "mixed input; selected v2 runs validated, legacy runs not v2-verified")
+
+            missing = expression.replace("'whole'", "'noncoding'").replace("nrow(x$records)==2,", "nrow(x$matrix)==0, all(!x$records$included), nrow(x$records)==2,")
+            result = subprocess.run(["Rscript", "-e", missing, str(work / "cohort")], cwd=ROOT, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            # A single available region artifact leaves the other slot audited.
+            import hashlib
+            channels = [f"{a}[{v}]{b}" for v in ("C>A","C>G","C>T","T>A","T>C","T>G") for a in "ACGT" for b in "ACGT"]
+            partial = run / "partial_ncds.tsv"
+            partial.write_text("mutType\tmutNum\ttotalRootNum\n" + "".join(f"{c}\t1\t100\n" for c in channels))
+            manifest["artifacts"].append({"kind":"single_ncds", "slot":"org2", "path":partial.name, "sha256":hashlib.sha256(partial.read_bytes()).hexdigest()})
+            for i, kind in enumerate(("pdf_ncds_norm","pdf_ncds_sbst","pdf_ncds_ori","pdf_ncds_logratio","pdf_dinuc_ncds_tsv")):
+                plot = run / f"partial_plot_{i}.pdf"
+                plot.write_bytes(b"%PDF-1.4\nfixture\n%%EOF\n")
+                manifest["artifacts"].append({"kind":kind,"slot":"org2","path":plot.name,"sha256":hashlib.sha256(plot.read_bytes()).hexdigest()})
+            (run / "metadata/metadata_manifest.json").write_text(json.dumps(manifest))
+            partial_check = missing.replace("nrow(x$matrix)==0, all(!x$records$included)", "nrow(x$matrix)==1, sum(!x$records$included)==1")
+            result = subprocess.run(["Rscript", "-e", partial_check, str(work / "cohort")], cwd=ROOT, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            duplicate = trio / "bench_20260101_120000_duplicate"
+            duplicate.symlink_to(run.resolve(), target_is_directory=True)
+            result = subprocess.run(["Rscript", "-e", expression, str(work / "cohort")], cwd=ROOT, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            duplicate.unlink()
+            previous = {"organisms": json.loads(json.dumps(manifest["organisms"]))}
+            previous["organisms"][0]["accession"] = "GCA_999999999.1"
+            (old / "metadata_manifest.json").write_text(json.dumps(previous))
+            result = subprocess.run(["Rscript", "-e", expression, str(work / "cohort")], cwd=ROOT, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            (old / "metadata_manifest.json").write_text(json.dumps({"organisms": manifest["organisms"]}))
+            manifest["status"] = "pending"
+            (run / "metadata/metadata_manifest.json").write_text(json.dumps(manifest))
+            result = subprocess.run(["Rscript", "-e", expression, str(work / "cohort")], cwd=ROOT, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            manifest["status"] = "complete"
+            # Missing schema_version must still be treated as corrupt v2.
+            manifest.pop("schema_version")
+            (run / "metadata/metadata_manifest.json").write_text(json.dumps(manifest))
+            result = subprocess.run(["Rscript", "-e", expression, str(work / "cohort")], cwd=ROOT, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            manifest["schema_version"] = 2
+            (run / "metadata/metadata_manifest.json").write_text(json.dumps(manifest))
+            # Corrupt a selected v2 artifact: no fallback to the old legacy run.
+            artifact = next(a for a in manifest["artifacts"] if a["kind"] == "single")
+            (run / artifact["path"]).write_text("corrupt")
+            result = subprocess.run(["Rscript", "-e", expression, str(work / "cohort")], cwd=ROOT, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+
     def test_region_conflict_precedes_input(self):
         result = subprocess.run(["Rscript", str(ROOT / "src/visualize/spectrum_shape.R"), "/missing-input", "--region", "whole", "--tsv-pattern", "*_ncds.tsv"], capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
