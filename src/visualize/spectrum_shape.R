@@ -4,18 +4,23 @@
   if (length(files)) tail(files, 1)[[1]] else sub("^--file=", "", grep("^--file=", commandArgs(), value = TRUE)[1])
 })
 .shape_dir <- dirname(normalizePath(.shape_file))
-for (part in c("core", "io", "plots")) source(file.path(.shape_dir, "spectrum_shape", paste0(part, ".R")))
+for (part in c("core", "io", "legacy", "plots")) source(file.path(.shape_dir, "spectrum_shape", paste0(part, ".R")))
 shape_main <- function() {
   parser <- argparse::ArgumentParser(description = "Cluster 96-channel log2-ratio spectra and annotate taxonomy.")
-  parser$add_argument("input_dir", help = "Root containing completed v2 manifest runs")
+  parser$add_argument("input_dir", help = "Root containing v2 runs or legacy trio directories")
   parser$add_argument("--output-dir", default = NULL, help = "Fresh empty output directory; default INPUT_DIR/spectrum_shape")
-  parser$add_argument("--tsv-pattern", default = "*_ncds.tsv", choices = c("*_ncds.tsv", "*.tsv"))
+  parser$add_argument("--input-mode", default = "v2", choices = c("v2", "legacy"))
+  parser$add_argument("--run-pattern", default = "*")
+  parser$add_argument("--region", default = NULL, choices = c("whole", "noncoding"))
+  parser$add_argument("--tsv-pattern", default = NULL, choices = c("*_ncds.tsv", "*.tsv"))
   parser$add_argument("--taxonomy-levels", default = "phylum,class,order", help = "Comma-separated taxonomy ranks for annotation only")
   parser$add_argument("--clusters", default = "auto", help = "auto: maximize silhouette, or a positive integer cluster count")
   parser$add_argument("--max-clusters", default = 10L, type = "integer")
   parser$add_argument("--random-state", default = 42L, type = "integer")
   parser$add_argument("--method", default = "ward", choices = c("ward", "correlation"))
   args <- parser$parse_args()
+  args$region <- shape_region(args$region, args$tsv_pattern)
+  args$tsv_pattern <- if (args$region == "whole") "*.tsv" else "*_ncds.tsv"
   if (args$clusters != "auto" && (!grepl("^[1-9][0-9]*$", args$clusters) || is.na(suppressWarnings(as.integer(args$clusters))))) stop("Invalid --clusters")
   if (args$max_clusters < 2) stop("--max-clusters must be at least 2")
   levels <- unique(trimws(strsplit(args$taxonomy_levels, ",", fixed = TRUE)[[1]]))
@@ -26,7 +31,12 @@ shape_main <- function() {
   dir.create(out, recursive = TRUE, showWarnings = FALSE)
   existing <- list.files(out)
   if (length(existing)) stop("Output directory must be empty to prevent stale results: ", out)
-  data <- shape_ingest(input, args$tsv_pattern, levels, file.path(.shape_dir, "..", "lib", "run_manifest.py"), args$method)
+  data <- if (args$input_mode == "legacy") {
+    shape_legacy_ingest(input, args$region, levels, args$method, args$run_pattern)
+  } else {
+    shape_ingest(input, args$tsv_pattern, levels, file.path(.shape_dir, "..", "lib", "run_manifest.py"), args$method)
+  }
+  if (!is.null(data$run_decisions)) shape_csv(data$run_decisions, file.path(out, "run_decisions.csv"))
   shape_csv(data$records, file.path(out, "samples.csv"))
   shape_csv(data$records[!data$records$included, , drop = FALSE], file.path(out, "exclusions.csv"))
   counts <- do.call(rbind, lapply(levels, function(level) {
@@ -41,7 +51,7 @@ shape_main <- function() {
   shape_csv(counts, file.path(out, "taxonomy_counts.csv"))
   x <- data$matrix
   shape_matrix_csv(x, file.path(out, "log2_matrix.csv"))
-  jsonlite::write_json(list(arguments = args, input = input, runs = data$runs, formula = "log2((mutNum/totalRootNum)/mean(positive rates)); no pseudocount", seed = args$random_state), file.path(out, "settings.json"), auto_unbox = TRUE, pretty = TRUE)
+  jsonlite::write_json(list(arguments = args, input = input, runs = data$runs, provenance = if (args$input_mode == "v2") "v2 manifest validation" else "legacy input; v2 completion and provenance not verified", formula = "log2((mutNum/totalRootNum)/mean(positive rates)); no pseudocount", seed = args$random_state), file.path(out, "settings.json"), auto_unbox = TRUE, pretty = TRUE)
   if (nrow(x) < 2) stop("At least two valid samples are required; see exclusions.csv")
   packages <- c("ComplexHeatmap", "circlize", "ggplot2", "uwot", "cluster", "argparse", "jsonlite")
   missing <- packages[!vapply(packages, requireNamespace, logical(1), quietly = TRUE)]

@@ -645,9 +645,9 @@ rtk proxy Rscript src/visualize/spectrum_shape.R results/all \
   --taxonomy-levels phylum,class,order --clusters auto --random-state 42
 ```
 
-Input requires completed v2 manifests with verified artifacts; legacy result
-folders must be rerun with the current pipeline. Latest completed runs are selected
-by the shared manifest helper. Noncoding channels are the default; pass
+The default v2 input mode requires completed manifests with verified artifacts.
+Use `--input-mode legacy` for existing result folders without v2 manifests.
+In v2 mode, latest completed runs are selected by the shared manifest helper. Noncoding channels are the default; pass
 `--tsv-pattern '*.tsv'` for genomic channels. Taxonomy is annotation only and missing
 labels become Unknown, without downloads. Each ingroup/run remains a separate sample.
 No genus/identity filter is applied.
@@ -676,3 +676,27 @@ If dependencies are installed in the project-local R library, invoke with
 `R_LIBS="$PWD/.venv/spectrum-shape-r-library" Rscript src/visualize/spectrum_shape.R ...`.
 On R 4.1, compatible versions include ComplexHeatmap 2.10.0, GlobalOptions 0.1.2,
 circlize 0.4.16, and GetoptLong 1.0.5; newer releases can require a newer R version.
+
+Legacy results can be read directly without v2 manifests. For the benchmark runs
+linked under `results/all`, choose the region explicitly:
+
+```bash
+rtk proxy env R_LIBS="$PWD/.venv/spectrum-shape-r-library" \
+  Rscript src/visualize/spectrum_shape.R results/all --input-mode legacy \
+  --run-pattern "bench_*" --region whole \
+  --output-dir results/all/spectrum_shape_bench_whole
+```
+
+Use `--region noncoding` and a different output directory for noncoding spectra.
+The default region is noncoding in both modes. The older `--tsv-pattern` option
+remains an alias (`*.tsv`: whole; `*_ncds.tsv`: noncoding); conflicting explicit
+region and pattern selections are rejected. There is no fallback across regions.
+Legacy mode follows trio links once, selects the newest matching run by its
+8-digit date, and reads only direct files in `statistics/singlenuc/`. A filename
+containing `ncds` means noncoding; `_maflinked` does not influence selection.
+Metadata identifies ingroups, including `cds_from_<short_name>` filenames.
+Missing and ambiguous TSVs, invalid run dates and tied latest dates are audited.
+Local metadata replaces stale absolute paths, missing taxonomy becomes Unknown,
+and no downloads occur. `run_decisions.csv` records run selection; sample records
+include input and metadata SHA256 hashes. Legacy inputs do not receive v2
+completion/provenance verification. Existing v2 validation remains the default.

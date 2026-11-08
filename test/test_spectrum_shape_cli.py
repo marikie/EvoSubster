@@ -10,6 +10,11 @@ import collect_run_summary
 ROOT = Path(__file__).resolve().parents[1]
 
 class SpectrumShapeCliTest(unittest.TestCase):
+    def test_region_conflict_precedes_input(self):
+        result = subprocess.run(["Rscript", str(ROOT / "src/visualize/spectrum_shape.R"), "/missing-input", "--region", "whole", "--tsv-pattern", "*_ncds.tsv"], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Conflicting --region and --tsv-pattern", result.stderr)
+
     def test_multi_trio_outputs_and_exclusion(self):
         with tempfile.TemporaryDirectory(prefix="shape-", dir=ROOT / "tmp" / "codex") as work:
             work = Path(work)
@@ -49,6 +54,30 @@ class SpectrumShapeCliTest(unittest.TestCase):
             self.assertEqual(len(read("log2_matrix.csv")[0]), 97)
             for name in ("heatmap.pdf", "heatmap.png", "umap_phylum.png", "umap_cluster.pdf", "spectrum_cluster_1.png"):
                 self.assertGreater((work / "output" / name).stat().st_size, 1000)
+            # The same counts through legacy ingestion retain numerical results.
+            import shutil
+            for group in range(3):
+                manifest_path = next((work / "input" / str(group)).glob("*/metadata/metadata_manifest.json"))
+                manifest = json.loads(manifest_path.read_text())
+                legacy = work / "legacy" / str(group) / "bench_20260101"
+                (legacy / "statistics/singlenuc").mkdir(parents=True)
+                shutil.copytree(manifest_path.parent, legacy / "metadata")
+                for artifact in manifest["artifacts"]:
+                    if artifact["kind"] == "single":
+                        entry = next(e for e in manifest["organisms"] if e["slot"] == artifact["slot"])
+                        target = entry["accession"] + "_" + entry["short_name"] + "_test.tsv"
+                        shutil.copyfile(manifest_path.parents[1] / artifact["path"], legacy / "statistics/singlenuc" / target)
+                (legacy / "metadata/metadata_manifest.json").write_text(json.dumps(manifest))
+            legacy_result = subprocess.run(["Rscript", str(ROOT / "src/visualize/spectrum_shape.R"), str(work / "legacy"), "--input-mode", "legacy", "--region", "whole", "--output-dir", str(work / "legacy-output")], capture_output=True, text=True)
+            self.assertEqual(legacy_result.returncode, 0, legacy_result.stderr)
+            with (work / "legacy-output/log2_matrix.csv").open() as handle:
+                legacy_rows = list(csv.reader(handle))[1:]
+            with (work / "output/log2_matrix.csv").open() as handle:
+                v2_rows = list(csv.reader(handle))[1:]
+            self.assertEqual([r[1:] for r in legacy_rows], [r[1:] for r in v2_rows])
+            with (work / "legacy-output/clusters.csv").open() as handle:
+                legacy_clusters = [r["cluster"] for r in csv.DictReader(handle)]
+            self.assertEqual(legacy_clusters, [r["cluster"] for r in read("clusters.csv")])
             first = (work / "output/umap.csv").read_text()
             for path in (work / "input").glob("*/*/metadata/metadata_manifest.json"):
                 manifest = json.loads(path.read_text())
