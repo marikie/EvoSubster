@@ -124,10 +124,28 @@ class SpectrumShapeCliTest(unittest.TestCase):
             self.assertEqual(len(read("exclusions.csv")), 1)
             self.assertEqual(len(read("umap.csv")), 5)
             self.assertEqual(len(read("log2_matrix.csv")[0]), 97)
+            colors = read("annotation_colors.csv")
+            self.assertEqual(set(colors[0]), {"level", "label", "color", "identifier"})
+            self.assertEqual(len({row["color"] for row in colors}), len(colors))
+            self.assertEqual(len({row["identifier"] for row in colors}), len(colors))
+            for row in colors:
+                prefix = {"phylum": "P", "class": "C", "order": "O", "cluster": "K"}.get(row["level"], row["level"])
+                self.assertTrue(row["identifier"].startswith(prefix), row)
+                if row["level"] == "cluster":
+                    self.assertEqual(row["identifier"], "K" + row["label"])
+            self.assertEqual({row["level"] for row in colors}, {"phylum", "class", "order", "species", "cluster"})
             for name in ("heatmap.pdf", "heatmap.png", "umap_phylum.png", "umap_cluster.pdf", "spectrum_cluster_1.png"):
                 self.assertGreater((work / "output" / name).stat().st_size, 1000)
-            # The same counts through legacy ingestion retain numerical results.
+            # Inspect labels when the local PDF text utility is available.
             import shutil
+            if shutil.which("pdftotext"):
+                heatmap_text = subprocess.check_output(["pdftotext", "-layout", str(work / "output/heatmap.pdf"), "-"], text=True)
+                umap_text = subprocess.check_output(["pdftotext", "-layout", str(work / "output/umap_cluster.pdf"), "-"], text=True)
+                for cluster in {row["cluster"] for row in read("clusters.csv")}:
+                    self.assertIn("Cluster " + cluster, heatmap_text)
+                    self.assertNotIn("K" + cluster + ": " + cluster, heatmap_text)
+                    self.assertIn("K" + cluster + ": " + cluster, umap_text)
+            # The same counts through legacy ingestion retain numerical results.
             for group in range(3):
                 manifest_path = next((work / "input" / str(group)).glob("*/metadata/metadata_manifest.json"))
                 manifest = json.loads(manifest_path.read_text())

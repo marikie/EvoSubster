@@ -709,3 +709,26 @@ path and logical trio are exported separately. Selected v2 runs must validate an
 have complete status; validation failure does not fall back to legacy. Missing
 regions never fall back to an older run. Ordered accessions are checked against
 older cohort metadata when a v2 run replaces a legacy result.
+
+Spectrum heatmap channel labels use the standard monospace family `mono`.
+Annotation colors are allocated jointly across taxonomy levels and clusters, with
+known phylum colors reserved. Heatmaps and UMAPs share the mapping exported in
+`annotation_colors.csv` (`level`, `label`, `color`, `identifier`); distinct level/label
+pairs, including Unknown at different levels, receive distinct RGB colors. Starting
+from the joint palette, deterministic replacements and swaps first reduce adjacent
+annotation pairs with CIELCh hue gaps below 60 degrees, then maximize the minimum
+adjacent and overall CIELab distances. Chroma below 5 is treated as achromatic and
+excluded from hue comparisons. Adjacency follows the displayed taxonomy-column order
+and observed category pairs; input row order does not affect the mapping. This is a
+local optimization, and colors alone do not guarantee every category is distinguishable.
+Heatmaps use 8 mm taxonomy strips with 2 mm gaps on a 15-inch canvas. Each contiguous
+taxonomy band in clustered row order carries its identifier once at its center, using
+black or white text for contrast. Clusters are shown by aligned grey `]` brackets to
+the right of the full species labels, with black `Cluster 1` labels rotated 90 degrees
+counterclockwise and centered on each displayed run. Labels start at 8 pt and shrink
+to at least 6 pt; the canvas grows vertically when a short run needs more room.
+The heatmap has no cluster color strip or cluster legend. Sorted phylum/class/order categories use P/C/O identifiers;
+clusters retain their numbers with a K prefix, and other ranks use their rank name.
+Taxonomy heatmap legends and all UMAP legends show `identifier: category`, without
+changing analytical category names or sample IDs. The full palette, including cluster
+colors, remains in `annotation_colors.csv` and the cluster UMAP.
