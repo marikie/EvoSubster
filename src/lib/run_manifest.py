@@ -220,6 +220,67 @@ def descriptor(args):
                 artifacts=[], status='pending', created_at=datetime.now(timezone.utc).isoformat())
 
 
+def recover_staged_outputs(run, previous, current):
+    """Recover sealed stages written after the last successful pair checkpoint.
+
+    A mere filename or MAF header never qualifies. The stage seal must match the
+    current LAST executable, full settings, exact genomes and checkpointed train.
+    Failed-stage stderr/timing survive separately from reusable analysis outputs.
+    """
+    if os.environ.get('LASTAL_PIPELINE_MODE') != 'staged':
+        return
+    from last_options import config, output_seal
+    if previous['options'].get('last') != config():
+        return
+    organisms = {entry['slot']:entry for entry in current['organisms']}
+    names = {entry['slot']:entry.get('short_name') for entry in previous['organisms']}
+    if not all(names.values()) or not previous.get('date'):
+        return
+    existing = {a['path']:a for a in previous['artifacts']}
+    for query in ('org2','org3'):
+        prefix = f"intermediateFiles/{names['org1']}2{names[query]}"
+        train = f"{prefix}_{previous['date']}.train"
+        maf = f"{prefix}_one2one_{previous['date']}.maf"
+        for stage in ('lastal','last-split','maf-linked'):
+            for kind in ('stderr','time'):
+                pattern = Path(maf).name + f'.{stage}.{kind}.*'
+                for diagnostic in (run/'intermediateFiles').glob(pattern):
+                    if not diagnostic.is_file() or diagnostic.is_symlink() or not diagnostic.name.rsplit('.',1)[-1].isdigit():
+                        continue
+                    checksum = sha256(diagnostic)
+                    archive = run/'metadata/diagnostics'/diagnostic.name
+                    if archive.exists() and sha256(archive) != checksum:
+                        archive = archive.with_name(archive.name+'.'+checksum[:16])
+                    archive.parent.mkdir(parents=True, exist_ok=True)
+                    old_name = diagnostic.relative_to(run).as_posix()
+                    diagnostic.replace(archive)
+                    existing.pop(old_name,None)
+                    relative = archive.relative_to(run).as_posix()
+                    existing[relative] = dict(kind='auxiliary',slot=None,path=relative,sha256=checksum)
+        training = existing.get(train)
+        if not training or not (run/train).is_file() or sha256(run/train) != training['sha256']:
+            continue
+        inputs = [organisms['org1'].get('fasta_path'),organisms[query].get('fasta_path'),str(run/train)]
+        if not all(inputs):
+            continue
+        for relative in (maf+'.lastal.maf',maf+'.raw',maf):
+            seal = relative+'.complete.json'
+            if not (run/seal).is_file():
+                continue
+            try:
+                output_seal(run/relative,inputs,verify=True)
+            except (ValueError,OSError,KeyError,TypeError):
+                existing.pop(relative,None)
+                existing.pop(seal,None)
+                continue
+            for filename in (relative,seal):
+                existing[filename] = dict(kind='auxiliary',slot=None,path=filename,sha256=sha256(run/filename))
+            guard = maf+'.last_options.json'
+            if (run/guard).is_file() and json.loads((run/guard).read_text()) == previous['options']['last']:
+                existing[guard] = dict(kind='auxiliary',slot=None,path=guard,sha256=sha256(run/guard))
+    previous['artifacts'] = list(existing.values())
+
+
 def prepare(run, value):
     run = Path(run)
     path = run / MANIFEST
@@ -228,6 +289,7 @@ def prepare(run, value):
         if previous['run_key'] != value['run_key']:
             raise ValueError('Existing run inputs/options disagree with manifest')
         validate_metadata(run, previous)
+        recover_staged_outputs(run, previous, value)
         value = previous
         previous_count = len(previous['artifacts'])
         verified = {a['path'] for a in value['artifacts']
@@ -276,7 +338,9 @@ def prepare(run, value):
 def checkpoint(run, status, specs):
     run = Path(run)
     value = load(run)
-    existing = {a['path']: a for a in value['artifacts']}
+    # Successful later stages may consume their sealed intermediates.
+    existing = {a['path']: a for a in value['artifacts']
+                if artifact_path(run, a['path']).is_file()}
     for spec in specs:
         kind, slot, filename = spec.split(':', 2)
         path = artifact_path(run, filename)

@@ -1,0 +1,21 @@
+#!/bin/bash
+#PBS -N evosubster_retry
+#PBS -q regular-g
+#PBS -W group_list=gw94
+#PBS -l select=1
+#PBS -l walltime=48:00:00
+#PBS -j oe
+#PBS -m n
+#PBS -S /bin/bash
+set -euo pipefail
+: "${PBS_JOBID:?Submit with qsub}"
+: "${PROJECT_DIR:?}"
+: "${CAMPAIGN:?}"
+: "${TRIO_KEY:?}"
+cd "$PROJECT_DIR"
+[[ "$(uname -m)" == aarch64 ]] || { echo 'ARM node required'; exit 2; }
+source "$PROJECT_DIR/.venv/bin/activate"
+export TMPDIR="$CAMPAIGN/tmp/$TRIO_KEY"
+mkdir -p "$TMPDIR"
+export TMP="$TMPDIR" TEMP="$TMPDIR"
+exec python3 "$CAMPAIGN/code/scripts/retry_campaign.py" run "$CAMPAIGN" "$TRIO_KEY"

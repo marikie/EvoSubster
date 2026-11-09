@@ -67,3 +67,12 @@ test -s "$tmp_dir/out3.tsv"
 test -e "$tmp_dir/out2.tsv.complete"
 
 echo "ok: interrupted MAF joins and TSV generation leave no reusable partial output"
+
+# A staged run checkpoints pair alignments before joining; keep those inputs so
+# their manifest hashes remain valid after a successful join.
+printf 'maf-c\n' > "$tmp_dir/c.maf"
+printf 'maf-d\n' > "$tmp_dir/d.maf"
+PATH="$stub_bin:$PATH" LASTAL_PIPELINE_MODE=staged bash "$ROOT_DIR/src/align/mafjoin.sh" \
+    "$tmp_dir/c.maf" "$tmp_dir/d.maf" "$tmp_dir/staged-joined.maf" >/dev/null 2>&1
+test -s "$tmp_dir/c.maf"
+test -s "$tmp_dir/d.maf"

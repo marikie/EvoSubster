@@ -20,9 +20,65 @@ for last_al_arg in "${LASTAL_ARGS[@]}"; do
 done
 last_options_guard "$o2omaf" alignment || exit 1
 
+# Staged outputs are reusable only after successful execution and a matching seal.
+# The normal alignment settings guard above applies before any reuse decision.
+pipelineMode=${LASTAL_PIPELINE_MODE:-streaming}
+lastal_output="${o2omaf}.lastal.maf"
+split_output="${o2omaf}.raw"
+stage_verify() {
+    [ -f "$1.complete.json" ] && python3 "$LAST_OPTIONS_HELPER" verify-output "$1" \
+        --input "$org1FASTA" --input "$org2FASTA" --input "$trainFile" >/dev/null 2>&1
+}
+stage_run() {
+    local stage=$1 output=$2 status=0
+    shift 2
+    local temporary="${output}.tmp.$$" diagnostic="${o2omaf}.${stage}.stderr.$$"
+    local timing="${o2omaf}.${stage}.time.$$"
+    # Remove a stale seal before replacing its associated output.
+    rm -f "$output.complete.json" || return 1
+    echo "---$stage (staged): $*"
+    /usr/bin/time -f 'elapsed_seconds=%e\nmax_rss_kb=%M\nexit_status=%x' -o "$timing" \
+        "$@" >"$temporary" 2>"$diagnostic" || status=$?
+    cat "$diagnostic" >&2
+    cat "$timing" >&2
+    if grep -Fq 'skipping sequence' "$diagnostic"; then
+        echo "ERROR: LAST skipped sequences; incomplete alignments are not accepted. Increase the splitter memory limit (LASTAL_SPLIT_MEMORY=$splitMemory)." >&2
+        status=1
+    fi
+    if [ "$status" -ne 0 ] || [ ! -s "$temporary" ]; then
+        echo "ERROR: $stage failed; partial output and diagnostics retained at $temporary and $diagnostic" >&2
+        return 1
+    fi
+    mv "$temporary" "$output" || return 1
+    python3 "$LAST_OPTIONS_HELPER" seal-output "$output" \
+        --input "$org1FASTA" --input "$org2FASTA" --input "$trainFile" || {
+        mv "$output" "$temporary"
+        return 1
+    }
+}
+resume_lastal=0
+resume_split=0
+if [ "$pipelineMode" = staged ]; then
+    if stage_verify "$o2omaf"; then
+        echo "$o2omaf already complete (verified)"
+        exit 0
+    fi
+    if [ -e "$o2omaf" ]; then
+        mv "$o2omaf" "${o2omaf}.unverified.$$" || exit 1
+        rm -f "$o2omaf.complete.json" || exit 1
+    fi
+    # A raw or embedded-split checkpoint also makes rebuilding the DB unnecessary.
+    if stage_verify "$split_output"; then
+        resume_split=1
+    elif stage_verify "$lastal_output"; then
+        resume_lastal=1
+    fi
+fi
+
 alignmentDbDir="${dbDir}.seed-${seedScheme}"
 alignmentDbBasename=$(basename "$alignmentDbDir")
 MANIFEST_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/run_manifest.py"
+if [ "$resume_lastal" -eq 0 ] && [ "$resume_split" -eq 0 ]; then
 if [ -d "$alignmentDbDir" ] && ! python3 "$MANIFEST_HELPER" verify-directory "$alignmentDbDir" >/dev/null 2>&1; then
     rm -rf "$alignmentDbDir" || exit 1
 fi
@@ -76,6 +132,22 @@ fi
 #           symmetry, e.g. score(A→G) = score(T→C).  This is often
 #           appropriate, if neither strand is "special".
 # -C COUNT: Before extending gapped alignments, discard any gapless alignment whose query range lies in COUNT other gapless alignments with higher score-per-length. This aims to reduce run time. -C2 may reduce run time with little effect on accuracy.
+
+fi # No database/training work is needed when a staged checkpoint is verified.
+
+if [ "$pipelineMode" = staged ]; then
+    if [ "$resume_split" -eq 0 ]; then
+        if [ "$resume_lastal" -eq 0 ]; then
+            stage_run lastal "$lastal_output" lastal -p "$trainFile" "${LASTAL_ARGS[@]}" \
+                "$alignmentDbDir/$alignmentDbBasename" "$org2FASTA" || exit 1
+        fi
+        stage_run last-split "$split_output" last-split "${LAST_SPLIT_ARGS[@]}" <"$lastal_output" || exit 1
+    fi
+    stage_run maf-linked "$o2omaf" maf-linked "$split_output" || exit 1
+    # Keep checkpoints until final publication succeeds, then reclaim their space.
+    rm -f "$lastal_output" "$lastal_output.complete.json" "$split_output" "$split_output.complete.json"
+    exit 0
+fi
 
 # lastal | last-split -r (one-to-one alignments), then maf-linked
 # maf-linked requires a file argument (doesn't accept stdin), so write to

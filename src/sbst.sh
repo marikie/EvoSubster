@@ -418,6 +418,11 @@ org3_dinuc_tsv_ncds="${org3ID}_${org3ShortName}_${DATE}_dinuc_ncds.tsv"
 
 cd "$outDirPath" || exit 1
 last_options_guard "$outDirPath/intermediateFiles" training || exit 1
+REUSE_HELPER="$SCRIPT_DIR/lib/retry_reuse.py"
+if [ -n "${EVOSUBSTER_REUSE_SOURCE:-}" ]; then
+    [ -n "${EVOSUBSTER_REUSE_LOG:-}" ] || { echo "Error: EVOSUBSTER_REUSE_LOG is required." >&2; exit 1; }
+    python3 "$REUSE_HELPER" import "$outDirPath" "$EVOSUBSTER_REUSE_SOURCE" "$EVOSUBSTER_REUSE_LOG" || exit 1
+fi
 echo "pwd: $(pwd)"
 
 # Create subdirectory structure
@@ -506,12 +511,20 @@ done
 
 # Run last-train to check substitution percent identity between org1 and org2
 echo "$(get_config '.options.checkIdt.enabled_message')"
-reuse_cached_train "$TRAIN_CACHE_DIR" "$DATE" "$cacheOrg1ID" "$cacheOrg2ID" "$train12" "$org1FASTA" "$org2FASTA" || exit 1
-time bash "$ALIGN_DIR/last_train.sh" "$DATE" "$org1FASTA" "$org2FASTA" "$org1ShortName" "$org2ShortName" "$imf" || exit 1
+if python3 "$REUSE_HELPER" pair-ready "$outDirPath" org1-org2; then
+    echo "Using certified LAST 1648 training for org1-org2 (original provenance retained)."
+else
+    reuse_cached_train "$TRAIN_CACHE_DIR" "$DATE" "$cacheOrg1ID" "$cacheOrg2ID" "$train12" "$org1FASTA" "$org2FASTA" || exit 1
+    time bash "$ALIGN_DIR/last_train.sh" "$DATE" "$org1FASTA" "$org2FASTA" "$org1ShortName" "$org2ShortName" "$imf" || exit 1
+fi
 # Run last-train to check substitution percent identity between org1 and org3
 echo "$(get_config '.options.checkIdt.enabled_message')"
-reuse_cached_train "$TRAIN_CACHE_DIR" "$DATE" "$cacheOrg1ID" "$cacheOrg3ID" "$train13" "$org1FASTA" "$org3FASTA" || exit 1
-time bash "$ALIGN_DIR/last_train.sh" "$DATE" "$org1FASTA" "$org3FASTA" "$org1ShortName" "$org3ShortName" "$imf" || exit 1
+if python3 "$REUSE_HELPER" pair-ready "$outDirPath" org1-org3; then
+    echo "Using certified LAST 1648 training for org1-org3 (original provenance retained)."
+else
+    reuse_cached_train "$TRAIN_CACHE_DIR" "$DATE" "$cacheOrg1ID" "$cacheOrg3ID" "$train13" "$org1FASTA" "$org3FASTA" || exit 1
+    time bash "$ALIGN_DIR/last_train.sh" "$DATE" "$org1FASTA" "$org3FASTA" "$org1ShortName" "$org3ShortName" "$imf" || exit 1
+fi
 # Run last-train to check substitution percent identity between org2 and org3 (inner group)
 echo "$(get_config '.options.checkIdt.enabled_message')"
 reuse_cached_train "$TRAIN_CACHE_DIR" "$DATE" "$cacheOrg2ID" "$cacheOrg3ID" \
@@ -541,17 +554,39 @@ fi
 # one2one for org1-org2
 echo "$(get_config '.messages.one2one' | sed "s/{org1_short}/$org1ShortName/g" | sed "s/{org2_short}/$org2ShortName/g")"
 echo "bash $ALIGN_DIR/one2one.sh $DATE $org1FASTA $org2FASTA ${imf}/${dbName} $train12 $o2o12"
-bash "$ALIGN_DIR/one2one.sh" "$DATE" "$org1FASTA" "$org2FASTA" "${imf}/${dbName}" "$train12" "$o2o12" || exit 1
+if python3 "$REUSE_HELPER" pair-ready "$outDirPath" org1-org2; then
+    echo "Using certified LAST 1648 alignment for org1-org2 (original provenance retained)."
+else
+    last_options_guard "$o2o12" alignment || exit 1
+    if python3 "$REUSE_HELPER" current-pair-ready "$outDirPath" org1-org2; then
+        echo "Using checkpointed sorted alignment for org1-org2."
+    else
+        bash "$ALIGN_DIR/one2one.sh" "$DATE" "$org1FASTA" "$org2FASTA" "${imf}/${dbName}" "$train12" "$o2o12" || exit 1
+    fi
+fi
+python3 "$MANIFEST_HELPER" checkpoint "$outDirPath" identity_complete || exit 1
 
 # one2one for org1-org3
 echo "$(get_config '.messages.one2one' | sed "s/{org1_short}/$org1ShortName/g" | sed "s/{org2_short}/$org3ShortName/g")"
 echo "bash $ALIGN_DIR/one2one.sh $DATE $org1FASTA $org3FASTA ${imf}/${dbName} $train13 $o2o13"
-bash "$ALIGN_DIR/one2one.sh" "$DATE" "$org1FASTA" "$org3FASTA" "${imf}/${dbName}" "$train13" "$o2o13" || exit 1
+if python3 "$REUSE_HELPER" pair-ready "$outDirPath" org1-org3; then
+    echo "Using certified LAST 1648 alignment for org1-org3 (original provenance retained)."
+else
+    last_options_guard "$o2o13" alignment || exit 1
+    if python3 "$REUSE_HELPER" current-pair-ready "$outDirPath" org1-org3; then
+        echo "Using checkpointed sorted alignment for org1-org3."
+    else
+        bash "$ALIGN_DIR/one2one.sh" "$DATE" "$org1FASTA" "$org3FASTA" "${imf}/${dbName}" "$train13" "$o2o13" || exit 1
+    fi
+fi
+python3 "$MANIFEST_HELPER" checkpoint "$outDirPath" identity_complete || exit 1
 
 # maf-join the two .maf files
 echo "$(get_config '.messages.maf_join')"
 echo "bash $ALIGN_DIR/mafjoin.sh $o2o12 $o2o13 $joinedFile"
 bash "$ALIGN_DIR/mafjoin.sh" "$o2o12" "$o2o13" "$joinedFile" || exit 1
+python3 "$REUSE_HELPER" refresh-sorted "$outDirPath" || exit 1
+python3 "$MANIFEST_HELPER" checkpoint "$outDirPath" identity_complete || exit 1
 
 # Calculate the substitution ratio without considering neighboring bases
 echo "$(get_config '.messages.sbst_ratio')"

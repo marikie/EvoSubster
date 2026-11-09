@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import subprocess
 import sys
 
 
@@ -106,6 +107,11 @@ def config():
     threads = os.environ.get('THREAD_NUM', '8')
     if not threads.isdigit() or int(threads) < 1:
         raise ValueError('THREAD_NUM must be a positive integer')
+    lastal_threads = os.environ.get('LASTAL_THREADS', threads)
+    if not lastal_threads.isdigit() or int(lastal_threads) < 1:
+        raise ValueError('LASTAL_THREADS must be a positive integer')
+    if os.environ.get('LASTAL_PIPELINE_MODE', 'streaming') not in ('streaming', 'staged'):
+        raise ValueError('LASTAL_PIPELINE_MODE must be streaming or staged')
     seed = os.environ.get('LASTDB_ALIGNMENT_SEED', 'RY128')
     custom_seed = any(group[0] == '-u' for group in custom['lastdb'])
     if not custom_seed and (not seed or any(not (c.isascii() and (c.isalnum() or c in '._-')) for c in seed)):
@@ -115,7 +121,7 @@ def config():
         'lastdb_train': merge([['-P', threads], ['-c'], ['-u', 'RY4']], custom['lastdb']),
         'lastdb_align': merge([['-P', threads], ['-c'], ['-u', seed]], custom['lastdb']),
         'last_train': merge([['-P', threads], ['--revsym'], ['-C', '2']], custom['last-train']),
-        'lastal': merge([['-P', threads], ['-i', os.environ.get('LASTAL_QUERY_BATCH_SIZE', '1M') or '1M'],
+        'lastal': merge([['-P', lastal_threads], ['-i', os.environ.get('LASTAL_QUERY_BATCH_SIZE', '1M') or '1M'],
                          ['-H', '1'], ['-C', '2'], ['--split-f', 'MAF+'],
                          ['--split-b', os.environ.get('LASTAL_SPLIT_MEMORY', '8T') or '8T']], custom['lastal']),
         'last_split': ['-r'] + [word for group in custom['last-split'] for word in group],
@@ -171,14 +177,58 @@ def guard_record(folder, stage, path, settings, customized):
     temporary.replace(path)
 
 
+def file_digest(path):
+    digest = hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for block in iter(lambda: stream.read(8 * 1024 * 1024), b''):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def output_seal(path, inputs, verify=False):
+    """Accept a stage only after success, bound to its settings and input bytes."""
+    path = Path(path)
+    if not path.is_file() or path.stat().st_size == 0:
+        raise ValueError('Missing or empty LAST stage output: {}'.format(path))
+    version = subprocess.check_output(['lastal', '--version'], text=True).strip()
+    if not version:
+        raise ValueError('Cannot seal LAST output without a LAST version')
+    record = {'schema': 1, 'settings': config(), 'lastal_version': version,
+              'sha256': file_digest(path),
+              'inputs': {str(Path(source).resolve()): file_digest(source) for source in inputs}}
+    seal = Path(str(path) + '.complete.json')
+    if verify:
+        if json.loads(seal.read_text()) != record:
+            raise ValueError('Incomplete or modified LAST stage: {}'.format(path))
+    else:
+        # Commit the data before publishing its completion marker.
+        with path.open('rb') as stream:
+            os.fsync(stream.fileno())
+        temporary = Path(str(seal) + '.tmp.{}'.format(os.getpid()))
+        with temporary.open('w') as stream:
+            json.dump(record, stream, indent=2)
+            stream.write('\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(seal)
+        descriptor = os.open(str(seal.parent), os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('validate', 'argv', 'guard', 'database-label'))
+    parser.add_argument('action', choices=('validate', 'argv', 'guard', 'database-label', 'seal-output', 'verify-output'))
     parser.add_argument('value', nargs='?')
     parser.add_argument('stage', nargs='?', choices=('run', 'training', 'selection', 'alignment', 'database'))
+    parser.add_argument('--input', action='append', default=[])
     args = parser.parse_args()
     try:
-        if args.action == 'validate':
+        if args.action in ('seal-output', 'verify-output'):
+            output_seal(args.value, args.input, args.action == 'verify-output')
+        elif args.action == 'validate':
             print(json.dumps(config(), sort_keys=True))
         elif args.action == 'database-label':
             print(database_label())
@@ -199,7 +249,7 @@ def main():
                 sys.stdout.buffer.write(word.encode() + b'\0')
         else:
             guard(Path(args.value), args.stage)
-    except (ValueError, KeyError, TypeError, OSError) as error:
+    except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError) as error:
         print('LAST options: ' + str(error), file=sys.stderr)
         return 2
     return 0

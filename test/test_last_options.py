@@ -24,7 +24,7 @@ class LastOptionsTests(unittest.TestCase):
         self.env_patch.start()
         self.addCleanup(self.env_patch.stop)
         for key in ('EVOSUBSTER_LAST_OPTIONS', 'THREAD_NUM', 'LASTDB_ALIGNMENT_SEED',
-                    'LASTAL_QUERY_BATCH_SIZE', 'LASTAL_SPLIT_MEMORY'):
+                    'LASTAL_QUERY_BATCH_SIZE', 'LASTAL_SPLIT_MEMORY', 'LASTAL_THREADS', 'LASTAL_PIPELINE_MODE'):
             os.environ.pop(key, None)
 
     def custom(self, **values):
@@ -64,6 +64,24 @@ class LastOptionsTests(unittest.TestCase):
         self.assertNotIn('2M', options.config()['lastal'])
         self.assertIn('4M', options.config()['lastal'])
         self.assertIn('32G', options.config()['lastal'])
+
+    def test_lastal_thread_override_leaves_training_and_database_threads_alone(self):
+        os.environ.update(THREAD_NUM='12', LASTAL_THREADS='1')
+        config = options.config()
+        self.assertEqual(config['lastal'][:2], ['-P', '1'])
+        for key in ('lastdb_train', 'lastdb_align', 'last_train'):
+            self.assertEqual(config[key][:2], ['-P', '12'])
+        os.environ.pop('LASTAL_THREADS')
+        self.assertEqual(options.config()['lastal'][:2], ['-P', '12'])
+
+    def test_invalid_runtime_settings_rejected(self):
+        for value in ('0', '-1', '', '1.5', 'abc'):
+            with self.subTest(value=value), patch.dict(os.environ, LASTAL_THREADS=value):
+                with self.assertRaisesRegex(ValueError, 'LASTAL_THREADS'):
+                    options.config()
+        with patch.dict(os.environ, LASTAL_PIPELINE_MODE='typo'):
+            with self.assertRaisesRegex(ValueError, 'LASTAL_PIPELINE_MODE'):
+                options.config()
 
     def test_seed_paths_cannot_become_database_directory_paths(self):
         self.custom(lastdb='-u "/tmp/seed definitions/RY4"')
@@ -115,11 +133,11 @@ class LastOptionsTests(unittest.TestCase):
                 ['--lastdb-options', '-P4'], ['--lastal-options'],
             ]:
                 with self.subTest(script=script, args=args):
-                    result = subprocess.run(['rtk', 'proxy', 'bash', str(ROOT / 'src' / script), *args],
+                    result = subprocess.run(['bash', str(ROOT / 'src' / script), *args],
                                             capture_output=True, text=True)
                     self.assertNotEqual(result.returncode, 0)
                     self.assertNotIn('Downloading', result.stdout)
-            result = subprocess.run(['rtk', 'proxy', 'bash', str(ROOT / 'src' / script),
+            result = subprocess.run(['bash', str(ROOT / 'src' / script),
                                      '--lastal-options=', '--help'], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('--last-split-options', result.stdout)
@@ -159,7 +177,7 @@ elif tool == 'maf-linked':
         ref.write_text('>ref\nACG\n')
         query.write_text('>query\nACG\n')
         output = self.folder / 'fresh/output.maf'
-        command = ['rtk', 'proxy', 'bash', str(ROOT / 'src/align/one2one.sh'), 'date',
+        command = ['bash', str(ROOT / 'src/align/one2one.sh'), 'date',
                    str(ref), str(query), str(self.folder / 'db'),
                    str(self.folder / 'params.train'), str(output)]
         result = subprocess.run(command, capture_output=True, text=True)

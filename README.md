@@ -632,3 +632,29 @@ Dinucleotide substitution spectrum for _Amphilophus zaliosus_ (whole genome):
 
 Dinucleotide substitution spectrum for _Amphilophus zaliosus_ (non-coding region):
 ![ampZal_dinuc](./eg_results/Arccen1_Ampcit2_Ampzal3/20260418/figs/Ampzal3/dinuc/GCA_015108585.1_Ampzal3_20260418_dinuc_ncds.tsv-1.png)
+
+### Verified LAST 1654 retry campaign (Miyabi-G)
+
+`LASTAL_THREADS` overrides only `lastal` concurrency; DB construction and training
+continue to use `--thread`. `LASTAL_PIPELINE_MODE=staged` writes and seals the
+embedded-split output before running reverse `last-split`, avoiding simultaneous
+memory use. Completed stages are bound to inputs, effective options and the actual
+LAST version. Interrupted stages are not reusable; diagnostic logs are retained.
+These controls do not guarantee that a single large query fits the node's memory.
+
+`scripts/retry_campaign.py` manages the approved Primates/Telluraves recovery.
+Initialize it with a new campaign directory and the full original-manifest
+validation record (`--validation FILE`). It snapshots code and LAST executables,
+keeps original outputs read-only, and writes `campaign.json` and `summary.tsv`.
+`advance DIRECTORY` updates PBS states and submits available pilot/remainder jobs;
+`watch DIRECTORY` performs that same operation once per minute, holding one
+controller lock. `report DIRECTORY` refreshes the summary without submission.
+The four pilots must finish with PBS exit 0 and validated complete manifests before
+remaining jobs are submitted. At most four campaign jobs are outstanding; scheduler
+project limits also apply. Unknown submission responses stop new submissions until
+PBS has been reconciled manually. Failed jobs are not automatically retried.
+
+Each trio uses `scripts/retry_trio_miyabi_g.pbs` (regular-g, one node, 48 hours).
+New LAST work uses the pinned 1654 tool bundle. Certified inherited pair MAFs and
+profiles are explicitly recorded as LAST 1648 outputs in `legacy_reuse`; old LAST
+DBs are never imported. Existing completed runs remain at their original paths.
