@@ -71,6 +71,7 @@ class RetryCampaignTests(unittest.TestCase):
         with patch.object(mod.subprocess,'run',return_value=subprocess.CompletedProcess([],0,'job_state = Q','')) as call:
             self.assertEqual(mod.query_pbs('123.opbs')['state'],'Q')
             self.assertNotIn('-H',call.call_args[0][0])
+            self.assertEqual(call.call_args.kwargs.get('env',{}).get('PATH'),'/usr/local/bin:/opt/pbs/bin:/usr/bin:/bin')
         replies=[subprocess.CompletedProcess([],0,'No matching job found.',''),subprocess.CompletedProcess([],0,'job_state = F\nExit_status = 0','')]
         with patch.object(mod.subprocess,'run',side_effect=replies) as call:
             self.assertEqual(mod.query_pbs('123.opbs')['exit'],0)

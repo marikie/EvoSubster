@@ -87,8 +87,10 @@ def parse_pbs(text):
 def query_pbs(job_id):
     # Miyabi -H selects history ONLY; it excludes queued/running jobs.
     responses=[]
+    # Miyabi wrappers require system utilities, not conda/venv replacements.
+    scheduler_env=dict(os.environ,PATH='/usr/local/bin:/opt/pbs/bin:/usr/bin:/bin')
     for flags in (['-f'],['-f','-H']):
-        result=subprocess.run(['qstat',*flags,job_id],capture_output=True,text=True,timeout=60)
+        result=subprocess.run(['qstat',*flags,job_id],capture_output=True,text=True,timeout=60,env=scheduler_env)
         responses.append(result.stdout+result.stderr)
         if result.returncode==0:
             try:return parse_pbs(result.stdout)
