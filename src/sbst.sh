@@ -381,11 +381,16 @@ manifest_args=("$outDirBase" "$DATE" "$threadNum"
     "$org1FASTA" "${gff_paths[0]}" "$cacheOrg1ID" "$org1ShortName"
     "$org2FASTA" "${gff_paths[1]}" "$cacheOrg2ID" "$org2ShortName"
     "$org3FASTA" "${gff_paths[2]}" "$cacheOrg3ID" "$org3ShortName")
+# Serialize selection through manifest publication, including short-key collisions.
+exec 8>"$outDirBase/.run-allocation.lock"
+flock 8 || exit 1
 run_path=$(python3 "$MANIFEST_HELPER" path "${manifest_args[@]}") || exit 1
 mkdir -p "$run_path" || exit 1
 exec 9>"$run_path/.run.lock"
 flock -n 9 || { echo "Error: run is already active: $run_path" >&2; exit 1; }
-python3 "$MANIFEST_HELPER" prepare "${manifest_args[@]}" >/dev/null || exit 1
+python3 "$MANIFEST_HELPER" prepare "${manifest_args[@]}" --run-dir "$run_path" >/dev/null || exit 1
+flock -u 8
+exec 8>&-
 outDirPath="$run_path"
 # A resumed run retains its recorded display labels even if input folders moved.
 mapfile -t run_names < <(python3 -c 'import json,sys; print("\n".join(e["short_name"] for e in json.load(open(sys.argv[1]))["organisms"]))' "$run_path/metadata/metadata_manifest.json")

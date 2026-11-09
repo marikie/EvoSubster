@@ -391,7 +391,7 @@ This script:
 Results reside under:
 
 ```
-<out_dir>/<trio-key>/<DATE>-<run-key>/
+<out_dir>/<name1>_<ACC1>__<name2>_<ACC2>__<name3>_<ACC3>/<DATE>-<run-key-prefix>/
 ├── intermediateFiles/       # MAF and LAST training files
 ├── figs/
 │   ├── <ORG2>/singlenuc/{ratio,log-ratio,count}/
@@ -403,6 +403,21 @@ Results reside under:
     ├── <ORG3>/{singlenuc,dinuc}/
     └── misc/
 ```
+
+The three names follow outgroup, ingroup 1, ingroup 2 order, using existing full
+organism metadata or the local FASTA parent directory. Names are made safe for
+ASCII filenames; complete versioned accessions are retained. Without an accession,
+`local-<first 12 FASTA SHA256 characters>` identifies the input in the directory
+name. Long names are shortened equally to fit the filesystem component limit
+(at most 255 bytes); accession tokens and the run label are never shortened.
+The run-key prefix starts at 12 characters and grows if an occupied run has a
+different full key. Full content and settings hashes remain in the manifest.
+
+Existing saved results stay in place. A matching full run key and exact DATE label
+resumes its existing directory, including the previous hashed layout, even when
+display names or FASTA paths change. Multiple physical matches are an error.
+Changed input contents, annotations, or effective settings create distinct runs;
+one readable trio directory can therefore contain several full trio identities.
 
 Representative outputs include:
 
@@ -543,7 +558,7 @@ runs into a single rendered report (Word, PDF, or HTML).
 ```
 
 `input_dir` is a lineage root (`results/<lineage>`) or a single trio root
-(`results/<trio-key>`). This runs `collect_run_summary.py`, which
+(`results/<readable-trio>` or an existing `results/<trio-key>`). This runs `collect_run_summary.py`, which
 gathers run metadata into a JSON summary (default:
 `<input_dir>/<name>_summary.json`), then `render_report.sh`, which renders it
 via R Markdown.
