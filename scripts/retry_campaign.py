@@ -84,6 +84,18 @@ def parse_pbs(text):
         memory=field('resources_used.mem'),walltime=field('resources_used.walltime'))
 
 
+def query_pbs(job_id):
+    # Miyabi -H selects history ONLY; it excludes queued/running jobs.
+    responses=[]
+    for flags in (['-f'],['-f','-H']):
+        result=subprocess.run(['qstat',*flags,job_id],capture_output=True,text=True,timeout=60)
+        responses.append(result.stdout+result.stderr)
+        if result.returncode==0:
+            try:return parse_pbs(result.stdout)
+            except ValueError:pass
+    raise RuntimeError('PBS state unavailable; no new submissions: '+' | '.join(responses))
+
+
 def runtime_environment(campaign, entry):
     env=os.environ.copy()
     for key in ('EVOSUBSTER_REUSE_SOURCE','EVOSUBSTER_REUSE_LOG','EVOSUBSTER_METADATA_INPUT',
@@ -236,9 +248,7 @@ def advance(c):
         if e['status']=='submitting':
             e.update(status='submission_unknown',error='Submission interrupted; reconcile PBS before retrying')
         if e['status'] not in ('submitted','running'):continue
-        p=subprocess.run(['qstat','-f','-H',e['job_id']],capture_output=True,text=True,timeout=60)
-        if p.returncode:raise RuntimeError('qstat failed: '+p.stdout+p.stderr)
-        e['pbs']=parse_pbs(p.stdout)
+        e['pbs']=query_pbs(e['job_id'])
         if e['pbs']['state']!='F':
             e['status']='running' if e['pbs']['state']=='R' else 'submitted'
             continue

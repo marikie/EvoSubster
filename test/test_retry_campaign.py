@@ -65,6 +65,17 @@ class RetryCampaignTests(unittest.TestCase):
         self.assertEqual(c['entries'][0]['status'],'submission_unknown')
         self.assertEqual(mod.next_entries(c['entries'],4),[])
 
+    def test_live_query_precedes_history_and_falls_back_after_finish(self):
+        mod=self.module()
+        self.assertTrue(hasattr(mod,'query_pbs'), 'Live/history fallback required')
+        with patch.object(mod.subprocess,'run',return_value=subprocess.CompletedProcess([],0,'job_state = Q','')) as call:
+            self.assertEqual(mod.query_pbs('123.opbs')['state'],'Q')
+            self.assertNotIn('-H',call.call_args[0][0])
+        replies=[subprocess.CompletedProcess([],0,'No matching job found.',''),subprocess.CompletedProcess([],0,'job_state = F\nExit_status = 0','')]
+        with patch.object(mod.subprocess,'run',side_effect=replies) as call:
+            self.assertEqual(mod.query_pbs('123.opbs')['exit'],0)
+            self.assertIn('-H',call.call_args[0][0])
+
     def test_pbs_requires_explicit_terminal_success(self):
         mod=self.module()
         self.assertEqual(mod.parse_pbs('job_state = F\nExit_status = -29\nresources_used.mem = 100kb')['exit'],-29)
