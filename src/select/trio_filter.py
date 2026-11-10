@@ -44,11 +44,17 @@ from typing import Dict, List, Optional, Tuple
 # Slot 1 is the outgroup; slots 2 and 3 are the ingroup.  The thesis uses the
 # opposite lettering (A = outgroup, B/C = ingroup), so its formulas cannot be
 # transcribed literally.
+# Keep reported identity semantics tied to the shared parser.
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lib'))
+from train_identity import IDENTITY_SOURCE
+
 SLOTS = ("org1", "org2", "org3")
 IDENTITY_KEYS = ("idt_12", "idt_13", "idt_23")
 GENUS_COLUMNS = ("genus_1", "genus_2", "genus_3")
 
 FILTER_DETAIL_KEYS = (
+    "identity_source",
     "genus_condition_met",
     "genus_pattern_same_all",
     "genus_pattern_all_different",
@@ -258,6 +264,7 @@ def evaluate_filter_status(
 
     excluded = filter_flag is True
     filter_details = {
+        "identity_source": IDENTITY_SOURCE,
         "genus_condition_met": genus_condition,
         "genus_pattern_same_all": genus_pattern_same_all,
         "genus_pattern_all_different": genus_pattern_all_different,

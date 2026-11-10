@@ -59,6 +59,7 @@ cat > "$stub_bin/last-train" <<'EOF'
 #!/bin/bash
 cat <<'TRAIN'
 # substitution percent identity: 95
+# substitution percent identity: 99
 #last -t 1
 #last -a 1
 #last -A 1

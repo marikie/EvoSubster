@@ -30,10 +30,10 @@ trap 'rm -rf "$tmp_dir"' EXIT
 write_valid_train() {
     local path="$1" identity="${2:-95.5}"
     cat > "$path" <<EOF
-# substitution percent identity: 91.0
+# substitution percent identity: $identity
 # count matrix (intermediate training iteration)
 # score matrix (query letters = columns, reference letters = rows):
-# substitution percent identity: $identity
+# substitution percent identity: 99.0
 # ref letter %: 25.0 25.0 25.0 25.0
 # qry letter %: 25.0 25.0 25.0 25.0
 #last -t4.5
@@ -134,7 +134,8 @@ reuse_cached_train "$cache_dir" "20260723" \
 check "removes an invalid destination before fresh training" test ! -e "$invalid_dest"
 
 out_of_range_train="$cache_dir/out-of-range.train"
-write_valid_train "$out_of_range_train" 101
+write_valid_train "$out_of_range_train" 95
+sed -i 's/# substitution percent identity: 99.0/# substitution percent identity: 101/' "$out_of_range_train"
 check "rejects an out-of-range final identity" \
     bash -c 'source "$1"; ! is_valid_train_file "$2"' \
     bash "$TRAIN_CACHE_LIB" "$out_of_range_train"
@@ -171,6 +172,7 @@ else
     echo "fresh" >> "$TRAIN_TEST_LOG"
     cat > "$dest" <<'TRAIN'
 # substitution percent identity: 90
+# substitution percent identity: 99
 #last -t4.5
 #last -a 20
 #last -A 20

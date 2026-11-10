@@ -1,19 +1,23 @@
-"""Parse only LAST's complete final training block."""
+"""Read penultimate LAST identity; independently validate final alignment parameters."""
 import re
 from pathlib import Path
 
 PREFIX = '# substitution percent identity:'
+IDENTITY_SOURCE = 'last-train-penultimate'
 
 
-def parse_identity(path):
+def parse_identity_values(path):
     lines = Path(path).read_text().splitlines()
     indices = [i for i, line in enumerate(lines) if line.startswith(PREFIX)]
-    if not indices:
-        raise ValueError(f'Missing LAST identity: {path}')
+    if len(indices) < 2:
+        raise ValueError(f'At least two LAST identity markers required (penultimate identity): {path}')
     i = indices[-1]
-    text = lines[i][len(PREFIX):].strip()
-    if not re.fullmatch(r'[0-9]+(?:[.][0-9]+)?', text) or not 0 <= float(text) <= 100:
-        raise ValueError(f'Invalid LAST identity: {path}')
+    values = []
+    for position, index in (('penultimate', indices[-2]), ('final', i)):
+        text = lines[index][len(PREFIX):].strip()
+        if not re.fullmatch(r'[0-9]+(?:[.][0-9]+)?', text) or not 0 <= float(text) <= 100:
+            raise ValueError(f'Invalid {position} LAST identity: {path}')
+        values.append(float(text))
     block = lines[i+1:]
     if not all(any(line.startswith('#last -' + option) for line in block)
                for option in ('t', 'a', 'A', 'b', 'B', 'S')):
@@ -27,9 +31,13 @@ def parse_identity(path):
     letters = [match.group(1) for line in rows if (match := re.match(pattern, line))]
     if set(letters) != set('ACGT') or len(letters) != 4:
         raise ValueError(f'Incomplete LAST score matrix: {path}')
-    return float(text)
+    return tuple(values)
+
+
+def parse_identity(path):
+    return parse_identity_values(path)[0]
 
 
 if __name__ == '__main__':
     import sys
-    print(parse_identity(sys.argv[1]))
+    print(IDENTITY_SOURCE if sys.argv[1:] == ['--source'] else parse_identity(sys.argv[1]))

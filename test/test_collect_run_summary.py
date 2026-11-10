@@ -53,12 +53,12 @@ def create_run(dataset_dir, layout="current", date="20260101", stale_metadata=Fa
                 artifact('pdf_'+kind, slot, f"plots/{slot}-{kind}.pdf", "%PDF-fixture\n%%EOF")
     artifact('sbst_ratio', 'all', 'ratios.txt', 'org2: 1.2\norg3: 1.3\n')
     for pair, value in (('org1-org2',90),('org1-org3',91),('org2-org3',97)):
-        content = '# substitution percent identity: 10\n# substitution percent identity: '+str(value)+'\n'
+        content = '# substitution percent identity: '+str(value)+'\n# substitution percent identity: 99\n'
         content += ''.join('#last -'+option+' 1\n' for option in ('t','a','A','b','B','S'))
         content += '# score matrix (query letters = columns, reference letters = rows):\n'
         content += ''.join(letter+' 1 0 0 0\n' for letter in 'ACGT')
         entry = artifact('train', pair, f"training/{pair}.txt", content)
-        entry.update(identity_percent=value, reference_slot=pair.split('-')[0], query_slot=pair.split('-')[1])
+        entry.update(identity_percent=value, identity_source="last-train-penultimate", reference_slot=pair.split('-')[0], query_slot=pair.split('-')[1])
     payload = dict(schema_version=2, trio_key='fixture-trio', run_key='fixture-run',
                    created_at=date, date=date, options={}, status='complete',
                    organisms=organisms, artifacts=artifacts)
@@ -74,6 +74,7 @@ class BuildSummaryManifestTest(unittest.TestCase):
             summary, _ = script.build_summary(Path(tmp),80)
             entry = summary['datasets'][0]
             self.assertEqual(entry['dataset'],'fixture-trio')
+            self.assertEqual(entry['identity_source'],'last-train-penultimate')
             self.assertEqual(entry['idt_12'],'90 %')
             self.assertEqual(entry['species2']['tsv_file'],str(run/'tables/org2.tsv'))
             self.assertEqual(entry['species1']['coding_region_percentage'],['Coding region percentage: 25.00%'])

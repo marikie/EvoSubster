@@ -19,6 +19,7 @@ except ImportError:
     reuse = None
 
 TRAIN = '''# substitution percent identity: 95.0
+# substitution percent identity: 99.0
 #last -t 1
 #last -a 1
 #last -A 1
@@ -80,6 +81,18 @@ class StageReuseTests(unittest.TestCase):
         self.assertTrue(reuse.ready(self.source,'gc','org1'))
         (self.source/names['gc']).write_text('changed')
         self.assertFalse(reuse.ready(self.source,'gc','org1'))
+
+    def test_registered_and_reused_training_keeps_penultimate_provenance(self):
+        self.write('train', 'org1-org2', {'train': TRAIN})
+        source_value = manifest.validated(self.source)
+        artifact = next(a for a in source_value['artifacts'] if a['kind'] == 'train')
+        self.assertEqual(artifact['identity_percent'], 95.0)
+        self.assertEqual(artifact['identity_source'], 'last-train-penultimate')
+        reuse.apply(self.target, self.source)
+        target_value = manifest.validated(self.target)
+        reused = next(a for a in target_value['artifacts'] if a['kind'] == 'train')
+        self.assertEqual(reused['identity_percent'], 95.0)
+        self.assertEqual(reused['identity_source'], 'last-train-penultimate')
 
     def test_apply_maps_names_and_preserves_source_and_original_producer(self):
         self.pair(); self.write('gc','org1',{'gc':'0.5\n'})

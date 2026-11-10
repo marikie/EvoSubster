@@ -72,7 +72,9 @@ class ReuseIntegrationTests(CodingRegionPipelineTest):
         other=subprocess.run(['bash',str(ROOT/'src/sbst.sh'),'20261110',*self.fasta,
             'NO_GFF_FILE','--out-dir',str(self.out),'--idt-only'],env=self.env,capture_output=True,text=True)
         self.assertEqual(other.returncode,0,other.stderr)
-        missing=next((target/'statistics/misc').glob('*gcContent*'))
+        target_manifest=json.loads((target/'metadata/metadata_manifest.json').read_text())
+        outgroup=next(o['short_name'] for o in target_manifest['organisms'] if o['slot']=='org1')
+        missing=next((target/'statistics/misc').glob(f'{outgroup}_gcContent*'))
         missing.unlink()
         before=(target/'metadata/metadata_manifest.json').read_bytes()
         preview=self.run_pipeline('--reuse-plan')

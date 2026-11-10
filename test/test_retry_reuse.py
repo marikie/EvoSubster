@@ -14,6 +14,7 @@ import retry_reuse as reuse
 import last_options
 
 TRAIN = '''# substitution percent identity: 95.0
+# substitution percent identity: 99.0
 #last -t 1
 #last -a 1
 #last -A 1
@@ -95,6 +96,53 @@ class ReuseTests(unittest.TestCase):
         before=manifest.sha256(self.target/manifest.MANIFEST)
         reuse.import_run(self.target,self.source,self.log)
         self.assertEqual(before,manifest.sha256(self.target/manifest.MANIFEST))
+
+    def test_retry_preserves_current_penultimate_identity_provenance(self):
+        reuse.import_run(self.target, self.source, self.log)
+        value = manifest.validated(self.target)
+        artifact = next(a for a in value['artifacts'] if a['kind'] == 'train')
+        self.assertEqual(artifact['identity_percent'], 95.0)
+        self.assertEqual(artifact['identity_source'], 'last-train-penultimate')
+
+    def test_retry_refuses_missing_source_even_when_numeric_identity_matches(self):
+        path = self.source / manifest.MANIFEST
+        value = manifest.load(self.source)
+        training = next(a for a in value['artifacts'] if a['kind'] == 'train')
+        self.assertEqual(training['identity_percent'], 95.0)
+        training.pop('identity_source')
+        manifest.atomic_json(path, value)
+        before = path.read_bytes()
+        result = reuse.import_run(self.target, self.source, self.log)
+        self.assertFalse(result['pairs'])
+        self.assertIn('migrate-identity', '; '.join(result['skipped']))
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_old_final_identity_requires_explicit_migration_before_retry(self):
+        path = self.source / manifest.MANIFEST
+        value = manifest.load(self.source)
+        artifact = next(a for a in value['artifacts'] if a['kind'] == 'train')
+        artifact.pop('identity_source')
+        artifact['identity_percent'] = 99.0
+        manifest.atomic_json(path, value)
+        before = path.read_bytes()
+        result = reuse.import_run(self.target, self.source, self.log)
+        self.assertFalse(result['pairs'])
+        self.assertIn('migrate-identity', '; '.join(result['skipped']))
+        self.assertEqual(path.read_bytes(), before)
+        # A fresh target may reuse the same certified alignment after explicit migration.
+        manifest.migrate_identity(self.source)
+        target = self.root / 'migrated-target'
+        target_value = manifest.load(self.target)
+        target_value.pop('legacy_reuse')
+        target_value['artifacts'] = []
+        for organism in target_value['organisms']:
+            for field in ('metadata_json', 'metadata_json_sha256', 'taxonomy_json', 'taxonomy_json_sha256'):
+                organism.pop(field, None)
+        manifest.prepare(target, target_value)
+        result = reuse.import_run(target, self.source, self.log)
+        self.assertIn('org1-org2', result['pairs'])
+        training = next(a for a in manifest.validated(target)['artifacts'] if a['kind'] == 'train')
+        self.assertEqual(training['identity_source'], 'last-train-penultimate')
 
     def test_input_mismatch_refuses_before_copy(self):
         value=manifest.load(self.target)

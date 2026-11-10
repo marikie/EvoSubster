@@ -23,7 +23,7 @@ from report_contract import summary_paths  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 import run_manifest as runs
-from train_identity import parse_identity
+from train_identity import IDENTITY_SOURCE, parse_identity
 
 IDENTITY_PREFIX = "# substitution percent identity:"
 GC_CONTENT_PREFIX = "Total GC content: "
@@ -315,6 +315,7 @@ def process_dataset(dataset_dir: Path, idt_threshold: float) -> Tuple[Optional[D
 
     identity_values, identity_issues = collect_identity_metrics(latest_run, slot_map, manifest)
     dataset_data.update(identity_values)
+    dataset_data["identity_source"] = IDENTITY_SOURCE
     issues.extend(identity_issues)
 
     filter_status, filter_issues = evaluate_filter_status(slot_map, identity_values, idt_threshold)

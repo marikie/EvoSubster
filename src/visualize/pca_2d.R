@@ -3,7 +3,7 @@
   sourced <- Filter(Negate(is.null), lapply(sys.frames(), function(x) x$ofile))
   if (length(sourced)) tail(sourced, 1)[[1]] else sub("^--file=", "", grep("^--file=", commandArgs(), value=TRUE)[1])
 })
-.pca_manifest_helper <- normalizePath(file.path(dirname(.pca_source_file), "..", "lib", "run_manifest.py"))
+.pca_manifest_helper <- normalizePath(file.path(dirname(.pca_source_file), "..", "lib", "pca_input_adapter.py"))
 manifest_command <- function(command, path) {
   output <- system2("python3", c(shQuote(.pca_manifest_helper), command, shQuote(path)), stdout=TRUE)
   if (!is.null(attr(output, "status")) && attr(output, "status") != 0) stop("Manifest validation failed: ", path)
@@ -11,7 +11,7 @@ manifest_command <- function(command, path) {
 }
 
 # Walk dataset directories, gather substitution TSV files from each latest run,
-# and run 2D PCA clustering (logratio + observed variants, normal + filtered).
+# and run 2D PCA clustering (logratio + observed variants, explicit identity filtering).
 
 suppressPackageStartupMessages({
   library(argparse)
@@ -52,8 +52,8 @@ parse_args <- function() {
   parser <- ArgumentParser(
     description = paste(
       "Traverse dataset directories, collect substitution TSV files from each",
-      "dataset's latest completed manifest run, and generate 2D PCA and k-means",
-      "clustering results. Both log-ratio and observed-frequency variants are produced."
+      "dataset's latest completed v2 or latest numeric dated legacy run, and generate 2D PCA and k-means",
+      "clustering results. Both log-ratio and observed-frequency variants are produced once. Identity conditions are disabled unless specified; settings and trio decisions are saved as pca_run_settings.json and pca_trio_filter.csv."
     ),
     formatter_class = "argparse.RawDescriptionHelpFormatter",
     epilog = paste(
@@ -62,6 +62,7 @@ parse_args <- function() {
       "  Rscript src/visualize/pca_2d.R results/fungi --output-dir results/fungi/pca_custom",
       "  Rscript src/visualize/pca_2d.R results/fungi --tsv-pattern '*.tsv' --max-clusters 6",
       "  Rscript src/visualize/pca_2d.R results/fungi --cluster-boundary ellipse",
+      "  Rscript src/visualize/pca_2d.R results/giw2026 --ingroup-idt-threshold 90 --outgroup-idt-threshold 80 --min-idt-gap-between-out-in 3",
       sep = "\n"
     )
   )
@@ -70,7 +71,7 @@ parse_args <- function() {
     metavar = "INPUT_DIR",
     help = paste(
       "Root directory containing dataset/trio subdirectories. For each dataset,",
-      "the latest completed manifest run is used (for example, results/fungi)."
+      "the latest completed v2 or numeric dated legacy run is used (for example, results/fungi)."
     )
   )
   parser$add_argument(
@@ -111,11 +112,30 @@ parse_args <- function() {
       "'ellipse' draws 95%% normal ellipses, and 'hull' draws expanded convex hulls (default: hull)."
     )
   )
+  identity_help <- c(
+    "idt-threshold" = "Common absolute identity lower bound; individual bounds override it.",
+    "ingroup-idt-threshold" = "Ingroup identity (B,C) must strictly exceed this bound.",
+    "outgroup-idt-threshold" = "Both outgroup-ingroup identities (A,B and A,C) must strictly exceed this bound.",
+    "min-idt-gap-between-out-in" = paste(
+      "Both ingroup minus outgroup-ingroup identity gaps must strictly exceed this many percentage points.",
+      "Waived for same-genus ingroups and a different-genus outgroup."
+    )
+  )
+  for (option in names(identity_help)) {
+    parser$add_argument(
+      paste0("--", option), type = "double", default = NULL,
+      help = paste(identity_help[[option]], "Optional finite value in [0,100]; disabled when unspecified.")
+    )
+  }
   args <- parser$parse_args()
   allowed <- c("none", "ellipse", "hull")
   args$cluster_boundary <- tolower(args$cluster_boundary %||% "hull")
   if (!args$cluster_boundary %in% allowed) {
     stop(sprintf("--cluster-boundary must be one of: %s", paste(allowed, collapse = ", ")))
+  }
+  for (key in c("idt_threshold", "ingroup_idt_threshold", "outgroup_idt_threshold", "min_idt_gap_between_out_in")) {
+    value <- args[[key]]
+    if (!is.null(value) && (length(value) != 1 || !is.finite(value) || value < 0 || value > 100)) stop(paste(key, "must be finite and in [0,100]"))
   }
   args
 }
@@ -338,50 +358,31 @@ collect_identity_strings <- function(run_dir, slot_map) {
   list(identity=identity, issues=character())
 }
 
-evaluate_identity_condition <- function(identity_values) {
-  if (length(identity_values) == 0) {
-    return(list(result = NULL, issues = "Identity values missing; cannot evaluate condition."))
-  }
-  numeric_values <- list()
-  for (key in c("idt_12", "idt_13", "idt_23")) {
-    raw_value <- identity_values[[key]]
-    if (is.null(raw_value)) {
-      return(list(result = NULL, issues = sprintf("%s: Identity value missing.", key)))
+evaluate_dataset_filter <- function(slot_map, run_dir, options) {
+  manifest <- attr(slot_map,"manifest") %||% manifest_command("read", run_dir)
+  identities <- list()
+  for (artifact in manifest$artifacts) {
+    if (identical(artifact$kind, "train")) {
+      key <- paste0("idt_", sub("org([123])-org([123])", "\\1\\2", artifact$slot))
+      identities[[key]] <- artifact$identity_percent
     }
-    parsed <- parse_identity_percentage(raw_value)
-    if (is.na(parsed)) {
-      return(list(result = NULL, issues = sprintf("%s: Unable to parse numeric value from '%s'.", key, raw_value)))
-    }
-    numeric_values[[key]] <- parsed
   }
-  condition <- numeric_values$idt_12 < numeric_values$idt_23 && numeric_values$idt_13 < numeric_values$idt_23
-  list(result = condition, issues = character())
-}
-
-evaluate_dataset_filter <- function(slot_map, run_dir) {
-  genus_res <- evaluate_genus_condition(slot_map)
-  identity_values <- list()
-  identity_issues <- character()
-  if (!is.null(run_dir) && dir.exists(run_dir)) {
-    identity_res <- collect_identity_strings(run_dir, slot_map)
-    identity_values <- identity_res$identity
-    identity_issues <- identity_res$issues
-  } else {
-    identity_issues <- "Identity evaluation skipped: run_dir missing or does not exist."
-  }
-  identity_condition <- list(result = NULL, issues = character())
-  if (length(identity_values) > 0) {
-    identity_condition <- evaluate_identity_condition(identity_values)
-  }
-  excluded <- identical(genus_res$result, FALSE) && identical(identity_condition$result, FALSE)
-  list(
-    filter_status = list(
-      genus_condition_met = genus_res$result,
-      identity_condition_met = identity_condition$result,
-      excluded = excluded
-    ),
-    issues = c(genus_res$issues, identity_issues, identity_condition$issues)
+  helper <- file.path(dirname(.pca_manifest_helper), "pca_identity_filter.py")
+  payload <- jsonlite::toJSON(
+    list(options = options, identities = identities, organisms = slot_map),
+    auto_unbox = TRUE, null = "null", digits = NA
   )
+  result <- system2("python3", shQuote(helper), input=payload, stdout=TRUE)
+  if (!is.null(attr(result, "status")) && attr(result, "status") != 0) {
+    stop("Identity evaluation failed")
+  }
+  record <- jsonlite::fromJSON(paste(result,collapse="\n"), simplifyVector=FALSE)
+  record$thresholds <- NULL
+  for (slot in names(record$genera)) {
+    record[[paste0("genus_", slot)]] <- record$genera[[slot]] %||% NA_character_
+  }
+  record$genera <- NULL
+  record
 }
 
 compute_observed_vector <- function(df) {
@@ -734,42 +735,9 @@ run_pca_for_indices <- function(vectors, feature_order, indices, output_prefix, 
   list(best_k = cluster_info$best_k, processed = length(indices))
 }
 
-process_variant <- function(vectors, feature_order, indices_all, indices_filtered, variant_label, plot_levels, metadata_records, files, classification_levels, species_labels, max_clusters, random_state, output_dir, cluster_boundary) {
-  normal_prefix <- variant_label
-  filtered_prefix <- sprintf("%s_filtered", variant_label)
-  normal_result <- run_pca_for_indices(
-    vectors, feature_order, indices_all, normal_prefix, plot_levels, metadata_records, files, classification_levels, species_labels, max_clusters, random_state, output_dir, cluster_boundary
-  )
-  filtered_result <- list(best_k = NA, processed = 0, message = NULL)
-  if (length(indices_filtered) >= 2) {
-    filtered_inner <- run_pca_for_indices(
-      vectors, feature_order, indices_filtered, filtered_prefix, plot_levels, metadata_records, files, classification_levels, species_labels, max_clusters, random_state, output_dir, cluster_boundary
-    )
-    filtered_result$best_k <- filtered_inner$best_k
-    filtered_result$processed <- filtered_inner$processed
-  } else {
-    message_text <- if (length(indices_filtered) == 0) {
-      sprintf("%s filtered PCA skipped: no samples remained after applying the filter.", variant_label)
-    } else {
-      sprintf("%s filtered PCA requires at least two samples; skipping filtered computation.", variant_label)
-    }
-    filtered_result$message <- message_text
-    write_placeholder_plot(file.path(output_dir, sprintf("clustering_metrics_%s.png", filtered_prefix)), message_text)
-    write_empty_results_csv(file.path(output_dir, sprintf("clustering_results_%s.csv", filtered_prefix)), classification_levels)
-    if (length(plot_levels) > 0) {
-      for (level in plot_levels) {
-        base_name <- sprintf("pca_2d_clusters_%s_%s", filtered_prefix, gsub(" ", "_", level))
-        write_placeholder_plot(file.path(output_dir, paste0(base_name, ".png")), message_text)
-        write_placeholder_plot(file.path(output_dir, paste0(base_name, "_noName.png")), message_text)
-        write_placeholder_plot(file.path(output_dir, paste0(base_name, "_pcaOnly_noName.png")), message_text)
-      }
-    }
-  }
-  list(
-    variant = variant_label,
-    normal = normal_result,
-    filtered = filtered_result
-  )
+process_variant <- function(vectors, feature_order, indices_all, variant_label, plot_levels, metadata_records, files, classification_levels, species_labels, max_clusters, random_state, output_dir, cluster_boundary) {
+  result <- run_pca_for_indices(vectors, feature_order, indices_all, variant_label, plot_levels, metadata_records, files, classification_levels, species_labels, max_clusters, random_state, output_dir, cluster_boundary)
+  list(variant=variant_label, normal=result)
 }
 
 main <- function() {
@@ -782,6 +750,68 @@ main <- function() {
     output_dir <- normalizePath(file.path(input_root, "pca"), mustWork = FALSE)
   }
   dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+
+  if (length(list.files(output_dir, pattern = "_filtered"))) {
+    warn("Existing _filtered files are artifacts from an earlier run and are not updated.")
+  }
+  option_keys <- c(
+    "idt_threshold", "ingroup_idt_threshold", "outgroup_idt_threshold",
+    "min_idt_gap_between_out_in"
+  )
+  options <- args[option_keys]
+  effective <- list(
+    ingroup_idt_threshold = options$ingroup_idt_threshold %||% options$idt_threshold,
+    outgroup_idt_threshold = options$outgroup_idt_threshold %||% options$idt_threshold,
+    min_idt_gap_between_out_in = options$min_idt_gap_between_out_in
+  )
+  settings <- list(
+    arguments = commandArgs(trailingOnly = TRUE),
+    requested_thresholds = options,
+    effective_thresholds = effective,
+    disabled_conditions = names(effective)[vapply(effective, is.null, logical(1))],
+    identity_source = tail(system2("python3", c(
+      shQuote(file.path(dirname(.pca_manifest_helper), "train_identity.py")), "--source"
+    ), stdout = TRUE), 1),
+    comparison = ">",
+    identity_unit = "percent",
+    gap_unit = "percentage points",
+    genus_waiver = "same-genus ingroups and different-genus outgroup waive only gap",
+    input_dir = input_root,
+    output_dir = output_dir,
+    pca_options = args,
+    started_at = format(Sys.time(), tz = "UTC", usetz = TRUE),
+    status = "running"
+  )
+  records <- list()
+  save_records <- function() {
+    settings$finished_at <- format(Sys.time(), tz = "UTC", usetz = TRUE)
+    settings$trios <- length(records)
+    settings$included_trios <- sum(vapply(records, function(x) isTRUE(x$included), logical(1)))
+    settings$usable_samples <- sum(vapply(records, function(x) x$usable_samples, integer(1)))
+    jsonlite::write_json(
+      settings, file.path(output_dir, "pca_run_settings.json"),
+      auto_unbox = TRUE, pretty = TRUE, null = "null", digits = NA
+    )
+    columns <- c(
+      "trio_id", "layout", "run_path", "idt_12", "idt_13", "idt_23", "gap_12", "gap_13",
+      "genus_org1", "genus_org2", "genus_org3", "genus_condition", "gap_waived",
+      "ingroup_idt_threshold", "outgroup_idt_threshold", "min_idt_gap_between_out_in",
+      "included", "reason", "usable_samples", "identity_source"
+    )
+    rows <- lapply(records, function(record) {
+      values <- setNames(lapply(columns, function(key) record[[key]] %||% NA), columns)
+      as.data.frame(values, stringsAsFactors = FALSE)
+    })
+    table <- if (length(rows)) {
+      dplyr::bind_rows(rows)
+    } else {
+      as.data.frame(setNames(rep(list(logical()), length(columns)), columns))
+    }
+    write.csv(table, file.path(output_dir, "pca_trio_filter.csv"), row.names = FALSE, na = "")
+  }
+  on.exit(save_records(), add = TRUE)
+  save_records()
+  settings$status <- "failed"
 
   metadata_cache <- list()
   taxonomy_cache <- list()
@@ -812,11 +842,29 @@ main <- function() {
     if (is.null(manifest_bundle)) next
     dataset_name <- manifest_bundle$manifest$trio_key
     slot_map <- manifest_bundle$slot_map
-    filter_info <- evaluate_dataset_filter(slot_map, latest_run)
-    for (issue in filter_info$issues) warn(sprintf("%s: %s", dataset_name, issue))
-    dataset_status[[dataset_name]] <- filter_info$filter_status
-    dataset_filter_flag <- isTRUE(filter_info$filter_status$excluded)
+    record <- evaluate_dataset_filter(slot_map, latest_run, options)
+    record$trio_id <- dataset_name
+    record$layout <- manifest_bundle$manifest$layout %||% "v2"
+    record$run_path <- latest_run
+    record$usable_samples <- 0L
+    record$reason <- paste(Filter(nzchar, c(record$reason, unlist(manifest_bundle$manifest$input_issues))), collapse = "; ")
+    records[[dataset_name]] <- record
+    dataset_status[[dataset_name]] <- record
+    if (!isTRUE(record$included)) next
 
+    add_sample_issue <- function(message) {
+      records[[dataset_name]]$reason <<- paste(
+        Filter(nzchar, c(records[[dataset_name]]$reason, message)), collapse = "; "
+      )
+      warn(sprintf("%s: %s", dataset_name, message))
+    }
+    selected_kind <- if (identical(args$tsv_pattern, "*_ncds.tsv")) "single_ncds" else "single"
+    selected_artifacts <- Filter(function(a) identical(a$kind, selected_kind), manifest_bundle$manifest$artifacts)
+    for (slot in c("org2", "org3")) {
+      if (!any(vapply(selected_artifacts, function(a) identical(a$slot, slot), logical(1)))) {
+        add_sample_issue(sprintf("%s: Missing canonical %s TSV", slot, selected_kind))
+      }
+    }
     tsv_files <- collect_substitution_tsvs(latest_run, args$tsv_pattern, slot_map)
     if (length(tsv_files) == 0) {
       locations <- substitution_tsv_search_locations(latest_run, args$tsv_pattern, slot_map)
@@ -841,14 +889,20 @@ main <- function() {
       manifest_entry <- manifest_bundle$lookup[[key]]
       metadata_path <- manifest_entry$metadata_path
       metadata_json <- tryCatch(load_json_cached(metadata_path, metadata_cache), error = function(e) {
-        warn(sprintf("%s: Failed to load metadata JSON %s: %s", dataset_name, metadata_path, e$message))
+        add_sample_issue(sprintf("Failed to load metadata JSON %s: %s", metadata_path, e$message))
         NULL
       })
       if (is.null(metadata_json)) next
       taxonomy_path <- manifest_entry$taxonomy_path
       taxonomy_json <- if (!is.na(taxonomy_path) && file.exists(taxonomy_path)) {
-        load_json_cached(taxonomy_path,taxonomy_cache)
-      } else list()
+        tryCatch(load_json_cached(taxonomy_path, taxonomy_cache), error = function(e) {
+          add_sample_issue(sprintf("Unusable taxonomy JSON %s: %s", taxonomy_path, e$message))
+          list()
+        })
+      } else {
+        add_sample_issue(sprintf("%s: Missing local taxonomy JSON", entry$slot))
+        list()
+      }
       genus_info <- if (is.null(entry$raw_organism_name) && is.null(entry$ncbi_full_name)) {
         list(genus="Unknown",species=short_name)
       } else extract_genus(metadata_json, short_name, accession)
@@ -856,7 +910,7 @@ main <- function() {
       observed_levels <- unique(c(observed_levels, names(classification_map)))
 
       vectors <- tryCatch(load_tsv_vectors(tsv_file, reference_order), error = function(e) {
-        warn(sprintf("%s: Failed to parse TSV %s: %s", dataset_name, basename(tsv_file), e$message))
+        add_sample_issue(sprintf("Failed to parse TSV %s: %s", basename(tsv_file), e$message))
         NULL
       })
       if (is.null(vectors)) next
@@ -872,11 +926,11 @@ main <- function() {
         genus = genus_info$genus,
         species = genus_info$species,
         classifications = classification_map,
-        dataset = dataset_name,
-        filter_excluded = dataset_filter_flag
+        dataset = dataset_name
       )
     }
     added <- length(logratio_vectors) - samples_before
+    records[[dataset_name]]$usable_samples <- as.integer(added)
     if (added == 0) warn(sprintf("%s: No usable TSV files after validation; dataset skipped.", dataset_name))
   }
 
@@ -889,13 +943,11 @@ main <- function() {
   plot_levels <- setdiff(classification_levels, "species")
 
   indices_all <- seq_along(logratio_vectors)
-  indices_filtered <- which(!vapply(metadata_records, function(rec) rec$filter_excluded, logical(1)))
 
   logratio_result <- process_variant(
     logratio_vectors,
     reference_order,
     indices_all,
-    indices_filtered,
     "logratio",
     plot_levels,
     metadata_records,
@@ -912,7 +964,6 @@ main <- function() {
     observed_vectors,
     reference_order,
     indices_all,
-    indices_filtered,
     "observed",
     plot_levels,
     metadata_records,
@@ -935,30 +986,14 @@ main <- function() {
       result$normal$processed,
       result$normal$best_k
     ))
-    if (result$filtered$processed > 0) {
-      message(sprintf("  Filtered processed files: %d, optimal k: %s", result$filtered$processed, result$filtered$best_k))
-    } else if (!is.null(result$filtered$message)) {
-      message(sprintf("  %s", result$filtered$message))
-    }
+
   }
   if (length(plot_levels) == 0) {
     message("No classification plots generated (species-only classifications).")
   } else {
     message(sprintf("Generated classification plots for levels: %s", paste(plot_levels, collapse = ", ")))
   }
-  if (length(dataset_status) > 0) {
-    message("Filter evaluation summary:")
-    for (dataset_name in names(dataset_status)) {
-      status <- dataset_status[[dataset_name]]
-      message(sprintf(
-        "  %s: excluded=%s genus_condition=%s identity_condition=%s",
-        dataset_name,
-        status$excluded,
-        status$genus_condition_met,
-        status$identity_condition_met
-      ))
-    }
-  }
+  settings$status <- "completed"
   message(sprintf("Results saved to: %s", output_dir))
 }
 

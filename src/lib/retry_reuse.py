@@ -16,7 +16,7 @@ import shutil
 import sys
 
 import run_manifest as manifest
-from train_identity import parse_identity
+from train_identity import IDENTITY_SOURCE, parse_identity
 
 PAIRS = ('org1-org2', 'org1-org3')
 ALIGNMENT_TRIOS = {
@@ -292,8 +292,11 @@ def import_run(target, source, log):
         try:
             training = next(a for a in old['artifacts'] if a['kind']=='train' and a['slot']==pair and a['path']==train)
             _verified_entry(source,training)
-            if parse_identity(source/train) != training.get('identity_percent'):
-                raise ValueError(f'Source identity disagrees: {pair}')
+            if (parse_identity(source/train) != training.get('identity_percent')
+                    or training.get('identity_source') != IDENTITY_SOURCE):
+                import shlex
+                command = 'python3 src/lib/run_manifest.py migrate-identity ' + shlex.quote(str(source))
+                raise ValueError(f'Source identity disagrees with penultimate provenance: {pair}; run: {command}')
             manifest.seal_file(source/train,verify=True)
             evidence = _pair_evidence(old,pair,commands,chosen==sorted_maf)
             maf_path = manifest.artifact_path(source,chosen)

@@ -506,7 +506,32 @@ choices, never assembly or artifact identities. FASTA record order is preserved.
 Reports, PCA, and trio aggregation consume completed schema-2 manifests and recorded
 artifact paths. Moving or renaming a whole run preserves its meaning. Training-only
 runs record `identity_complete` and are excluded from complete-analysis reports.
-The identity reported is from LAST's complete final training block.
+Analytical identity always uses the **penultimate** occurrence of
+`# substitution percent identity:` in each `.train` file. At least two markers
+are required; an invalid penultimate value is rejected without falling back to
+the final or earlier value. The final LAST parameter/score-matrix block is still
+validated independently and used unchanged for alignment. New train artifact
+records and selection/report/PCA/link audits identify this rule as
+`identity_source: last-train-penultimate`.
+
+Older v2 manifests stored the final identity. Normal readers do not silently
+change those records; they fail with an explicit migration command. To migrate
+one existing run (including an `identity_complete` run):
+
+```bash
+python3 src/lib/run_manifest.py migrate-identity /path/to/run
+```
+
+Migration takes the pipeline's `.run.lock` nonblockingly, validates the existing
+status, all recorded hashes, training blocks, and (for completed runs) required
+plots, then backs up the original manifest alongside it as
+`metadata_manifest.json.before-penultimate-<sha256>.bak`. Only the train
+`identity_percent` and `identity_source` metadata are atomically updated.
+Re-running migration is a validated no-op. Raw `.train`, alignment/count
+artifacts, options, status and historical selection provenance remain unchanged.
+Migration does **not** reselect trios or regenerate PCA/report/link outputs;
+rerun those analyses explicitly with the new analytical identities as needed.
+No batch migration is performed automatically.
 
 Plotting requires Courier Prime (weight 700) and Roboto (regular and bold).
 Set `EVOSUBSTER_FONT_CACHE` to a writable reusable font directory; by default it is
@@ -677,12 +702,72 @@ To re-render a document from an existing JSON summary without recollecting:
 ./src/report/link_trio_dirs.sh --output-dir OUTPUT_DIR INPUT_DIR [INPUT_DIR...]
 ```
 
-Scans each `INPUT_DIR` (a lineage root) for trio directories and creates
-relative symlinks to them under `OUTPUT_DIR`, so trios that live under
-different lineage roots can be reported on together by pointing
-`run_report.sh` at `OUTPUT_DIR`. The command is idempotent — existing correct
-symlinks are reused — and fails on a name collision between two source trios
-or if `OUTPUT_DIR` is itself one of the input directories.
+The utility supports both completed v2 analyses and legacy trio directories.
+For v2, the link points to the latest completed run selected by recorded
+`trio_key` and `created_at`, with normal manifest/content validation.
+For legacy inputs, each lineage root's immediate trio directories must match
+`<name>1_<name>2_<name>3` (a trio directory can also be passed directly).
+The latest numeric 8- or 14-digit dated run supplies its relative metadata and
+penultimate LAST identities (with complete final parameter blocks), while the link points to the **trio
+directory**. `bench_*`, `archive`, `tmp`, and `pca_*` directories are not legacy
+trio candidates. Stale absolute paths in legacy metadata are ignored.
+Unsupported explicit manifest schemas and ambiguous training files fail clearly.
+Legacy support here does not change the manifest requirements of other tools.
+
+All identity conditions are optional and disabled unless specified:
+
+| Option | Required condition |
+| --- | --- |
+| `--idt-threshold N` | Common absolute identity lower bound for ingroup and outgroup pairs. |
+| `--ingroup-idt-threshold N` | Ingroup identity strictly greater than N. |
+| `--outgroup-idt-threshold N` | Both outgroup–ingroup identities strictly greater than N. |
+| `--min-idt-gap-between-out-in N` | Ingroup identity minus each outgroup–ingroup identity strictly greater than N percentage points. |
+
+Individual bounds override the common bound regardless of argument order.
+All values must be finite and in [0,100]; equality fails. As with PCA, the gap
+condition alone is waived for same-genus ingroups with a different-genus
+outgroup. Absolute lower bounds remain mandatory. Missing genus information
+prevents the waiver, and missing/invalid identities required by an active
+condition exclude the trio with a recorded reason.
+
+To start a new collection containing only trios that pass these conditions:
+
+```bash
+./src/report/link_trio_dirs.sh \
+  --output-dir results/giw2026_idt90_80_gap3 \
+  --ingroup-idt-threshold 90 --outgroup-idt-threshold 80 \
+  --min-idt-gap-between-out-in 3 \
+  results/cnidaria results/fungi results/oomycota results/phaeophyceae \
+  results/porifera results/arthropoda results/apicomplexa
+```
+
+Thresholds control which new links are added. Existing correct included links
+are reused. Existing correct links excluded by the current conditions, and links
+outside this invocation's input set (including dangling links), are retained
+unchanged. The output may therefore contain links from earlier runs that do not
+pass the current conditions. A fresh output directory is optional if an exact
+selection is desired. Links are never removed or replaced.
+
+Before any writes, the command still rejects conflicting source names and
+same-name destination entries pointing to another source, including dangling
+links, files, and directories. These errors leave the whole destination
+unchanged. The output cannot also be an input and is excluded from discovery
+when nested inside an input. Duplicate identical inputs are safe. An invocation
+where all input candidates are excluded is valid, including with existing links.
+
+After successful preflight, `link_run_settings.json` records requested/effective
+thresholds, disabled conditions, strict comparison and percentage units, genus
+waiver rule, roots, timestamp and created/reused/excluded counts.
+`preserved_existing` counts existing links retained because they are excluded or
+outside the input set, counting each link once and excluding qualifying reused
+links; this count is also printed to stdout.
+`link_trio_filter.csv` records each candidate's layout, selected run, link target,
+identities, gaps, genera, per-condition statuses, waiver, inclusion and reason.
+`included` means the input candidate passes this invocation's conditions, even
+if an excluded link already exists. `link_action` records `created`, `reused`,
+`kept_existing` (excluded existing link), or `skipped` (excluded absent link).
+Outside-input links have no CSV rows. These fresh records overwrite the previous
+records and are also written when all candidates are excluded.
 
 ## Example
 
@@ -837,3 +922,59 @@ clusters retain their numbers with a K prefix, and other ranks use their rank na
 Taxonomy heatmap legends and all UMAP legends show `identifier: category`, without
 changing analytical category names or sample IDs. The full palette, including cluster
 colors, remains in `annotation_colors.csv` and the cluster UMAP.
+
+### PCA with optional identity thresholds
+
+PCA accepts completed v2 runs and local legacy trio collections such as
+`results/all_phdThesis`. Legacy discovery uses immediate trio directories or
+symlinks and their latest 8- or 14-digit numeric dated run. Analysis directories
+(`pca*`, `archive`, `tmp`, and the `spectrum_shape_bench_*` outputs) and
+`bench_*` runs are excluded. Legacy manifests are
+normalized in memory; source data and manifests are not modified, and v2
+manifest/content validation remains required.
+
+Legacy metadata and taxonomy JSON are resolved under the selected run's local
+`metadata/` directory by short name/accession, ignoring stale absolute paths.
+Canonical TSVs are selected from `statistics/<short_name>/singlenuc/` or the run
+root; multiple matches fail clearly. `--tsv-pattern '*.tsv'` means genomic
+single-base tables named `<accession>_<short_name>_<date>.tsv`, excluding
+`_maflinked`, dinucleotide and `_ncds` derived tables. The default
+`'*_ncds.tsv'` selects only the corresponding noncoding canonical tables.
+Identity estimates use the penultimate marker in each pair's local LAST training
+file; complete final alignment parameter blocks remain mandatory. Missing or unusable selected sample inputs remain visible in
+`pca_trio_filter.csv` with reasons and usable sample counts; missing local
+taxonomy is reported without downloading replacements.
+
+
+`pca_2d.R` produces one logratio and one observed-frequency analysis, using the
+usual output names. It no longer generates a separate `_filtered` analysis.
+With no identity options, no trios are excluded by identity or genus.
+
+```bash
+Rscript src/visualize/pca_2d.R results/giw2026 \
+  --ingroup-idt-threshold 90 --outgroup-idt-threshold 80 \
+  --min-idt-gap-between-out-in 3 \
+  --output-dir results/giw2026/pca_idt90_80_gap3
+```
+
+Each optional threshold uses strict `>` (equality fails). `--idt-threshold N`
+sets a common absolute identity lower bound; `--ingroup-idt-threshold N` and
+`--outgroup-idt-threshold N` override their respective bounds regardless of
+argument order. The latter applies to both outgroup–ingroup pairs. Unspecified
+conditions stay disabled. Values must be finite numbers in [0,100].
+`--min-idt-gap-between-out-in N` requires both ingroup identity minus
+outgroup–ingroup identity differences to exceed N percentage points.
+When both ingroups share a genus and the outgroup belongs to a different genus,
+only the gap condition is waived; absolute identity bounds still apply.
+Missing genus information prevents that waiver. Missing or invalid identities
+needed by an active condition exclude the trio. Filtering applies to both ingroup
+samples together, before reading substitution TSVs.
+
+Every run writes `pca_run_settings.json` with requested/effective thresholds,
+disabled conditions, comparison rules, inputs, PCA options, timestamps, counts,
+and completion status. `pca_trio_filter.csv` records each trio's identities, gaps,
+genera, condition statuses (`disabled`, `waived`, `passed`, `failed`, or
+`missing_identity`), inclusion decision, reason, and usable sample count.
+These records are also saved if fewer than two usable TSV samples remain and
+PCA exits with an error. Existing `_filtered` artifacts are retained with a
+warning; use a new output directory to keep results from different runs separate.

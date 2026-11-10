@@ -18,7 +18,7 @@ import sys
 import tempfile
 
 import run_manifest as manifest
-from train_identity import parse_identity
+from train_identity import IDENTITY_SOURCE, parse_identity
 
 ROOT = Path(__file__).resolve().parents[2]
 SLOTS = ('org1', 'org2', 'org3')
@@ -269,6 +269,7 @@ def _artifact(value, run, kind, slot, output):
     entry = dict(kind=kind, slot=slot, path=output['path'], sha256=output['sha256'])
     if kind == 'train':
         entry['identity_percent'] = parse_identity(_path(run, output['path']))
+        entry['identity_source'] = IDENTITY_SOURCE
     # Every path and every logical artifact appears at most once.
     value['artifacts'] = [a for a in value['artifacts'] if a['path'] != entry['path']
                           and (kind == 'auxiliary' or (a['kind'], a['slot']) != (kind, slot))]

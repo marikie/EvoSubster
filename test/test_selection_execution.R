@@ -8,6 +8,7 @@ entry <- function(info, key) info$settings[info$settings$key == key, , drop = FA
 args <- c("--tree", "input.nwk")
 info <- record_selection_execution(parse_args(args), args, "src/select/trio_selection.R")
 stopifnot(
+  identical(info$identity_source, "last-train-penultimate"),
   identical(info$command, "Rscript src/select/trio_selection.R --tree input.nwk"),
   setequal(info$settings$key, names(defaults)),
   entry(info, "ingroup_idt_threshold")$value == "80",

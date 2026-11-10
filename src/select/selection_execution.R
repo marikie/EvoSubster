@@ -41,12 +41,19 @@ record_selection_execution <- function(opts, argv, script_path) {
     if (key == "min_rel_contig_n50" && identical(as.numeric(value), 0)) settings$value[i] <- "0 (off)"
     settings$source[i] <- origin
   }
-  list(command = command, settings = settings)
+  identity_source <- system2("python3", c(
+    shQuote(file.path(SRC_DIR, "lib", "train_identity.py")), "--source"
+  ), stdout = TRUE)
+  if (!is.null(attr(identity_source, "status")) || length(identity_source) != 1L) {
+    stop("Could not determine LAST analytical identity source")
+  }
+  list(command = command, settings = settings, identity_source = identity_source)
 }
 
 execution_info_lines <- function(execution_info) {
   if (is.null(execution_info)) return(c("Command: not recorded", "Effective settings: not recorded"))
-  lines <- c("Command:", paste0("  ", execution_info$command))
+  lines <- c("Command:", paste0("  ", execution_info$command),
+             paste0("Identity source: ", if (is.null(execution_info$identity_source)) "not recorded" else execution_info$identity_source))
   for (section in unique(execution_info$settings$section)) {
     lines <- c(lines, "", paste0(section, ":"))
     rows <- execution_info$settings[execution_info$settings$section == section, , drop = FALSE]

@@ -45,9 +45,11 @@ def write_count_manifest(statistics):
     for slot in ('org1','org2','org3'): extra('gc',slot,'GC 40%')
     extra('sbst_ratio','all','B 1%\nC 2%')
     for pair in ('org1-org2','org1-org3','org2-org3'):
-        content='# substitution percent identity: 95\n'+''.join('#last -'+x+' 1\n' for x in ('t','a','A','b','B','S'))
+        content='# substitution percent identity: 95\n# substitution percent identity: 99\n'+''.join('#last -'+x+' 1\n' for x in ('t','a','A','b','B','S'))
         content+='# score matrix (query letters = columns, reference letters = rows):\n'+''.join(x+' 1 0 0 0\n' for x in 'ACGT')
-        extra('train',pair,content)['identity_percent']=95
+        entry=extra('train',pair,content)
+        entry['identity_percent']=95
+        entry['identity_source']='last-train-penultimate'
     payload = dict(schema_version=2, trio_key='test', run_key='test', status='complete',
                    options={}, created_at='now', date=run.name, artifacts=records,
                    organisms=[dict(slot='org'+str(i),fasta_sha256='fixture',gff_sha256=None) for i in (1,2,3)])

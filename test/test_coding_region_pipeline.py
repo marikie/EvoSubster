@@ -24,6 +24,7 @@ class CodingRegionPipelineTest(unittest.TestCase):
         (self.align / "last_train.sh").write_text("""#!/bin/bash
 cat > "$6/${4}2${5}_${1}.train" <<'TRAIN'
 # substitution percent identity: 95
+# substitution percent identity: 99
 #last -t 1
 #last -a 1
 #last -A 1

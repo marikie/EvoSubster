@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Versioned, content-addressed run provenance; filenames are never identities."""
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -69,7 +70,7 @@ def validated(run, complete=False):
     return value
 
 
-def validate_contents(run, value, complete=False):
+def validate_contents(run, value, complete=False, migrate_identity=False):
     if complete and value['status'] != 'complete':
         raise ValueError(f'Completed analysis required: {run}')
     if complete:
@@ -94,10 +95,16 @@ def validate_contents(run, value, complete=False):
         if not path.is_file() or sha256(path) != entry['sha256']:
             raise ValueError(f'Artifact checksum mismatch: {path}')
         if entry['kind'] == 'train':
-            from train_identity import parse_identity
-            measured = parse_identity(path)
-            if measured != entry.get('identity_percent'):
-                raise ValueError(f'Training identity disagrees with provenance: {path}')
+            from train_identity import IDENTITY_SOURCE, parse_identity_values
+            penultimate, final = parse_identity_values(path)
+            source = entry.get('identity_source')
+            expected = final if migrate_identity and source is None else penultimate
+            if source not in (None, IDENTITY_SOURCE):
+                raise ValueError(f'Unsupported training identity source: {path}: {source}')
+            if entry.get('identity_percent') != expected or (source is None and not migrate_identity):
+                import shlex
+                command = f'python3 src/lib/run_manifest.py migrate-identity {shlex.quote(str(run))}'
+                raise ValueError(f'Training identity provenance requires verification/migration: {path}; run: {command}')
 
 
 def validate_metadata(run,value):
@@ -463,8 +470,9 @@ def checkpoint(run, status, specs):
             raise ValueError(f'Required output missing/empty: {path}')
         artifact = dict(kind=kind, slot=slot, path=filename, sha256=sha256(path))
         if kind == 'train':
-            from train_identity import parse_identity
+            from train_identity import IDENTITY_SOURCE, parse_identity
             artifact['identity_percent'] = parse_identity(path)
+            artifact['identity_source'] = IDENTITY_SOURCE
             artifact['reference_slot'], artifact['query_slot'] = slot.split('-')
         existing[filename] = artifact
         if kind == 'sbst_ratio' or (kind in ('single','single_ncds','dinuc','dinuc_ncds') and slot == 'org2'):
@@ -591,6 +599,46 @@ def seal_file(path, verify=False):
         atomic_json(seal, value)
 
 
+def migrate_identity(run):
+    """Serialize explicit migration with the pipeline's existing run lock."""
+    run = Path(run).resolve()
+    with (run / '.run.lock').open('a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise ValueError(f'Run is already active; identity migration refused: {run}') from error
+        _migrate_identity_locked(run)
+
+
+def _migrate_identity_locked(run):
+    """Idempotent identity-only migration under .run.lock."""
+    from train_identity import IDENTITY_SOURCE, parse_identity
+    run = Path(run).resolve()
+    value = load(run)
+    complete = value['status'] == 'complete'
+    validate_contents(run, value, complete=complete, migrate_identity=True)
+    records = [entry for entry in value['artifacts'] if entry['kind'] == 'train']
+    if all(entry.get('identity_source') == IDENTITY_SOURCE for entry in records):
+        print(f'Identity provenance already current: {run}')
+        return
+    path = run / MANIFEST
+    original = path.read_bytes()
+    backup = path.with_name(path.name + '.before-penultimate-' + hashlib.sha256(original).hexdigest() + '.bak')
+    if backup.exists() and backup.read_bytes() != original:
+        raise ValueError(f'Backup collision: {backup}')
+    for entry in records:
+        entry['identity_percent'] = parse_identity(artifact_path(run, entry['path']))
+        entry['identity_source'] = IDENTITY_SOURCE
+    validate_contents(run, value, complete=complete)
+    if path.read_bytes() != original:
+        raise ValueError(f'Manifest changed during identity migration: {path}')
+    if not backup.exists():
+        with backup.open('xb') as handle:
+            handle.write(original)
+    atomic_json(path, value)
+    print(f'Migrated identity provenance: {run}; backup: {backup}')
+
+
 def main():
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest='command', required=True)
@@ -604,6 +652,7 @@ def main():
     p = sub.add_parser('bundle-gff'); p.add_argument('fasta'); p.add_argument('accession', nargs='?')
     p = sub.add_parser('discover'); p.add_argument('root')
     p = sub.add_parser('read'); p.add_argument('run')
+    p = sub.add_parser('migrate-identity'); p.add_argument('run')
     for name in ('seal-directory', 'verify-directory', 'seal-file', 'verify-file'):
         p = sub.add_parser(name); p.add_argument('path')
     p = sub.add_parser('training-directory'); p.add_argument('values', nargs=5)
@@ -619,6 +668,8 @@ def main():
         bundle_save(*args.values)
     elif args.command == 'bundle-gff':
         print(bundle_gff(args.fasta, args.accession))
+    elif args.command == 'migrate-identity':
+        migrate_identity(args.run)
     elif args.command == 'read':
         print(json.dumps(validated(args.run, complete=True)))
     elif args.command == 'discover':

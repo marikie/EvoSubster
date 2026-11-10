@@ -392,12 +392,12 @@ writeLines(
   cache_file
 )
 
-write_complete_train <- function(path, final_identity) {
+write_complete_train <- function(path, analytical_identity) {
   writeLines(
     c(
-      "# substitution percent identity: 91.0",
+      paste("# substitution percent identity:", analytical_identity),
       "# count matrix (intermediate training iteration)",
-      paste("# substitution percent identity:", final_identity),
+      "# substitution percent identity: 99.0",
       "# ref letter %: 25.0 25.0 25.0 25.0",
       "# qry letter %: 25.0 25.0 25.0 25.0",
       "#last -t4.5",
@@ -511,14 +511,14 @@ complete_file <- tempfile("complete-train-")
 write_complete_train(complete_file, 87.25)
 check(
   identical(parse_train_identity(complete_file), 87.25),
-  "complete train parsing uses the final identity instead of an intermediate iteration"
+  "complete train parsing uses the penultimate identity instead of the final block"
 )
 
 out_of_range_file <- tempfile("out-of-range-train-")
 write_complete_train(out_of_range_file, 101)
 check(
   is.na(parse_train_identity(out_of_range_file)),
-  "train parsing rejects a final identity outside 0-100"
+  "train parsing rejects a penultimate identity outside 0-100"
 )
 
 # Cleanup targets are synthetic current-run ownership records. Unlisted paths
