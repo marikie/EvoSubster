@@ -11,6 +11,10 @@ mkdir -p "$stub_bin" "$tmp_dir/db"
 
 cat > "$stub_bin/lastal" <<'EOF'
 #!/bin/bash
+if [ "${1:-}" = --version ]; then
+    echo 'lastal 1654'
+    exit 0
+fi
 printf '%s\n' "$@" > "$LASTAL_ARGS_LOG"
 printf '##maf version=1\n\n'
 EOF

@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -74,6 +75,29 @@ class LastOptionsTests(unittest.TestCase):
         os.environ.pop('LASTAL_THREADS')
         self.assertEqual(options.config()['lastal'][:2], ['-P', '12'])
 
+    def test_custom_lastal_threads_and_dedicated_override_conflicts(self):
+        self.custom(lastal='-P3 -H2')
+        self.assertIn('3', options.config()['lastal'])
+        with patch.dict(os.environ, LASTAL_THREADS='3'):
+            self.assertEqual(options.config()['lastal'].count('-P'), 1)
+        with patch.dict(os.environ, LASTAL_THREADS='1'):
+            with self.assertRaisesRegex(ValueError, 'conflict'):
+                options.config()
+        self.custom(lastal='-P0')
+        with self.assertRaisesRegex(ValueError, 'positive integer'):
+            options.config()
+
+    def test_alignment_guard_ignores_lastal_threads_and_training_only_options(self):
+        output = self.folder / 'output.maf'
+        options.guard(output, 'alignment')
+        with patch.dict(os.environ, LASTAL_THREADS='1'):
+            options.guard(output, 'alignment')
+        self.custom(**{'last-train': '--sample-number=1000'})
+        options.guard(output, 'alignment')
+        self.custom(lastal='-H3')
+        with self.assertRaisesRegex(ValueError, 'settings differ'):
+            options.guard(output, 'alignment')
+
     def test_invalid_runtime_settings_rejected(self):
         for value in ('0', '-1', '', '1.5', 'abc'):
             with self.subTest(value=value), patch.dict(os.environ, LASTAL_THREADS=value):
@@ -92,6 +116,53 @@ class LastOptionsTests(unittest.TestCase):
         os.environ['LASTDB_ALIGNMENT_SEED'] = ''
         self.custom(lastdb='-uRY4')
         self.assertEqual(options.database_label(), 'RY4')
+
+    def test_seed_file_identity_is_scoped_and_config_format_is_unchanged(self):
+        original = options.config()
+        self.assertEqual(options.scientific_option_files(original), {})
+        self.assertNotIn('external_files', options.alignment_settings(original))
+        seed = self.folder / 'seed definition.txt'
+        seed.write_text('1110101\n')
+        self.custom(lastdb='-u ' + shlex.quote(str(seed)))
+        settings = options.config()
+        expected = options.file_digest(seed)
+        self.assertEqual(options.scientific_option_files(settings),
+                         {'lastdb_train:-u': expected, 'lastdb_align:-u': expected})
+        self.assertEqual(options.scientific_option_files(settings, keys=('lastdb_train',)),
+                         {'lastdb_train:-u': expected})
+        self.assertNotIn('external_files', settings)
+        self.assertEqual(settings['schema'], 1)
+        self.assertEqual(options.alignment_settings(settings)['external_files'],
+                         {'lastdb_align:-u': expected})
+
+    def test_changed_seed_file_invalidates_scoped_guards(self):
+        seed = self.folder / 'seed.txt'
+        self.custom(lastdb='-u ' + shlex.quote(str(seed)))
+        for stage in ('alignment', 'database', 'training'):
+            with self.subTest(stage=stage):
+                seed.write_text('1110101\n')
+                output = self.folder / stage
+                options.guard(output, stage)
+                options.guard(output, stage)
+                seed.write_text('1110011\n')
+                with self.assertRaisesRegex(ValueError, 'settings differ'):
+                    options.guard(output, stage)
+
+    def test_changed_seed_file_invalidates_portable_seal(self):
+        seed = self.folder / 'seed.txt'
+        seed.write_text('1110101\n')
+        self.custom(lastdb='-u ' + shlex.quote(str(seed)))
+        output = self.folder / 'output.maf'
+        output.write_text('##maf version=1\n')
+        inputs = [self.folder / name for name in ('ref.fa', 'query.fa', 'params.train')]
+        for path in inputs:
+            path.write_text(path.name)
+        with patch.object(options.subprocess, 'check_output', return_value='lastal 1654'):
+            options.output_seal(output, inputs)
+            options.output_seal(output, inputs, verify=True)
+            seed.write_text('1110011\n')
+            with self.assertRaisesRegex(ValueError, 'modified LAST stage'):
+                options.output_seal(output, inputs, verify=True)
 
     def test_run_guard_and_training_cache_settings(self):
         output = self.folder / 'output'
@@ -148,6 +219,9 @@ class LastOptionsTests(unittest.TestCase):
         program = '''#!/usr/bin/env python3
 import json, os, pathlib, sys
 tool = pathlib.Path(sys.argv[0]).name
+if sys.argv[1:] == ['--version']:
+    print('lastal 1654')
+    sys.exit(0)
 with open(os.environ['OPTIONS_LOG'], 'a') as log:
     log.write(json.dumps([tool, sys.argv[1:]]) + '\\n')
 if tool == 'lastdb':

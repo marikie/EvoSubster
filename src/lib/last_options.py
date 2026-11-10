@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Parse LAST 1648 options and record settings before reusing pipeline output."""
+"""Parse LAST options and record settings before reusing pipeline output."""
 
 import argparse
 import fcntl
@@ -28,7 +28,7 @@ SPECS = {
 }
 PROTECTED = {
     'lastdb': {'-P', '-p', '-q', '-a', '-Q', '-x', '-D'},
-    'lastal': {'-P', '-p', '-f', '-j', '-Q', '-2', '-F', '--split-f', '--split-n', '--splice', '--reverse'},
+    'lastal': {'-p', '-f', '-j', '-Q', '-2', '-F', '--split-f', '--split-n', '--splice', '--reverse'},
     'last-train': {'-P', '-Q', '-F', '--codon'},
     'last-split': {'-r', '--reverse', '-f', '--format', '-g', '--genome', '-n', '--no-split'},
 }
@@ -48,7 +48,7 @@ def parse_options(tool, text):
             name, equal, value = token.partition('=')
             key = name[2:]
             if key not in long:
-                raise ValueError('{}: unsupported LAST 1648 option: {}'.format(tool, name))
+                raise ValueError('{}: unsupported LAST option: {}'.format(tool, name))
             if name in PROTECTED[tool]:
                 raise ValueError('{}: {} is managed by the pipeline (use --thread for threads)'.format(tool, name))
             if long[key]:
@@ -85,7 +85,7 @@ def parse_options(tool, text):
                 elif key in flags:
                     groups.append([name])
                 else:
-                    raise ValueError('{}: unsupported LAST 1648 option: {}'.format(tool, name))
+                    raise ValueError('{}: unsupported LAST option: {}'.format(tool, name))
     return groups
 
 
@@ -110,6 +110,12 @@ def config():
     lastal_threads = os.environ.get('LASTAL_THREADS', threads)
     if not lastal_threads.isdigit() or int(lastal_threads) < 1:
         raise ValueError('LASTAL_THREADS must be a positive integer')
+    for group in custom['lastal']:
+        if group[0] == '-P':
+            if not group[1].isdigit() or int(group[1]) < 1:
+                raise ValueError('lastal -P must be a positive integer')
+            if 'LASTAL_THREADS' in os.environ and int(group[1]) != int(lastal_threads):
+                raise ValueError('lastal -P conflicts with explicit LASTAL_THREADS; use one thread setting')
     if os.environ.get('LASTAL_PIPELINE_MODE', 'streaming') not in ('streaming', 'staged'):
         raise ValueError('LASTAL_PIPELINE_MODE must be streaming or staged')
     seed = os.environ.get('LASTDB_ALIGNMENT_SEED', 'RY128')
@@ -137,14 +143,62 @@ def database_label():
     return 'custom-' + hashlib.sha256(json.dumps(words).encode()).hexdigest()[:16]
 
 
+def scientific_option_files(settings=None, keys=None):
+    """Fingerprint LAST seed-definition files by their scientific option role."""
+    settings = config() if settings is None else settings
+    keys = ('lastdb_train', 'lastdb_align') if keys is None else keys
+    files = {}
+    for key in keys:
+        if key not in ('lastdb_train', 'lastdb_align'):
+            continue
+        words = settings.get(key, [])
+        seeds = [index + 1 for index, word in enumerate(words[:-1]) if word == '-u']
+        if seeds:
+            source = Path(words[seeds[-1]])
+            if source.is_file():
+                files[key + ':-u'] = file_digest(source)
+    return files
+
+
+def alignment_settings(settings=None):
+    """Scientific alignment identity; execution concurrency is not an input."""
+    settings = config() if settings is None else settings
+    words = iter(settings['lastal'])
+    lastal = []
+    for word in words:
+        if word == '-P':
+            next(words)
+        else:
+            lastal.append(word)
+    result = {'schema': settings['schema'], 'lastdb_align': settings['lastdb_align'],
+              'lastal': lastal, 'last_split': settings['last_split']}
+    # Recorded fingerprints must remain historical when normalizing a guard.
+    external = settings.get('external_files')
+    if external is None:
+        external = scientific_option_files(settings, keys=('lastdb_align',))
+    if external:
+        result['external_files'] = external
+    return result
+
+
 def guard(folder, stage):
     settings = config()
     if stage == 'training':
         settings = {key: settings[key] for key in ('schema', 'lastdb_train', 'last_train')}
+        external = scientific_option_files(settings)
+        if external:
+            settings['external_files'] = external
         customized = bool(extras()['lastdb'] or extras()['last-train'])
     elif stage == 'database':
         settings = {key: settings[key] for key in ('schema', 'lastdb_align')}
+        external = scientific_option_files(settings)
+        if external:
+            settings['external_files'] = external
         customized = bool(extras()['lastdb'])
+    elif stage == 'alignment':
+        settings = alignment_settings(settings)
+        custom = extras()
+        customized = bool(custom['lastdb'] or custom['lastal'] or custom['last-split'])
     else:
         customized = any(extras().values())
     filename = {'run': 'metadata/last_options.json', 'training': 'last_training_options.json',
@@ -158,7 +212,13 @@ def guard(folder, stage):
 
 def guard_record(folder, stage, path, settings, customized):
     if path.exists():
-        if json.loads(path.read_text()) != settings:
+        previous = json.loads(path.read_text())
+        if stage == 'alignment':
+            # Legacy guards have no seed-file evidence; do not manufacture it
+            # from current bytes while comparing their recorded identity.
+            previous.setdefault('external_files', {})
+            previous = alignment_settings(previous)
+        if previous != settings:
             raise ValueError('LAST settings differ from existing results in {}. Use another date/--out-dir or --train-cache-dir.'.format(folder))
         return
     if customized and stage == 'alignment':
@@ -193,12 +253,24 @@ def output_seal(path, inputs, verify=False):
     version = subprocess.check_output(['lastal', '--version'], text=True).strip()
     if not version:
         raise ValueError('Cannot seal LAST output without a LAST version')
-    record = {'schema': 1, 'settings': config(), 'lastal_version': version,
-              'sha256': file_digest(path),
-              'inputs': {str(Path(source).resolve()): file_digest(source) for source in inputs}}
     seal = Path(str(path) + '.complete.json')
+    previous = json.loads(seal.read_text()) if verify else None
+    if previous is not None and previous.get('schema') == 1:
+        # Old seals were path-bound and used the complete settings object.
+        # Preserve their original exact checks; never reinterpret them as portable.
+        record = {'schema': 1, 'settings': config(), 'lastal_version': version,
+                  'sha256': file_digest(path),
+                  'inputs': {str(Path(source).resolve()): file_digest(source) for source in inputs}}
+    else:
+        roles = ('reference', 'query', 'train')
+        if len(inputs) != len(roles):
+            raise ValueError('LAST stage sealing requires ordered reference, query and train inputs')
+        record = {'schema': 2, 'settings': alignment_settings(), 'lastal_version': version,
+                  'sha256': file_digest(path),
+                  'inputs': [{'role': role, 'sha256': file_digest(source)}
+                             for role, source in zip(roles, inputs)]}
     if verify:
-        if json.loads(seal.read_text()) != record:
+        if previous != record:
             raise ValueError('Incomplete or modified LAST stage: {}'.format(path))
     else:
         # Commit the data before publishing its completion marker.

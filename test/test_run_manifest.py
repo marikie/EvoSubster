@@ -68,6 +68,31 @@ class ManifestTests(unittest.TestCase):
         run.rename(relocated)
         self.assertEqual(manifest.load(relocated)['artifacts'][0]['path'], 'statistics/counts.tsv')
 
+    def test_checkpoint_does_not_certify_unregistered_alignment(self):
+        run=self.root/'unfinished'
+        value=dict(schema_version=2,run_key='x',trio_key='t',options={},created_at='now',
+                   organisms=[dict(slot='org'+str(i),fasta_sha256='x',gff_sha256=None) for i in (1,2,3)],
+                   artifacts=[],status='pending')
+        manifest.prepare(run,value)
+        stray=run/'intermediateFiles/unfinished.maf'
+        stray.parent.mkdir()
+        stray.write_text('partial alignment')
+        manifest.checkpoint(run,'identity_complete',[])
+        manifest.prepare(run,value)
+        self.assertFalse(stray.exists())
+
+    def test_checkpoint_accepts_explicit_empty_success_marker(self):
+        run=self.root/'marker'
+        value=dict(schema_version=2,run_key='x',trio_key='t',options={},created_at='now',
+                   organisms=[dict(slot='org'+str(i),fasta_sha256='x',gff_sha256=None) for i in (1,2,3)],
+                   artifacts=[],status='pending')
+        manifest.prepare(run,value)
+        marker=run/'intermediateFiles/joined.maf.complete'
+        marker.parent.mkdir()
+        marker.touch()
+        manifest.checkpoint(run,'identity_complete',['auxiliary:all:intermediateFiles/joined.maf.complete'])
+        self.assertTrue(any(a['path'].endswith('joined.maf.complete') for a in manifest.load(run)['artifacts']))
+
     def test_modified_metadata_cannot_be_blessed_on_resume(self):
         value = dict(schema_version=2, run_key='x', trio_key='t', options={}, created_at='now',
                      organisms=[dict(slot='org'+str(i), fasta_sha256='x', gff_sha256=None) for i in (1,2,3)],

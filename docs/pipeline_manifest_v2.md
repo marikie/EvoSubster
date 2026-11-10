@@ -105,3 +105,29 @@ all eight count TSVs and all required plots before declaring success.
 
 Full regression logs/results are retained under `tmp/codex-checks/`; focused test
 and resume logs are retained under `tmp/codex/review-repairs/`.
+
+
+## Optional stage completion records
+
+Native CLI runs also publish `stage_records` (record schema 1) for GC, coding
+statistics, ordered pair training and completed pair alignments. Each record
+contains its logical kind/slot, scientific signature, original producer, and
+output roles with relative paths and SHA256. The signature uses input content,
+relevant scientific options and implementation hashes; dates, display names and
+absolute paths are not stage identities. Only lastal concurrency is excluded;
+training/database thread settings still participate.
+
+The full v2 `run_key` remains unchanged. Exact runs resume in place; explicit
+`--reuse-from` copies compatible stages into a separately identified run under
+the current output naming rules. `provenance` records source run/manifest hash,
+version policy and prior provenance. Cross-version reuse requires
+`allow-existing-pairs` and keeps the original producer on a completed MAF plus
+its exact training profile. Databases and incomplete stage outputs are never
+imported. A v2 manifest without stage records does not establish generic stage
+reuse eligibility; the historical 1648-to-1654 log migration remains separate.
+
+On resume, stale native stage records are invalidated before existing filenames
+can suppress execution. Invalid training/pair stages also invalidate dependent
+join/count/plot outputs. Registered metric stages remain reusable when unrelated
+stages fail. Source manifests are read under existing shared locks, output
+hashes are checked immediately before copying, and imports never alter sources.

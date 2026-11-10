@@ -7,6 +7,11 @@ source "$ROOT_DIR/src/lib/last_options.sh"
 last_options_parse_cli "$@" || exit 1
 set -- "${LAST_REMAINING_ARGS[@]}"
 
+if [ "${EVOSUBSTER_REUSE_PLAN:-0}" = 1 ] && [[ " $* " != *" --help "* && " $* " != *" -h "* ]]; then
+    EVOSUBSTER_EXPLICIT_LAST="${LAST_EXPLICIT_NAMES[*]}" python3 "$SCRIPT_DIR/lib/reuse_preview.py" from-fasta "$@"
+    exit $?
+fi
+
 for _arg in "$@"; do
     if [[ "$_arg" == "-h" || "$_arg" == "--help" ]]; then
         cat <<'EOF'
@@ -32,12 +37,17 @@ Options:
   --lastal-options TEXT    Additional lastal arguments
   --last-train-options TEXT  Additional last-train arguments (including tree selection)
   --last-split-options TEXT  Additional last-split arguments
+  --lastal-threads N          Override lastal concurrency only
+  --alignment-mode MODE      streaming (default) or staged
+  --reuse-from PATH          Existing run or output root to copy verified stages from
+  --reuse-last-version MODE  same (default) or allow-existing-pairs
+  --reuse-plan               Preview reuse without downloads, computation or outputs
   --idt-only                  Stop after checking sequence percent identity among three genomes; skip downstream analysis
   -h, --help                  Show this help message and exit
 
-LAST option strings use shell-style quoting without shell expansion (LAST 1648).
-Specify each --*-options once. Pipeline-managed formats, inputs and threads
-cannot be replaced. Different settings require a new date/output/cache directory.
+LAST option strings use shell-style quoting without shell expansion.
+Specify each --*-options once. Pipeline-managed formats and inputs cannot be replaced. Use --lastal-threads
+to control lastal concurrency independently of --thread. Different settings require a new date/output/cache directory.
 EOF
         exit 0
     fi
@@ -395,6 +405,10 @@ outDirPath="$run_path"
 # A resumed run retains its recorded display labels even if input folders moved.
 mapfile -t run_names < <(python3 -c 'import json,sys; print("\n".join(e["short_name"] for e in json.load(open(sys.argv[1]))["organisms"]))' "$run_path/metadata/metadata_manifest.json")
 org1ShortName="${run_names[0]}"; org2ShortName="${run_names[1]}"; org3ShortName="${run_names[2]}"
+if python3 "$MANIFEST_HELPER" read "$outDirPath" >/dev/null 2>&1; then
+    echo "Verified complete run already exists: $outDirPath"
+    exit 0
+fi
 
 
 gcContent_org1=$(get_config '.patterns.gc_content' | sed "s/{org_short}/$org1ShortName/g" | sed "s/{date}/$DATE/g")
@@ -423,10 +437,17 @@ org3_dinuc_tsv_ncds="${org3ID}_${org3ShortName}_${DATE}_dinuc_ncds.tsv"
 
 cd "$outDirPath" || exit 1
 last_options_guard "$outDirPath/intermediateFiles" training || exit 1
-REUSE_HELPER="$SCRIPT_DIR/lib/retry_reuse.py"
+REUSE_HELPER="$SCRIPT_DIR/lib/stage_reuse.py"
+LEGACY_REUSE_HELPER="$SCRIPT_DIR/lib/retry_reuse.py"
+legacy_pair_ready() {
+    [ -n "${EVOSUBSTER_REUSE_SOURCE:-}" ] && python3 "$LEGACY_REUSE_HELPER" pair-ready "$outDirPath" "$1"
+}
+pair_ready() {
+    python3 "$REUSE_HELPER" ready "$outDirPath" pair "$1" || legacy_pair_ready "$1"
+}
 if [ -n "${EVOSUBSTER_REUSE_SOURCE:-}" ]; then
     [ -n "${EVOSUBSTER_REUSE_LOG:-}" ] || { echo "Error: EVOSUBSTER_REUSE_LOG is required." >&2; exit 1; }
-    python3 "$REUSE_HELPER" import "$outDirPath" "$EVOSUBSTER_REUSE_SOURCE" "$EVOSUBSTER_REUSE_LOG" || exit 1
+    python3 "$LEGACY_REUSE_HELPER" import "$outDirPath" "$EVOSUBSTER_REUSE_SOURCE" "$EVOSUBSTER_REUSE_LOG" || exit 1
 fi
 echo "pwd: $(pwd)"
 
@@ -473,6 +494,15 @@ org3tsv_ncds="${stat_org3}/singlenuc/${org3tsv_ncds}"
 org2_dinuc_tsv_ncds="${stat_org2}/dinuc/${org2_dinuc_tsv_ncds}"
 org3_dinuc_tsv_ncds="${stat_org3}/dinuc/${org3_dinuc_tsv_ncds}"
 
+python3 "$MANIFEST_HELPER" stage-layout "$outDirPath" \
+    "train:org1-org2=$train12" "train:org1-org3=$train13" \
+    "pair:org1-org2=$o2o12" "pair:org1-org3=$o2o13" || exit 1
+
+if [ -n "${EVOSUBSTER_REUSE_FROM:-}" ]; then
+    python3 "$REUSE_HELPER" import "$outDirPath" "$EVOSUBSTER_REUSE_FROM" \
+        --policy "${EVOSUBSTER_REUSE_LAST_VERSION:-same}" || exit 1
+fi
+
 # GC content
 echo "$(get_config '.messages.gc_content')"
 if [ ! -e "$gcContent_org1" ]; then
@@ -481,17 +511,26 @@ time bash "$METRICS_DIR/gc_content.sh" "$org1FASTA" >"$gcContent_org1" || exit 1
 else
 	echo "$gcContent_org1 already exists"
 fi
+if [ -z "${EVOSUBSTER_REUSE_SOURCE:-}" ]; then
+    python3 "$REUSE_HELPER" register "$outDirPath" gc org1 "result=$gcContent_org1" || exit 1
+fi
 if [ ! -e "$gcContent_org2" ]; then
 echo "time bash $METRICS_DIR/gc_content.sh $org2FASTA >$gcContent_org2"
 time bash "$METRICS_DIR/gc_content.sh" "$org2FASTA" >"$gcContent_org2" || exit 1
 else
 	echo "$gcContent_org2 already exists"
 fi
+if [ -z "${EVOSUBSTER_REUSE_SOURCE:-}" ]; then
+    python3 "$REUSE_HELPER" register "$outDirPath" gc org2 "result=$gcContent_org2" || exit 1
+fi
 if [ ! -e "$gcContent_org3" ]; then
 echo "time bash $METRICS_DIR/gc_content.sh $org3FASTA >$gcContent_org3"
 time bash "$METRICS_DIR/gc_content.sh" "$org3FASTA" >"$gcContent_org3" || exit 1
 else
 	echo "$gcContent_org3 already exists"
+fi
+if [ -z "${EVOSUBSTER_REUSE_SOURCE:-}" ]; then
+    python3 "$REUSE_HELPER" register "$outDirPath" gc org3 "result=$gcContent_org3" || exit 1
 fi
 
 # Coding region percentage (all three species, when annotations are available).
@@ -512,29 +551,37 @@ for i in 0 1 2; do
         python3 "$METRICS_DIR/coding_region_percentage.py" \
             "${gff_fastas[$i]}" "${gff_paths[$i]}" --output "$coding_output" || exit 1
     fi
+    if [ -z "${EVOSUBSTER_REUSE_SOURCE:-}" ]; then
+        python3 "$REUSE_HELPER" register "$outDirPath" coding "org$((i+1))" "result=$coding_output" || exit 1
+    fi
 done
 
 # Run last-train to check substitution percent identity between org1 and org2
 echo "$(get_config '.options.checkIdt.enabled_message')"
-if python3 "$REUSE_HELPER" pair-ready "$outDirPath" org1-org2; then
-    echo "Using certified LAST 1648 training for org1-org2 (original provenance retained)."
+if pair_ready org1-org2 || python3 "$REUSE_HELPER" ready "$outDirPath" train org1-org2; then
+    echo "Using verified inherited training for org1-org2 (original provenance retained)."
 else
     reuse_cached_train "$TRAIN_CACHE_DIR" "$DATE" "$cacheOrg1ID" "$cacheOrg2ID" "$train12" "$org1FASTA" "$org2FASTA" || exit 1
     time bash "$ALIGN_DIR/last_train.sh" "$DATE" "$org1FASTA" "$org2FASTA" "$org1ShortName" "$org2ShortName" "$imf" || exit 1
+    python3 "$REUSE_HELPER" register "$outDirPath" train org1-org2 "train=$train12" || exit 1
 fi
 # Run last-train to check substitution percent identity between org1 and org3
 echo "$(get_config '.options.checkIdt.enabled_message')"
-if python3 "$REUSE_HELPER" pair-ready "$outDirPath" org1-org3; then
-    echo "Using certified LAST 1648 training for org1-org3 (original provenance retained)."
+if pair_ready org1-org3 || python3 "$REUSE_HELPER" ready "$outDirPath" train org1-org3; then
+    echo "Using verified inherited training for org1-org3 (original provenance retained)."
 else
     reuse_cached_train "$TRAIN_CACHE_DIR" "$DATE" "$cacheOrg1ID" "$cacheOrg3ID" "$train13" "$org1FASTA" "$org3FASTA" || exit 1
     time bash "$ALIGN_DIR/last_train.sh" "$DATE" "$org1FASTA" "$org3FASTA" "$org1ShortName" "$org3ShortName" "$imf" || exit 1
+    python3 "$REUSE_HELPER" register "$outDirPath" train org1-org3 "train=$train13" || exit 1
 fi
 # Run last-train to check substitution percent identity between org2 and org3 (inner group)
 echo "$(get_config '.options.checkIdt.enabled_message')"
+if ! python3 "$REUSE_HELPER" ready "$outDirPath" train org2-org3; then
 reuse_cached_train "$TRAIN_CACHE_DIR" "$DATE" "$cacheOrg2ID" "$cacheOrg3ID" \
     "${imf}/${org2ShortName}2${org3ShortName}_${DATE}.train" "$org2FASTA" "$org3FASTA" || exit 1
 time bash "$ALIGN_DIR/last_train.sh" "$DATE" "$org2FASTA" "$org3FASTA" "$org2ShortName" "$org3ShortName" "$imf" || exit 1
+    python3 "$REUSE_HELPER" register "$outDirPath" train org2-org3 "train=${imf}/${org2ShortName}2${org3ShortName}_${DATE}.train" || exit 1
+fi
 
 for train_file in "$train12" "$train13" "${imf}/${org2ShortName}2${org3ShortName}_${DATE}.train"; do
     is_valid_train_file "$train_file" || { echo "Error: incomplete training output: $train_file" >&2; exit 1; }
@@ -559,14 +606,15 @@ fi
 # one2one for org1-org2
 echo "$(get_config '.messages.one2one' | sed "s/{org1_short}/$org1ShortName/g" | sed "s/{org2_short}/$org2ShortName/g")"
 echo "bash $ALIGN_DIR/one2one.sh $DATE $org1FASTA $org2FASTA ${imf}/${dbName} $train12 $o2o12"
-if python3 "$REUSE_HELPER" pair-ready "$outDirPath" org1-org2; then
-    echo "Using certified LAST 1648 alignment for org1-org2 (original provenance retained)."
+if pair_ready org1-org2; then
+    echo "Using verified inherited alignment for org1-org2 (original provenance retained)."
 else
     last_options_guard "$o2o12" alignment || exit 1
-    if python3 "$REUSE_HELPER" current-pair-ready "$outDirPath" org1-org2; then
+    if [ -n "${EVOSUBSTER_REUSE_SOURCE:-}" ] && python3 "$LEGACY_REUSE_HELPER" current-pair-ready "$outDirPath" org1-org2; then
         echo "Using checkpointed sorted alignment for org1-org2."
     else
         bash "$ALIGN_DIR/one2one.sh" "$DATE" "$org1FASTA" "$org2FASTA" "${imf}/${dbName}" "$train12" "$o2o12" || exit 1
+        python3 "$REUSE_HELPER" register "$outDirPath" pair org1-org2 "maf=$o2o12" "train=$train12" || exit 1
     fi
 fi
 python3 "$MANIFEST_HELPER" checkpoint "$outDirPath" identity_complete || exit 1
@@ -574,14 +622,15 @@ python3 "$MANIFEST_HELPER" checkpoint "$outDirPath" identity_complete || exit 1
 # one2one for org1-org3
 echo "$(get_config '.messages.one2one' | sed "s/{org1_short}/$org1ShortName/g" | sed "s/{org2_short}/$org3ShortName/g")"
 echo "bash $ALIGN_DIR/one2one.sh $DATE $org1FASTA $org3FASTA ${imf}/${dbName} $train13 $o2o13"
-if python3 "$REUSE_HELPER" pair-ready "$outDirPath" org1-org3; then
-    echo "Using certified LAST 1648 alignment for org1-org3 (original provenance retained)."
+if pair_ready org1-org3; then
+    echo "Using verified inherited alignment for org1-org3 (original provenance retained)."
 else
     last_options_guard "$o2o13" alignment || exit 1
-    if python3 "$REUSE_HELPER" current-pair-ready "$outDirPath" org1-org3; then
+    if [ -n "${EVOSUBSTER_REUSE_SOURCE:-}" ] && python3 "$LEGACY_REUSE_HELPER" current-pair-ready "$outDirPath" org1-org3; then
         echo "Using checkpointed sorted alignment for org1-org3."
     else
         bash "$ALIGN_DIR/one2one.sh" "$DATE" "$org1FASTA" "$org3FASTA" "${imf}/${dbName}" "$train13" "$o2o13" || exit 1
+        python3 "$REUSE_HELPER" register "$outDirPath" pair org1-org3 "maf=$o2o13" "train=$train13" || exit 1
     fi
 fi
 python3 "$MANIFEST_HELPER" checkpoint "$outDirPath" identity_complete || exit 1
@@ -590,8 +639,20 @@ python3 "$MANIFEST_HELPER" checkpoint "$outDirPath" identity_complete || exit 1
 echo "$(get_config '.messages.maf_join')"
 echo "bash $ALIGN_DIR/mafjoin.sh $o2o12 $o2o13 $joinedFile"
 bash "$ALIGN_DIR/mafjoin.sh" "$o2o12" "$o2o13" "$joinedFile" || exit 1
-python3 "$REUSE_HELPER" refresh-sorted "$outDirPath" || exit 1
-python3 "$MANIFEST_HELPER" checkpoint "$outDirPath" identity_complete || exit 1
+if [ -n "${EVOSUBSTER_REUSE_SOURCE:-}" ]; then
+    python3 "$LEGACY_REUSE_HELPER" refresh-sorted "$outDirPath" || exit 1
+fi
+for aligned in "$o2o12" "$o2o13"; do
+    sorted="${aligned%.maf}_sorted.maf"
+    if [ -s "$sorted" ]; then
+        python3 "$REUSE_HELPER" relocate "$outDirPath" "$aligned" "$sorted" || exit 1
+        if [ "${LASTAL_PIPELINE_MODE:-streaming}" != staged ]; then
+            rm -f "$aligned" "$aligned.complete.json"
+        fi
+    fi
+done
+python3 "$MANIFEST_HELPER" checkpoint "$outDirPath" identity_complete \
+    "auxiliary:all:$joinedFile" "auxiliary:all:${joinedFile}.complete" || exit 1
 
 # Calculate the substitution ratio without considering neighboring bases
 echo "$(get_config '.messages.sbst_ratio')"

@@ -12,17 +12,22 @@ Single-base substitution rates are computed in trinucleotide context, requiring 
 
 ## Prerequisites
 
-Install the following command-line tools before running any scripts:
+Use Linux or WSL2 with Bash and Python 3.9 or later. Install the following
+command-line tools before running the pipeline:
 
 - [jq](https://jqlang.org) for JSON parsing
 - `curl` for downloading genomes from NCBI Datasets API
-- [LAST](https://gitlab.com/mcfrith/last) for alignment
+- [LAST](https://gitlab.com/mcfrith/last) for alignment, built for your local CPU architecture
 - [yq](https://github.com/mikefarah/yq) (Mike Farah’s v4+) for reading YAML
 - [unzip](https://linux.die.net/man/1/unzip) for extracting downloaded archives
-- [python3](https://www.python.org/) (3.8 or later) with the standard library
+- [python3](https://www.python.org/) (3.9 or later) with the standard library
 - [R](https://www.r-project.org/) (≥4.0) with packages: `stringr`, `RColorBrewer`, `showtext`, `jsonlite`, `curl`, `dplyr`, `ggplot2`, `rlang`, `sysfonts`
 
-Make sure the executables are discoverable in your `PATH`.
+Make sure the executables are discoverable in your `PATH`. A local LAST install
+is sufficient; the core pipeline does not require a cluster scheduler or a fixed
+LAST release. Scheduler scripts under `scripts/` are optional site-specific
+helpers. GNU `time` is optional: when it is unavailable, staged alignments still
+run and their timing records mark maximum RSS as unavailable.
 
 ## Repository Setup
 
@@ -449,11 +454,12 @@ Representative outputs include:
 
 - `*_dinuc*.pdf`: normalized dinucleotide substitution counts by original tetranucleotide counts
 
-Re-running the pipeline skips steps whose outputs already exist.
+Re-running the same command resumes verified completed stages. Output existence
+alone is insufficient; the manifest and recorded hashes must validate.
 
 ## Configuring LAST
 
-Both `sbst_fromDwl.sh` and `sbst.sh` accept quoted argument strings for LAST 1648:
+Both `sbst_fromDwl.sh` and `sbst.sh` accept quoted argument strings for LAST:
 
 ```bash
 rtk proxy bash src/sbst_fromDwl.sh \
@@ -481,10 +487,13 @@ are inherited by the selected trios. `--last-split-options` applies to the exter
 `last-split -r` step; lastal's embedded splitter is configured via `--lastal-options`.
 `maf-sort`, `maf-join`, and `maf-linked` keep their existing settings.
 
-Threads are controlled by `--thread`. Options that replace pipeline inputs,
-the trained parameter-file connection, required MAF output, or alignment direction
-are rejected before downloads. Unknown options are rejected using the LAST 1648
-CLI definition; the underlying LAST command validates parameter values.
+`--thread` controls database construction and training, and supplies the default
+`lastal` concurrency. Use `--lastal-threads N` to change only `lastal`. A conflicting
+`-P` inside `--lastal-options` is rejected when an explicit lastal thread setting
+is present. Options that replace pipeline inputs, the trained parameter-file
+connection, required MAF output, or alignment direction are rejected before
+downloads. The option parser checks supported LAST arguments; the installed LAST
+commands validate their parameter values.
 
 Effective settings, ordered input SHA256 hashes, assembly versions, stage completion,
 and relative artifact paths are saved in `metadata/metadata_manifest.json` (schema 2).
@@ -511,12 +520,93 @@ nine original double substitutions equally probable, preserving reverse-compleme
 folding multiplicities. Low expected counts use multinomial Monte Carlo with
 10,000 replicates and seed 1.
 
-## Pipeline regression checks
+## Resuming and reusing alignments
 
-Run the LAST-option, counting, and check-runner unit tests from `test/`:
+Both pipeline entrypoints accept these controls. Each option may appear once;
+value options accept either `--name VALUE` or `--name=VALUE`. Command-line values
+override their environment equivalents.
+
+| Option | Default | Environment equivalent |
+| --- | --- | --- |
+| `--lastal-threads N` | `--thread` | `LASTAL_THREADS` |
+| `--alignment-mode streaming\|staged` | `streaming` | `LASTAL_PIPELINE_MODE` |
+| `--reuse-from PATH` | Current output only | `EVOSUBSTER_REUSE_FROM` |
+| `--reuse-last-version same\|allow-existing-pairs` | `same` | `EVOSUBSTER_REUSE_LAST_VERSION` |
+| `--reuse-plan` | Run the pipeline | `EVOSUBSTER_REUSE_PLAN=1` |
+
+For an interrupted run, repeat its original command with the same label, inputs,
+settings, and output root. For example, run this command again after interruption:
 
 ```bash
-rtk proxy bash -c 'cd test && python3 -m unittest test_last_options test_codex_checks test_single_sbst_2TSVs test_single_sbst_2TSVs_errprob test_subRatio'
+./src/sbst.sh run1 genomes/outgroup.fa genomes/ingroup1.fa genomes/ingroup2.fa \
+  NO_GFF_FILE --out-dir results --thread 8
+```
+
+Verified completed pair alignments and sealed staged checkpoints can be reused.
+Incomplete files are not completion evidence. Input contents, directed pair order,
+effective alignment settings, and recorded hashes determine eligibility; labels,
+display names, and directory names do not establish identity.
+
+Use `--reuse-from` to look for compatible results outside the destination. The
+source must already exist and can be a result root, an individual date/run
+directory, or a run directory that has been moved or renamed. For example:
+
+```bash
+./src/sbst.sh run2 genomes/outgroup.fa genomes/ingroup1.fa genomes/ingroup2.fa \
+  NO_GFF_FILE --out-dir results-new --reuse-from results
+
+# Narrow discovery to one old run, including a moved or renamed directory.
+./src/sbst.sh run2 genomes/outgroup.fa genomes/ingroup1.fa genomes/ingroup2.fa \
+  NO_GFF_FILE --out-dir results-new --reuse-from /data/renamed-run
+```
+
+The default `--reuse-last-version same` requires the recorded LAST version to
+match the installed tools. To permit verified completed pair alignments and
+training profiles from another LAST version, explicitly select
+`--reuse-last-version allow-existing-pairs`. Imported outputs retain their source
+provenance. Old LAST databases are never imported, and unfinished alignment stages
+cannot cross LAST versions. All newly computed work uses the installed tools.
+
+Preview reuse decisions before starting a new run:
+
+```bash
+./src/sbst.sh run2 genomes/outgroup.fa genomes/ingroup1.fa genomes/ingroup2.fa \
+  NO_GFF_FILE --out-dir results-new --reuse-from /data/old-results/trio/run1 \
+  --reuse-last-version allow-existing-pairs --reuse-plan
+```
+
+`--reuse-plan` reports candidate reuse and reasons for rejection without creating
+output, downloading genomes, or running alignment/counting/plotting work. For the
+download wrapper, genomes must already be available locally for a full preview.
+Remove `--reuse-plan` to execute the reviewed command. Reuse validates the source
+again at execution time.
+
+`--alignment-mode staged` writes and seals the embedded-split MAF before running
+the reverse splitter, then records later completed stages separately. This reduces
+overlap between processes and lets a later attempt resume verified checkpoints.
+It needs extra disk space for intermediate MAFs. `--lastal-threads 1` can further
+limit concurrency while keeping database/training threads at `--thread`:
+
+```bash
+./src/sbst.sh run2 genomes/outgroup.fa genomes/ingroup1.fa genomes/ingroup2.fa \
+  NO_GFF_FILE --out-dir results-new --thread 8 --lastal-threads 1 \
+  --alignment-mode staged --reuse-from results
+```
+
+Neither staged execution nor fewer threads guarantees that a large query fits in
+memory. Per-stage timing and maximum RSS are diagnostic records; RSS is marked
+unavailable when GNU `time` cannot be used.
+
+Tree-mode reuse previews do not run selection or assume that old selection output
+matches the current tree. Use `--trios path/to/selected_trios.tsv --reuse-plan`
+to preview an explicitly selected set of trios without downloading inputs.
+
+## Pipeline regression checks
+
+Run the LAST-option, resume CLI, counting, and check-runner unit tests from `test/`:
+
+```bash
+rtk proxy bash -c 'cd test && python3 -m unittest test_last_options test_resume_cli test_codex_checks test_single_sbst_2TSVs test_single_sbst_2TSVs_errprob test_subRatio'
 ```
 
 Queue a full pipeline regression run, then inspect its status:
@@ -648,31 +738,6 @@ Dinucleotide substitution spectrum for _Amphilophus zaliosus_ (whole genome):
 Dinucleotide substitution spectrum for _Amphilophus zaliosus_ (non-coding region):
 ![ampZal_dinuc](./eg_results/Arccen1_Ampcit2_Ampzal3/20260418/figs/Ampzal3/dinuc/GCA_015108585.1_Ampzal3_20260418_dinuc_ncds.tsv-1.png)
 
-### Verified LAST 1654 retry campaign (Miyabi-G)
-
-`LASTAL_THREADS` overrides only `lastal` concurrency; DB construction and training
-continue to use `--thread`. `LASTAL_PIPELINE_MODE=staged` writes and seals the
-embedded-split output before running reverse `last-split`, avoiding simultaneous
-memory use. Completed stages are bound to inputs, effective options and the actual
-LAST version. Interrupted stages are not reusable; diagnostic logs are retained.
-These controls do not guarantee that a single large query fits the node's memory.
-
-`scripts/retry_campaign.py` manages the approved Primates/Telluraves recovery.
-Initialize it with a new campaign directory and the full original-manifest
-validation record (`--validation FILE`). It snapshots code and LAST executables,
-keeps original outputs read-only, and writes `campaign.json` and `summary.tsv`.
-`advance DIRECTORY` updates PBS states and submits available pilot/remainder jobs;
-`watch DIRECTORY` performs that same operation once per minute, holding one
-controller lock. `report DIRECTORY` refreshes the summary without submission.
-The four pilots must finish with PBS exit 0 and validated complete manifests before
-remaining jobs are submitted. At most four campaign jobs are outstanding; scheduler
-project limits also apply. Unknown submission responses stop new submissions until
-PBS has been reconciled manually. Failed jobs are not automatically retried.
-
-Each trio uses `scripts/retry_trio_miyabi_g.pbs` (regular-g, one node, 48 hours).
-New LAST work uses the pinned 1654 tool bundle. Certified inherited pair MAFs and
-profiles are explicitly recorded as LAST 1648 outputs in `legacy_reuse`; old LAST
-DBs are never imported. Existing completed runs remain at their original paths.
 ### Spectrum shape clustering and taxonomy
 
 `src/visualize/spectrum_shape.R` generates a dendrogram heatmap, UMAP plots colored

@@ -35,10 +35,7 @@ else
 	echo "$org1_org2_sorted already exists"
 fi
 # cleanup: remove unsorted MAF once the sorted file is available
-if [ "${LASTAL_PIPELINE_MODE:-streaming}" != staged ] && [ -s "$org1_org2_sorted" ] && [ -e "$org1_org2" ]; then
-	echo "cleanup: rm -f $org1_org2"
-	rm -f "$org1_org2"
-fi
+# The caller records sorted output before reclaiming the certified input.
 if [ ! -s "$org1_org3_sorted" ]; then
 	echo "---sorting $org1_org3"
 	echo "time maf-sort $org1_org3 >$org1_org3_sorted"
@@ -52,10 +49,7 @@ if [ ! -s "$org1_org3_sorted" ]; then
 else
 	echo "$org1_org3_sorted already exists"
 fi
-if [ "${LASTAL_PIPELINE_MODE:-streaming}" != staged ] && [ -s "$org1_org3_sorted" ] && [ -e "$org1_org3" ]; then
-	echo "cleanup: rm -f $org1_org3"
-	rm -f "$org1_org3"
-fi
+# The caller records sorted output before reclaiming the certified input.
 joined_complete="${joinedFile}.complete"
 if [ ! -s "$joinedFile" ] || [ ! -e "$joined_complete" ]; then
 	echo "---joining $org1_org2_sorted and $org1_org3_sorted"

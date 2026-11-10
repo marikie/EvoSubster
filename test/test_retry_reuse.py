@@ -163,7 +163,8 @@ class ReuseTests(unittest.TestCase):
         options_path=self.target/(self.maf+'.last_options.json')
         options_path.write_text(json.dumps(manifest.load(self.target)['options']['last']))
         self.assertFalse(reuse.current_pair_ready(self.target,'org1-org2'))
-        manifest.checkpoint(self.target,'identity_complete',[f'train:org1-org2:{self.train}'])
+        manifest.checkpoint(self.target,'identity_complete',[f'train:org1-org2:{self.train}',
+            f'auxiliary:all:{sorted_name}',f'auxiliary:all:{self.maf}.last_options.json'])
         self.assertTrue(reuse.current_pair_ready(self.target,'org1-org2'))
         options_path.write_text('{}')
         self.assertFalse(reuse.current_pair_ready(self.target,'org1-org2'))

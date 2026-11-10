@@ -6,6 +6,11 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$ROOT_DIR/src/lib/last_options.sh"
 LAST_OPTIONS_DEFER_VALIDATE=1 last_options_parse_cli "$@" || exit 1
 set -- "${LAST_REMAINING_ARGS[@]}"
+
+if [ "${EVOSUBSTER_REUSE_PLAN:-0}" = 1 ] && [[ " $* " != *" --help "* && " $* " != *" -h "* ]]; then
+    EVOSUBSTER_EXPLICIT_LAST="${LAST_EXPLICIT_NAMES[*]}" python3 "$SCRIPT_DIR/lib/reuse_preview.py" from-download "$@"
+    exit $?
+fi
 SELECTION_HELPER="$SCRIPT_DIR/lib/selection_run.py"
 
 
@@ -137,6 +142,11 @@ Options:
   --out-dir PATH          Output directory (default: ./results)
   --train-cache-dir PATH  Directory containing cached last-train files
   --thread N              Number of threads for LAST alignment (default: 8)
+  --lastal-threads N       Override lastal concurrency only.
+  --alignment-mode MODE   streaming (default) or staged.
+  --reuse-from PATH       Existing run or output root for verified stage reuse.
+  --reuse-last-version MODE  same (default) or allow-existing-pairs.
+  --reuse-plan            Read-only preview; never downloads or runs tree selection.
   --lastdb-options TEXT    Additional lastdb arguments (training and alignment)
   --lastal-options TEXT    Additional lastal arguments
   --last-train-options TEXT  Additional last-train arguments (including tree selection)
@@ -145,9 +155,9 @@ Options:
   --force                 Re-download genomes even if local files exist
   -h, --help              Show this help message and exit
 
-LAST option strings use shell-style quoting without shell expansion (LAST 1648).
-Specify each --*-options once. Pipeline-managed formats, inputs and threads
-cannot be replaced. Different settings require a new date/output/cache directory.
+LAST option strings use shell-style quoting without shell expansion.
+Specify each --*-options once. Pipeline-managed formats and inputs cannot be replaced. Use --lastal-threads
+to control lastal concurrency independently of --thread. Different settings require a new date/output/cache directory.
 EOF
             exit 0
             ;;

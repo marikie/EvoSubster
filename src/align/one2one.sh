@@ -37,8 +37,9 @@ stage_run() {
     # Remove a stale seal before replacing its associated output.
     rm -f "$output.complete.json" || return 1
     echo "---$stage (staged): $*"
-    /usr/bin/time -f 'elapsed_seconds=%e\nmax_rss_kb=%M\nexit_status=%x' -o "$timing" \
-        "$@" >"$temporary" 2>"$diagnostic" || status=$?
+    python3 "$(dirname "$LAST_OPTIONS_HELPER")/stage_execute.py" \
+        --stdout "$temporary" --stderr "$diagnostic" --timing "$timing" \
+        -- "$@" || status=$?
     cat "$diagnostic" >&2
     cat "$timing" >&2
     if grep -Fq 'skipping sequence' "$diagnostic"; then
@@ -179,7 +180,12 @@ if [ ! -e "$o2omaf" ] && [ ! -e "$o2omaf_sorted" ]; then
 	o2omaf_linked_tmp="${o2omaf}.tmp.$$"
 	if time maf-linked "$o2omaf_tmp" >"$o2omaf_linked_tmp" \
 			&& [ -s "$o2omaf_linked_tmp" ]; then
-		mv "$o2omaf_linked_tmp" "$o2omaf"
+		mv "$o2omaf_linked_tmp" "$o2omaf" || exit 1
+		python3 "$LAST_OPTIONS_HELPER" seal-output "$o2omaf" \
+			--input "$org1FASTA" --input "$org2FASTA" --input "$trainFile" || {
+			mv "$o2omaf" "$o2omaf_linked_tmp"
+			exit 1
+		}
 		rm -f "$o2omaf_tmp"
 	else
 		rm -f "$o2omaf_linked_tmp"

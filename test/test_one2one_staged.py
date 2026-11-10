@@ -143,6 +143,64 @@ if os.environ.get('FAIL_TOOL') == name:
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.events().count('lastal'), 3)
 
+    def test_moved_checkpoint_reuses_logical_inputs_and_new_thread_count(self):
+        result = self.run_pipeline(FAIL_TOOL='last-split')
+        self.assertNotEqual(result.returncode, 0)
+        moved = self.folder / 'moved'
+        moved.mkdir()
+        for name in ('ref.fa', 'query.fa', 'train', 'output.maf.lastal.maf',
+                     'output.maf.lastal.maf.complete.json', 'output.maf.last_options.json'):
+            shutil.move(self.folder / name, moved / name)
+        for index in (3, 4, 6, 7):
+            self.command[index] = str(moved / Path(self.command[index]).name)
+        result = self.run_pipeline(LASTAL_THREADS='1')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.events().count('lastal'), 1)
+        seal = json.loads((moved / 'output.maf.complete.json').read_text())
+        self.assertEqual([item['role'] for item in seal['inputs']], ['reference', 'query', 'train'])
+        self.assertNotIn(str(self.folder), json.dumps(seal))
+
+    def test_legacy_seal_still_requires_exact_settings_and_input_paths(self):
+        result = self.run_pipeline(FAIL_TOOL='last-split')
+        self.assertNotEqual(result.returncode, 0)
+        checkpoint = Path(str(self.output) + '.lastal.maf')
+        helper = ROOT / 'src/lib/last_options.py'
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('legacy_last_options', helper)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        from unittest.mock import patch
+        with patch.dict(os.environ, self.env, clear=True):
+            seal = dict(schema=1, settings=module.config(), lastal_version='lastal 1654',
+                        sha256=module.file_digest(checkpoint),
+                        inputs={str((self.folder / name).resolve()): module.file_digest(self.folder / name)
+                                for name in ('ref.fa', 'query.fa', 'train')})
+        Path(str(checkpoint) + '.complete.json').write_text(json.dumps(seal))
+        verify = ['python3', str(helper), 'verify-output', str(checkpoint)]
+        for name in ('ref.fa', 'query.fa', 'train'):
+            verify.extend(['--input', str(self.folder / name)])
+        changed = subprocess.run(verify, env=dict(self.env, LASTAL_THREADS='1'),
+                                 capture_output=True, text=True)
+        self.assertNotEqual(changed.returncode, 0)
+        moved_ref = self.folder / 'moved-ref.fa'
+        shutil.copyfile(self.folder / 'ref.fa', moved_ref)
+        moved = list(verify)
+        moved[5] = str(moved_ref)
+        changed = subprocess.run(moved, env=self.env, capture_output=True, text=True)
+        self.assertNotEqual(changed.returncode, 0)
+        result = self.run_pipeline()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.events().count('lastal'), 1)
+
+    def test_streaming_publishes_only_successful_final_seal(self):
+        # The fixture's overlap rejection is only relevant to staged execution.
+        split = self.folder / 'bin/last-split'
+        split.write_text(split.read_text().replace("if (folder / 'lastal-running').exists():", "if False:"))
+        result = self.run_pipeline(LASTAL_PIPELINE_MODE='streaming')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(Path(str(self.output) + '.complete.json').is_file())
+        self.assertFalse(Path(str(self.output) + '.raw.complete.json').exists())
+
     def test_final_resume_checks_seal_and_settings_before_building_database(self):
         result = self.run_pipeline()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -151,8 +209,8 @@ if os.environ.get('FAIL_TOOL') == name:
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.events().count('lastdb'), 1)
         result = self.run_pipeline(LASTAL_THREADS='1')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('settings differ', result.stderr)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.events().count('lastal'), 1)
 
 
 if __name__ == '__main__':

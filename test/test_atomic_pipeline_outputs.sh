@@ -28,6 +28,8 @@ if PATH="$stub_bin:$PATH" FAIL_MAF_JOIN=1 \
     exit 1
 fi
 test ! -e "$tmp_dir/joined.maf"
+test -s "$tmp_dir/a.maf"
+test -s "$tmp_dir/b.maf"
 
 PATH="$stub_bin:$PATH" bash "$ROOT_DIR/src/align/mafjoin.sh" \
     "$tmp_dir/a.maf" "$tmp_dir/b.maf" "$tmp_dir/joined.maf" >/dev/null 2>&1

@@ -229,7 +229,7 @@ def recover_staged_outputs(run, previous, current):
     """
     if os.environ.get('LASTAL_PIPELINE_MODE') != 'staged':
         return
-    from last_options import config, output_seal
+    from last_options import config, output_seal, alignment_settings
     if previous['options'].get('last') != config():
         return
     organisms = {entry['slot']:entry for entry in current['organisms']}
@@ -238,9 +238,11 @@ def recover_staged_outputs(run, previous, current):
         return
     existing = {a['path']:a for a in previous['artifacts']}
     for query in ('org2','org3'):
+        pair='org1-'+query
+        layout=previous.get('stage_layout',{})
         prefix = f"intermediateFiles/{names['org1']}2{names[query]}"
-        train = f"{prefix}_{previous['date']}.train"
-        maf = f"{prefix}_one2one_{previous['date']}.maf"
+        train = layout.get('train:'+pair,f"{prefix}_{previous['date']}.train")
+        maf = layout.get('pair:'+pair,f"{prefix}_one2one_{previous['date']}.maf")
         for stage in ('lastal','last-split','maf-linked'):
             for kind in ('stderr','time'):
                 pattern = Path(maf).name + f'.{stage}.{kind}.*'
@@ -276,7 +278,7 @@ def recover_staged_outputs(run, previous, current):
             for filename in (relative,seal):
                 existing[filename] = dict(kind='auxiliary',slot=None,path=filename,sha256=sha256(run/filename))
             guard = maf+'.last_options.json'
-            if (run/guard).is_file() and json.loads((run/guard).read_text()) == previous['options']['last']:
+            if (run/guard).is_file() and alignment_settings(json.loads((run/guard).read_text())) == alignment_settings(previous['options']['last']):
                 existing[guard] = dict(kind='auxiliary',slot=None,path=guard,sha256=sha256(run/guard))
     previous['artifacts'] = list(existing.values())
 def name_limit(base):
@@ -394,6 +396,14 @@ def prepare(run, value):
             raise ValueError('Existing run inputs/options or label disagree with manifest')
         validate_metadata(run, previous)
         recover_staged_outputs(run, previous, value)
+        if previous.get('stage_records'):
+            from stage_reuse import reconcile
+            reconcile(run,previous)
+        locations={e['slot']:e for e in value['organisms']}
+        for entry in previous['organisms']:
+            for field in ('fasta_path','gff_path'):
+                if field in locations[entry['slot']]:
+                    entry[field]=locations[entry['slot']][field]
         value = previous
         previous_count = len(previous['artifacts'])
         verified = {a['path'] for a in value['artifacts']
@@ -448,7 +458,8 @@ def checkpoint(run, status, specs):
     for spec in specs:
         kind, slot, filename = spec.split(':', 2)
         path = artifact_path(run, filename)
-        if not path.is_file() or path.stat().st_size == 0:
+        if not path.is_file() or (path.stat().st_size == 0 and not
+                (kind == 'auxiliary' and filename.endswith('.complete'))):
             raise ValueError(f'Required output missing/empty: {path}')
         artifact = dict(kind=kind, slot=slot, path=filename, sha256=sha256(path))
         if kind == 'train':
@@ -461,15 +472,32 @@ def checkpoint(run, status, specs):
             if marker.is_file():
                 relative = marker.relative_to(run).as_posix()
                 existing[relative] = dict(kind='auxiliary',slot=None,path=relative,sha256=sha256(marker))
-    # Snapshot all intermediate files only after the stage succeeds.
-    for directory in ('intermediateFiles',):
-        for path in (run / directory).rglob('*'):
-            if path.is_file() and not path.is_symlink() and not any(
-                token in path.name for token in ('.tmp', '.lock', '.cache-copy')
-            ):
-                relative = path.relative_to(run).as_posix()
-                if relative not in existing:
-                    existing[relative] = dict(kind='auxiliary', slot=None, path=relative, sha256=sha256(path))
+    # DBs and option guards have explicit successful seals. Arbitrary MAF/raw/tmp
+    # files cannot become reusable simply because a later checkpoint ran.
+    intermediate=run/'intermediateFiles'
+    certified=[]
+    for seal in intermediate.rglob('.database-complete.json'):
+        try:
+            seal_directory(seal.parent,verify=True)
+        except (OSError,ValueError,KeyError):
+            continue
+        certified.extend(p for p in seal.parent.rglob('*') if p.is_file())
+    for name in ('last_training_options.json',):
+        candidate=intermediate/name
+        if candidate.is_file():certified.append(candidate)
+    for artifact in list(existing.values()):
+        candidate=artifact_path(run,artifact['path'])
+        if artifact['kind']=='train':
+            seal=Path(str(candidate)+'.complete.json')
+            if seal.is_file():
+                try:seal_file(candidate,verify=True)
+                except (ValueError,OSError,KeyError):continue
+                certified.append(seal)
+    for path in certified:
+        if path.is_symlink() or any(t in path.name for t in ('.tmp','.lock','.cache-copy')):
+            continue
+        relative=path.relative_to(run).as_posix()
+        existing[relative]=dict(kind='auxiliary',slot=None,path=relative,sha256=sha256(path))
     if status == 'complete':
         plots = json.loads((run / 'metadata/plot_completion.json').read_text())
         if plots.get('status') != 'complete' or not plots.get('artifacts'):
@@ -494,6 +522,9 @@ def training_directory(base, ref, query, ref_acc, query_acc):
                  last=effective_last_options(),
                  threads=os.environ.get('THREAD_NUM', '8'),
                  last_version=subprocess.check_output(['lastal', '--version'], text=True).strip())
+    from last_options import scientific_option_files
+    external=scientific_option_files(value['last'],keys=('lastdb_train',))
+    if external:value['option_files']=external
     return Path(base).resolve() / 'v2' / digest(value)
 
 
@@ -576,6 +607,7 @@ def main():
     for name in ('seal-directory', 'verify-directory', 'seal-file', 'verify-file'):
         p = sub.add_parser(name); p.add_argument('path')
     p = sub.add_parser('training-directory'); p.add_argument('values', nargs=5)
+    p = sub.add_parser('stage-layout');p.add_argument('run');p.add_argument('entries',nargs='+')
     p = sub.add_parser('checkpoint'); p.add_argument('run'); p.add_argument('status')
     p.add_argument('specs', nargs='*')
     args = parser.parse_args()
@@ -593,6 +625,15 @@ def main():
         print(json.dumps([str(p) for p in discover(args.root)]))
     elif args.command == 'training-directory':
         print(training_directory(*args.values))
+    elif args.command == 'stage-layout':
+        value=load(args.run)
+        layout={}
+        for item in args.entries:
+            kind,path=item.split('=',1)
+            artifact_path(args.run,path)
+            layout[kind]=path
+        value['stage_layout']=layout
+        atomic_json(Path(args.run)/MANIFEST,value)
     elif args.command == 'checkpoint':
         checkpoint(args.run, args.status, args.specs)
     else:
