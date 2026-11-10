@@ -279,6 +279,110 @@ def recover_staged_outputs(run, previous, current):
             if (run/guard).is_file() and json.loads((run/guard).read_text()) == previous['options']['last']:
                 existing[guard] = dict(kind='auxiliary',slot=None,path=guard,sha256=sha256(run/guard))
     previous['artifacts'] = list(existing.values())
+def name_limit(base):
+    path = Path(base).resolve()
+    while not path.exists():
+        path = path.parent
+    return min(255, os.pathconf(path, 'PC_NAME_MAX'))
+
+
+def readable_trio(value, limit):
+    names, tokens = [], []
+    for entry in sorted(value['organisms'], key=lambda e: e['slot']):
+        name = (entry.get('raw_organism_name') or entry.get('ncbi_full_name')
+                or Path(entry['fasta_path']).parent.name)
+        name = re.sub(r'_+', '_', re.sub(r'[^A-Za-z0-9_.-]+', '_', name)).strip('_.-')
+        names.append(name or entry['slot'])
+        token = entry.get('accession') or 'local-' + entry['fasta_sha256'][:12]
+        if not re.fullmatch(r'[A-Za-z0-9_.-]+', token) or token in ('.', '..'):
+            raise ValueError(f'Unsafe accession token: {token}')
+        tokens.append(token)
+    # Three name/token separators and two double-underscore slot separators.
+    available = limit - sum(len(token) for token in tokens) - 7
+    if available < 3:
+        raise ValueError('Complete accession tokens cannot fit filesystem name length limit')
+    budget = available // 3
+    return '__'.join(f'{name[:budget]}_{token}' for name, token in zip(names, tokens))
+
+
+def in_output_scope(base, run):
+    base, run = Path(base).resolve(), Path(run).resolve()
+    return run.is_relative_to(base) and len(run.relative_to(base).parts) == 2
+
+
+def resume_matches(base, value):
+    """Inspect only root/trio/run manifests, including aliases and incomplete runs."""
+    matches = set()
+    for path in Path(base).glob('*/*/' + MANIFEST):
+        run = path.parent.parent.resolve()
+        if not in_output_scope(base, run):
+            continue
+        try:
+            previous = load(run)
+        except (ValueError, OSError, KeyError, TypeError, AttributeError):
+            # Unrelated broken manifests cannot establish a matching identity.
+            # An occupied allocation candidate is checked strictly below.
+            continue
+        if previous['run_key'] == value['run_key'] and previous.get('date') == value['date']:
+            matches.add(run)
+    if len(matches) > 1:
+        raise ValueError('Ambiguous matching runs: ' + ', '.join(map(str, sorted(matches))))
+    return next(iter(matches), None)
+
+
+def resolve_run(base, value):
+    """Select a path while the caller holds the output-root allocation lock."""
+    base = Path(base).resolve()
+    existing = resume_matches(base, value)
+    if existing:
+        return existing
+    limit = name_limit(base)
+    parent = base / readable_trio(value, limit)
+    for size in range(12, 65, 4):
+        name = f"{value['date']}-{value['run_key'][:size]}"
+        if len(name.encode()) > limit:
+            raise ValueError('Run label and key suffix exceed filesystem name length limit')
+        run = parent / name
+        if not in_output_scope(base, run):
+            raise ValueError(f'Invalid explicit run destination: {run}')
+        if not os.path.lexists(run):
+            validate_destination(base, run, value)
+            return run
+        if not run.is_dir():
+            raise ValueError(f'Occupied output is not a run directory: {run}')
+        if not (run / MANIFEST).exists():
+            if all(p.name == '.run.lock' for p in run.iterdir()):
+                validate_destination(base, run, value)
+                return run
+            raise ValueError(f'Occupied output has no v2 manifest: {run}')
+        try:
+            previous = load(run)
+        except (ValueError, OSError, KeyError, TypeError, AttributeError) as error:
+            raise ValueError(f'Invalid occupied output manifest: {run}: {error}') from error
+        if previous['run_key'] == value['run_key']:
+            if previous.get('date') == value['date']:
+                return run.resolve()
+            raise ValueError(f'Occupied output manifest label disagrees: {run}')
+    raise ValueError(f'No unoccupied run-key suffix after full-key collision: {parent}')
+
+
+def validate_destination(base, run, value):
+    """Validate the already selected destination without allocating another path."""
+    base, run = Path(base).resolve(), Path(run).resolve()
+    if not in_output_scope(base, run):
+        raise ValueError(f'Invalid explicit run destination: {run}')
+    if (run / MANIFEST).exists():
+        previous = load(run)
+        if previous['run_key'] != value['run_key'] or previous.get('date') != value['date']:
+            raise ValueError(f'Explicit run destination identity/label disagrees: {run}')
+        return
+    limit = name_limit(base)
+    prefix = value['date'] + '-'
+    suffix = run.name[len(prefix):] if run.name.startswith(prefix) else ''
+    if (run.parent.name != readable_trio(value, limit) or
+            len(suffix) not in range(12, 65, 4) or suffix != value['run_key'][:len(suffix)] or
+            len(run.name.encode()) > limit):
+        raise ValueError(f'Invalid explicit run destination: {run}')
 
 
 def prepare(run, value):
@@ -286,8 +390,8 @@ def prepare(run, value):
     path = run / MANIFEST
     if path.exists():
         previous = load(run)
-        if previous['run_key'] != value['run_key']:
-            raise ValueError('Existing run inputs/options disagree with manifest')
+        if previous['run_key'] != value['run_key'] or previous.get('date') != value.get('date'):
+            raise ValueError('Existing run inputs/options or label disagree with manifest')
         validate_metadata(run, previous)
         recover_staged_outputs(run, previous, value)
         value = previous
@@ -463,6 +567,8 @@ def main():
         p = sub.add_parser(name)
         p.add_argument('base'); p.add_argument('label'); p.add_argument('threads', type=int)
         p.add_argument('inputs', nargs=12)
+        if name == 'prepare':
+            p.add_argument('--run-dir', required=True)
     p = sub.add_parser('bundle-save'); p.add_argument('values', nargs=3)
     p = sub.add_parser('bundle-gff'); p.add_argument('fasta'); p.add_argument('accession', nargs='?')
     p = sub.add_parser('discover'); p.add_argument('root')
@@ -491,9 +597,12 @@ def main():
         checkpoint(args.run, args.status, args.specs)
     else:
         value = descriptor(args)
-        run = Path(args.base).resolve() / value['trio_key'] / f"{args.label}-{value['run_key']}"
         if args.command == 'prepare':
+            run = Path(args.run_dir).resolve()
+            validate_destination(args.base, run, value)
             prepare(run, value)
+        else:
+            run = resolve_run(args.base, value)
         print(run)
 
 

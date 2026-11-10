@@ -391,7 +391,7 @@ This script:
 Results reside under:
 
 ```
-<out_dir>/<trio-key>/<DATE>-<run-key>/
+<out_dir>/<name1>_<ACC1>__<name2>_<ACC2>__<name3>_<ACC3>/<DATE>-<run-key-prefix>/
 ├── intermediateFiles/       # MAF and LAST training files
 ├── figs/
 │   ├── <ORG2>/singlenuc/{ratio,log-ratio,count}/
@@ -403,6 +403,21 @@ Results reside under:
     ├── <ORG3>/{singlenuc,dinuc}/
     └── misc/
 ```
+
+The three names follow outgroup, ingroup 1, ingroup 2 order, using existing full
+organism metadata or the local FASTA parent directory. Names are made safe for
+ASCII filenames; complete versioned accessions are retained. Without an accession,
+`local-<first 12 FASTA SHA256 characters>` identifies the input in the directory
+name. Long names are shortened equally to fit the filesystem component limit
+(at most 255 bytes); accession tokens and the run label are never shortened.
+The run-key prefix starts at 12 characters and grows if an occupied run has a
+different full key. Full content and settings hashes remain in the manifest.
+
+Existing saved results stay in place. A matching full run key and exact DATE label
+resumes its existing directory, including the previous hashed layout, even when
+display names or FASTA paths change. Multiple physical matches are an error.
+Changed input contents, annotations, or effective settings create distinct runs;
+one readable trio directory can therefore contain several full trio identities.
 
 Representative outputs include:
 
@@ -543,7 +558,7 @@ runs into a single rendered report (Word, PDF, or HTML).
 ```
 
 `input_dir` is a lineage root (`results/<lineage>`) or a single trio root
-(`results/<trio-key>`). This runs `collect_run_summary.py`, which
+(`results/<readable-trio>` or an existing `results/<trio-key>`). This runs `collect_run_summary.py`, which
 gathers run metadata into a JSON summary (default:
 `<input_dir>/<name>_summary.json`), then `render_report.sh`, which renders it
 via R Markdown.
@@ -658,3 +673,102 @@ Each trio uses `scripts/retry_trio_miyabi_g.pbs` (regular-g, one node, 48 hours)
 New LAST work uses the pinned 1654 tool bundle. Certified inherited pair MAFs and
 profiles are explicitly recorded as LAST 1648 outputs in `legacy_reuse`; old LAST
 DBs are never imported. Existing completed runs remain at their original paths.
+### Spectrum shape clustering and taxonomy
+
+`src/visualize/spectrum_shape.R` generates a dendrogram heatmap, UMAP plots colored
+by taxonomy and cluster, and representative 96-channel spectra with median/IQR.
+It requires R packages `argparse`, `jsonlite`, `cluster`, `ggplot2`, `uwot`,
+`ComplexHeatmap` (Bioconductor), and `circlize`.
+
+```bash
+rtk proxy Rscript src/visualize/spectrum_shape.R results/all \
+  --taxonomy-levels phylum,class,order --clusters auto --random-state 42
+```
+
+The default v2 input mode requires completed manifests with verified artifacts.
+Use `--input-mode legacy` for existing result folders without v2 manifests.
+In v2 mode, latest completed runs are selected by the shared manifest helper. Noncoding channels are the default; pass
+`--tsv-pattern '*.tsv'` for genomic channels. Taxonomy is annotation only and missing
+labels become Unknown, without downloads. Each ingroup/run remains a separate sample.
+No genus/identity filter is applied.
+
+The log2 ratio matches the existing bar plot: rate divided by the arithmetic mean
+of positive rates, then log2. Samples with any zero, invalid, missing, or duplicate
+channel are excluded without pseudocounts; inspect `exclusions.csv` and
+`taxonomy_counts.csv` for resulting sample loss. The 96 columns retain the six
+substitution classes and 16 contexts, without column standardization.
+
+Default clustering uses Euclidean distance and Ward D2; `--method correlation`
+uses 1-Pearson correlation and average linkage. Auto selects the best mean
+silhouette across 2 through min(10,n-1); change the cap with `--max-clusters` or
+choose `--clusters N`. Two samples or all-zero distances default to one cluster.
+UMAP is skipped below four samples; its coordinates never determine clusters.
+Fixed seed and single-threaded UMAP permit repeatable comparisons within an environment.
+
+Output defaults to `<INPUT_DIR>/spectrum_shape`; use `--output-dir` to select a
+fresh empty directory for each run. PDF/PNG figures share scales, accompanied by
+CSV matrices, assignments, distances, scores, medoids, summaries, taxonomy
+composition, and UMAP coordinates. Settings and package versions are recorded.
+The dendrogram represents spectral similarity, not evolutionary ancestry.
+Existing PCA and bar-plot scripts are unchanged.
+
+If dependencies are installed in the project-local R library, invoke with
+`R_LIBS="$PWD/.venv/spectrum-shape-r-library" Rscript src/visualize/spectrum_shape.R ...`.
+On R 4.1, compatible versions include ComplexHeatmap 2.10.0, GlobalOptions 0.1.2,
+circlize 0.4.16, and GetoptLong 1.0.5; newer releases can require a newer R version.
+
+Legacy results can be read directly without v2 manifests. For the benchmark runs
+linked under `results/all`, choose the region explicitly:
+
+```bash
+rtk proxy env R_LIBS="$PWD/.venv/spectrum-shape-r-library" \
+  Rscript src/visualize/spectrum_shape.R results/all --input-mode legacy \
+  --run-pattern "bench_*" --region whole \
+  --output-dir results/all/spectrum_shape_bench_whole
+```
+
+Use `--region noncoding` and a different output directory for noncoding spectra.
+The default region is noncoding in both modes. The older `--tsv-pattern` option
+remains an alias (`*.tsv`: whole; `*_ncds.tsv`: noncoding); conflicting explicit
+region and pattern selections are rejected. There is no fallback across regions.
+Legacy mode follows trio links once, selects the newest matching run by its
+8-digit date, and reads only direct files in `statistics/singlenuc/`. A filename
+containing `ncds` means noncoding; `_maflinked` does not influence selection.
+Metadata identifies ingroups, including `cds_from_<short_name>` filenames.
+Missing and ambiguous TSVs, invalid run dates and tied latest dates are audited.
+Local metadata replaces stale absolute paths, missing taxonomy becomes Unknown,
+and no downloads occur. `run_decisions.csv` records run selection; sample records
+include input and metadata SHA256 hashes. Legacy inputs do not receive v2
+completion/provenance verification. Existing v2 validation remains the default.
+
+For a cohort containing legacy runs and newer validated v2 runs, use
+`--input-mode mixed --run-pattern "bench_*"`. Matching run names may include
+an optional `_HHMMSS` after the date; only the newest timestamp per trio is used.
+A selection symlink can point to an unmodified v2 run. Its alias, resolved run
+path and logical trio are exported separately. Selected v2 runs must validate and
+have complete status; validation failure does not fall back to legacy. Missing
+regions never fall back to an older run. Ordered accessions are checked against
+older cohort metadata when a v2 run replaces a legacy result.
+
+Spectrum heatmap channel labels use the standard monospace family `mono`.
+Annotation colors are allocated jointly across taxonomy levels and clusters, with
+known phylum colors reserved. Heatmaps and UMAPs share the mapping exported in
+`annotation_colors.csv` (`level`, `label`, `color`, `identifier`); distinct level/label
+pairs, including Unknown at different levels, receive distinct RGB colors. Starting
+from the joint palette, deterministic replacements and swaps first reduce adjacent
+annotation pairs with CIELCh hue gaps below 60 degrees, then maximize the minimum
+adjacent and overall CIELab distances. Chroma below 5 is treated as achromatic and
+excluded from hue comparisons. Adjacency follows the displayed taxonomy-column order
+and observed category pairs; input row order does not affect the mapping. This is a
+local optimization, and colors alone do not guarantee every category is distinguishable.
+Heatmaps use 8 mm taxonomy strips with 2 mm gaps on a 15-inch canvas. Each contiguous
+taxonomy band in clustered row order carries its identifier once at its center, using
+black or white text for contrast. Clusters are shown by aligned grey `]` brackets to
+the right of the full species labels, with black `Cluster 1` labels rotated 90 degrees
+counterclockwise and centered on each displayed run. Labels start at 8 pt and shrink
+to at least 6 pt; the canvas grows vertically when a short run needs more room.
+The heatmap has no cluster color strip or cluster legend. Sorted phylum/class/order categories use P/C/O identifiers;
+clusters retain their numbers with a K prefix, and other ranks use their rank name.
+Taxonomy heatmap legends and all UMAP legends show `identifier: category`, without
+changing analytical category names or sample IDs. The full palette, including cluster
+colors, remains in `annotation_colors.csv` and the cluster UMAP.

@@ -1,8 +1,9 @@
 # Pipeline manifest v2
 
 New analyses use `metadata/metadata_manifest.json` with `schema_version: 2`.
-Old results remain on disk, but must be rerun to use pipeline reports or caches.
-There is no migration or legacy filename fallback.
+Existing schema-2 results remain usable in place, including the earlier hashed
+directory layout. Older results without schema-2 manifests must be rerun to use
+pipeline reports or caches. There is no migration or legacy filename fallback.
 
 `organisms` records exactly `org1` (outgroup), `org2`, and `org3` (ingroups).
 Each input has a content SHA256, an optional versioned assembly accession, and
@@ -11,7 +12,38 @@ Metadata and taxonomy copies have relative paths and hashes.
 
 `trio_key` hashes the ordered input identities; `run_key` additionally hashes
 effective LAST settings, threads, configuration, and computation/tool versions.
-Runs live under `<output>/<trio_key>/<label>-<run_key>/`. Shared training profiles
+New runs live under
+`<output>/<name1>_<ACC1>__<name2>_<ACC2>__<name3>_<ACC3>/<label>-<run_key[:12]>/`.
+Slots are ordered outgroup/org1, ingroup/org2, ingroup/org3. Names come from existing
+`raw_organism_name`, then `ncbi_full_name`, then the local FASTA parent directory;
+no metadata lookup is added. Invalid ASCII filename character blocks become `_`,
+repeated underscores collapse, and leading/trailing `_`, `.`, and `-` are removed.
+Empty names become `orgN`. Versioned accessions remain complete; missing accessions
+use `local-<fasta_sha256[:12]>`. The trio component is bounded to the filesystem's
+`NAME_MAX` or 255 bytes, whichever is smaller. After reserving complete tokens and
+separators, names share equal length budgets and only overlong names are shortened.
+Tokens that cannot fit cause an error. The run label remains intact; overflow
+causes an error. A valid occupied manifest with another full key extends the
+suffix by four characters, up to all 64; exhausted collisions cause an error.
+
+Before allocating, a bounded scan checks only
+`<output>/*/*/metadata/metadata_manifest.json`, including incomplete and old-layout
+runs. The same full `run_key` and exact stored label/date reuse that physical run,
+even after display or input-path renames. Symlink aliases are deduplicated; several
+distinct physical matches cause an error listing candidates. Only physical runs
+at the output root's trio/run depth are eligible writer resumes; aliases targeting
+external or deeper directories are ignored. New destinations are checked before
+creating directories or locks. Unknown or broken
+occupied candidates are preserved and rejected. Empty or `.run.lock`-only
+directories may be initialized. An output-root allocation lock covers selection
+through manifest preparation; the per-run lock covers the entire analysis.
+Preparation receives the selected explicit path and checks identity and label
+before recovery cleanup. A readable trio parent may group different full
+`trio_key` values when contents differ despite matching accessions. Discovery still
+selects the latest completed run per full `trio_key`. Aggregate link naming and
+legacy/mixed input handling are unchanged.
+
+Shared training profiles
 live under `<cache>/v2/<training-key>/`, keyed by ordered FASTA content, accessions,
 settings, threads, and LAST version. Profiles and DBs have completion hashes.
 Assembly downloads use `assemblies/<accession>/versions/` with an atomically
