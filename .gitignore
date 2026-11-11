@@ -33,11 +33,13 @@ __pycache__/
 .vscode/
 .claude/
 Thumbs.db
+.conductor/
 
 # Deprecated scripts (read-only reference)
 archive/
 doc/trio-candis/
 doc/*.log
+docs/reviews/
 
 # Claude Code task tracking
 tasks/
@@ -52,12 +54,14 @@ tmp/
 
 # Large documents
 *.pdf
+*.nwk
 
 # Backup
 *.bak
 
 # .md files (documentation, not code)
 AGENTS.md
+codex-about-statistics-visualization.md
 
 # Sample data and standalone docs kept local-only, not tracked in git
 /Primates_tree.nwk
