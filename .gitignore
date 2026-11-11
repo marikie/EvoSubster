@@ -20,6 +20,9 @@ eg_results/Arccen1_Ampcit2_Ampzal3/20260418/metadata/
 __pycache__/
 *.py[cod]
 
+# Hotspot analyses and their scripts, tests, and documentation stay local-only.
+*hotspot*
+
 # R
 .Rhistory
 .RData
