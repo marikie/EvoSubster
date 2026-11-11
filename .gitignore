@@ -65,3 +65,6 @@ AGENTS.md
 /trio_candidates.txt
 /sbst_fromDwl_tree_mode.html
 /trio_selection.html
+
+# Conference-specific plots stay local-only.
+/scripts/plot_pca_conference_highlight.R
