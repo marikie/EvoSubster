@@ -27,7 +27,7 @@ class PCAManifestMainTests(unittest.TestCase):
                 artifact['sha256']=script.runs.sha256(target)
             script.runs.atomic_json(run/script.runs.MANIFEST,manifest)
             result=subprocess.run(['Rscript',str(ROOT/'src/visualize/pca_2d.R'),str(root/'inputs'),
-                '--tsv-pattern','*.tsv','--output-dir',str(root/'pca')],capture_output=True,text=True)
+                '--tsv-pattern','*.tsv','--output-dir',str(root/'pca')],capture_output=True,text=True,cwd=root)
             self.assertEqual(result.returncode,0,result.stdout+'\n'+result.stderr)
             self.assertFalse(list((root/'pca').glob('*_filtered*')))
             settings=json.loads((root/'pca/pca_run_settings.json').read_text())
@@ -59,6 +59,32 @@ class PCAManifestMainTests(unittest.TestCase):
                 rows=list(csv.DictReader(handle))
             self.assertEqual(rows[0]['included'],'FALSE')
             self.assertIn('failed',rows[0]['reason'])
+
+    def test_partial_audit_survives_later_manifest_failure(self):
+        from test_pca_input_adapter import create_legacy
+        with tempfile.TemporaryDirectory(dir=ROOT/'tmp/codex',prefix='pca-partial-audit-') as tmp:
+            root = Path(tmp)
+            create_legacy(root/'inputs',name='First1_First2_First3')
+            broken = create_legacy(root/'inputs',name='Last1_Last2_Last3')
+            manifest = broken/'metadata/metadata_manifest.json'
+            payload = json.loads(manifest.read_text())
+            payload['organisms'] = []
+            manifest.write_text(json.dumps(payload))
+            result = subprocess.run([
+                'Rscript',str(ROOT/'src/visualize/pca_2d.R'),str(root/'inputs'),
+                '--tsv-pattern','*.tsv','--output-dir',str(root/'pca')],capture_output=True,text=True)
+            self.assertNotEqual(result.returncode,0)
+            self.assertIn('Invalid legacy organisms',result.stderr)
+            settings = json.loads((root/'pca/pca_run_settings.json').read_text())
+            self.assertEqual(settings['status'],'failed')
+            self.assertEqual(settings['trios'],1)
+            self.assertEqual(settings['included_trios'],1)
+            self.assertEqual(settings['usable_samples'],2)
+            with (root/'pca/pca_trio_filter.csv').open() as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(len(rows),1)
+            self.assertEqual(rows[0]['trio_id'],'First1_First2_First3')
+            self.assertEqual(rows[0]['usable_samples'],'2')
 
     def test_active_filter_selects_trio_and_cli_override_order(self):
         with tempfile.TemporaryDirectory(dir=ROOT/'tmp/codex',prefix='pca-selection-') as tmp:
