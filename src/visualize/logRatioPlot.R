@@ -9,6 +9,7 @@ library(rlang)
 script_file <- sub("^--file=", "", grep("^--file=", commandArgs(), value = TRUE)[1])
 source(file.path(dirname(normalizePath(script_file)), "plot_species_label.R"))
 source(file.path(dirname(normalizePath(script_file)), "required_fonts.R"))
+source(file.path(dirname(normalizePath(script_file)), "transparent_background.R"))
 load_required_fonts()
 
 generate_plots <- function(tsv_path, out_dir = dirname(tsv_path), species_name = "") {
@@ -180,7 +181,8 @@ create_pdf <- function(graph_path, data, value_col, species_name = "") {
     ) +
     coord_cartesian(ylim = c(ylim_low, ylim_high), clip = "off")
 
-  ggsave(filename = graph_path, plot = p, device = "pdf", width = 30, height = 8)
+  p <- p + transparent_background_theme()
+  ggsave(filename = graph_path, plot = p, device = "pdf", width = 30, height = 8, bg = "transparent")
 }
 
 add_logRatio <- function(data) {

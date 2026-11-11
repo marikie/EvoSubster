@@ -88,6 +88,7 @@ main <- function() {
     ), stdout = TRUE), 1),
     comparison = ">",
     identity_unit = "percent",
+    figure_background = "transparent",
     gap_unit = "percentage points",
     genus_waiver = "same-genus ingroups and different-genus outgroup waive only gap",
     input_dir = input_root,

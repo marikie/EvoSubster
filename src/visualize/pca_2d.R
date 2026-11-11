@@ -7,6 +7,7 @@
 
 # Keep this entry point sourceable; all modules share the caller's environment.
 .pca_module_dir <- file.path(dirname(normalizePath(.pca_source_file)), "pca")
+source(file.path(dirname(.pca_module_dir), "transparent_background.R"), local = TRUE)
 for (.pca_module in c("config.R", "input.R", "taxonomy.R", "identity.R",
                       "compute.R", "plot.R", "output.R", "pipeline.R")) {
   source(file.path(.pca_module_dir, .pca_module), local = TRUE)

@@ -21,7 +21,7 @@ open_tree_pdf <- function(path, size) {
   if (!capabilities("cairo")) {
     stop("R was built without cairo; cannot write the tree PDF with embedded fonts: ", path, call. = FALSE)
   }
-  grDevices::cairo_pdf(path, width = size[["width"]], height = size[["height"]], family = "Helvetica")
+  grDevices::cairo_pdf(path, width = size[["width"]], height = size[["height"]], family = "Helvetica", bg = "transparent")
 }
 
 write_stage0_tree <- function(tree, leaves, out_dir) {

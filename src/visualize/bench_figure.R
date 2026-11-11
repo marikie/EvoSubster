@@ -17,6 +17,12 @@ library(patchwork)
 library(ggrepel)
 library(RColorBrewer)
 
+script_file <- local({
+  files <- Filter(Negate(is.null), lapply(sys.frames(), function(frame) frame$ofile))
+  if (length(files)) tail(files, 1)[[1]] else sub("^--file=", "", grep("^--file=", commandArgs(), value = TRUE)[1])
+})
+source(file.path(dirname(normalizePath(script_file)), "transparent_background.R"), local = TRUE)
+
 # ---- parameters -------------------------------------------------------
 POINT_SIZE   <- 2.5
 POINT_ALPHA  <- 0.85
@@ -111,7 +117,7 @@ main <- function() {
     min.segment.length = 0.2,
     max.iter           = 50000,
     seed               = 42,
-    fill               = "white",
+    fill               = "transparent",
     label.size         = NA,
     label.padding      = unit(0.12, "lines"),
     alpha              = 0.9
@@ -165,10 +171,10 @@ main <- function() {
 
   # ---- combine and save ------------------------------------------------
   combined <- pA / pB + plot_layout(guides = "collect") &
-    theme(legend.position = "bottom")
+    theme(legend.position = "bottom") & transparent_background_theme()
 
   out_pdf <- file.path(args$out_dir, "bench_figure.pdf")
-  pdf(out_pdf, width = FIGURE_WIDTH / 2.54, height = FIGURE_HEIGHT / 2.54)
+  pdf(out_pdf, width = FIGURE_WIDTH / 2.54, height = FIGURE_HEIGHT / 2.54, bg = "transparent")
   print(combined)
   dev.off()
   message("Wrote bench_figure.pdf")

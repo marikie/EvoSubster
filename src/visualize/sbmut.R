@@ -7,6 +7,7 @@ library(dplyr)
 script_file <- sub("^--file=", "", grep("^--file=", commandArgs(), value = TRUE)[1])
 source(file.path(dirname(normalizePath(script_file)), "plot_species_label.R"))
 source(file.path(dirname(normalizePath(script_file)), "required_fonts.R"))
+source(file.path(dirname(normalizePath(script_file)), "transparent_background.R"))
 load_required_fonts()
 
 # MODIFIED THE CODE FROM https://github.com/kartong88/Plot-Mutation-Landscape
@@ -79,7 +80,7 @@ create_pdf_plot <- function(filename, data, trinuc.lab, graph_type, species_name
   conv.data.norm <- extract_values(data, graph_type)
   pct_yaxs_max <- compute_y_axis_max(conv.data.norm)
   color_array <- brewer.pal(6, "Dark2")
-  pdf(filename, width = 30, height = 8)
+  pdf(filename, width = 30, height = 8, bg = "transparent")
   showtext_auto()
   par(family = "mn", mar = c(7.5, 6, 4, 1), cex.axis = 2)
   bar_positions <- barplot(
@@ -111,7 +112,7 @@ create_pdf_plot_ori <- function(filename, data, trinuc.lab, species_name = "") {
   aggregated_counts <- unique_data %>% pull(totalRootNum)
   pct_yaxs_max <- compute_y_axis_max(aggregated_counts)
   upper_limit <- if (pct_yaxs_max == 0) 1 else pct_yaxs_max + 0.15 * pct_yaxs_max
-  pdf(filename, width = 30 * (32 / 96), height = 8)
+  pdf(filename, width = 30 * (32 / 96), height = 8, bg = "transparent")
   showtext_auto()
   par(family = "mn", mar = c(7.5, 6, 4, 1), cex.axis = 2)
   bar_positions <- barplot(

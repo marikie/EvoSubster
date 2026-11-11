@@ -34,7 +34,7 @@ for (i in seq_len(2)) {
 group_max <- ave(percentages, original, FUN = max)
 marked <- which(is.finite(percentages) & percentages == group_max & has_transversion)
 
-pdf(outFile, pointsize=8)
+pdf(outFile, pointsize=8, bg="transparent")
 
 par(mar=c(2.6, 4.5, 2, 1))    # margin widths, including species label
 par(mgp=c(1.5, 0.4, 0))       # axis label positions

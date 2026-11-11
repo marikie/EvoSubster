@@ -663,6 +663,13 @@ trusted and enabled in Codex. Manual invocation works without enabling hooks.
 
 ## Generating Reports
 
+Figure exports use transparent backgrounds while preserving data fills. PDF
+previews in reports additionally require `pdftocairo` (Poppler) to preserve
+transparency; a missing renderer produces an explicit preview diagnostic.
+The rendered transparency regression (`test/test_transparent_figures.py`) also
+uses Python `Pillow`, plus the spectrum-shape R dependencies listed below.
+
+
 `src/report/` aggregates the TSV/statistics outputs of one or more pipeline
 runs into a single rendered report (Word, PDF, or HTML).
 

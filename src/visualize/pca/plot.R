@@ -3,7 +3,7 @@
 plot_metrics <- function(metrics_path, inertia, silhouette) {
   if (length(inertia) == 0 && length(silhouette) == 0) {
     ggsave(metrics_path, ggplot() +
-      theme_void(), width = 8, height = 4, dpi = 300)
+      theme_void() + transparent_background_theme(), width = 8, height = 4, dpi = 300, bg = "transparent")
     return()
   }
   p1 <- if (length(inertia) > 0) {
@@ -30,7 +30,11 @@ plot_metrics <- function(metrics_path, inertia, silhouette) {
       annotate("text", x = 0.5, y = 0.5, label = "Silhouette undefined\n(n_samples too small)", size = 4) +
       theme_void()
   }
-  ggsave(metrics_path, gridExtra::arrangeGrob(p1, p2, nrow = 1), dpi = 300, width = 12, height = 5)
+  p1 <- p1 + transparent_background_theme()
+  p2 <- p2 + transparent_background_theme()
+  # Build before ggsave opens its device, preserving the original text metrics.
+  arranged <- gridExtra::arrangeGrob(p1, p2, nrow = 1)
+  ggsave(metrics_path, arranged, dpi = 300, width = 12, height = 5, bg = "transparent")
 }
 
 build_classification_palette <- function(labels, label_name) {
@@ -155,12 +159,14 @@ plot_pca_scatter <- function(output_path, pca_data, species_labels, color_labels
       legend.title = element_text(face = "plain"),
       legend.position = "right"
     )
-  ggsave(output_path, p, dpi = 300, width = 10, height = 8)
+  p <- p + transparent_background_theme()
+  ggsave(output_path, p, dpi = 300, width = 10, height = 8, bg = "transparent")
 }
 
 write_placeholder_plot <- function(output_path, message_text) {
   p <- ggplot() +
     annotate("text", x = 0.5, y = 0.5, label = message_text, size = 4, hjust = 0.5, vjust = 0.5) +
     theme_void()
-  ggsave(output_path, p, dpi = 300, width = 6, height = 4)
+  p <- p + transparent_background_theme()
+  ggsave(output_path, p, dpi = 300, width = 6, height = 4, bg = "transparent")
 }

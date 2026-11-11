@@ -4,6 +4,7 @@
   if (length(files)) tail(files, 1)[[1]] else sub("^--file=", "", grep("^--file=", commandArgs(), value = TRUE)[1])
 })
 .shape_dir <- dirname(normalizePath(.shape_file))
+source(file.path(.shape_dir, "transparent_background.R"), local = TRUE)
 for (part in c("core", "io", "legacy", "mixed", "plots")) source(file.path(.shape_dir, "spectrum_shape", paste0(part, ".R")))
 shape_main <- function() {
   parser <- argparse::ArgumentParser(description = "Cluster 96-channel log2-ratio spectra and annotate taxonomy.")
@@ -53,7 +54,7 @@ shape_main <- function() {
   shape_csv(counts, file.path(out, "taxonomy_counts.csv"))
   x <- data$matrix
   shape_matrix_csv(x, file.path(out, "log2_matrix.csv"))
-  jsonlite::write_json(list(arguments = args, input = input, runs = data$runs, provenance = switch(args$input_mode, v2 = "v2 manifest validation", legacy = "legacy input; v2 completion and provenance not verified", mixed = "mixed input; selected v2 runs validated, legacy runs not v2-verified"), formula = "log2((mutNum/totalRootNum)/mean(positive rates)); no pseudocount", seed = args$random_state), file.path(out, "settings.json"), auto_unbox = TRUE, pretty = TRUE)
+  jsonlite::write_json(list(arguments = args, input = input, runs = data$runs, provenance = switch(args$input_mode, v2 = "v2 manifest validation", legacy = "legacy input; v2 completion and provenance not verified", mixed = "mixed input; selected v2 runs validated, legacy runs not v2-verified"), formula = "log2((mutNum/totalRootNum)/mean(positive rates)); no pseudocount", seed = args$random_state, figure_background = "transparent"), file.path(out, "settings.json"), auto_unbox = TRUE, pretty = TRUE)
   if (nrow(x) < 2) stop("At least two valid samples are required; see exclusions.csv")
   packages <- c("ComplexHeatmap", "circlize", "ggplot2", "uwot", "cluster", "argparse", "jsonlite")
   missing <- packages[!vapply(packages, requireNamespace, logical(1), quietly = TRUE)]

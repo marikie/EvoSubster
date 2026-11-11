@@ -1,9 +1,9 @@
 shape_save <- function(prefix, draw, width = 14, height = 8) {
   for (ext in c("pdf", "png")) {
     if (ext == "pdf") {
-      grDevices::pdf(paste0(prefix, ".pdf"), width = width, height = height)
+      grDevices::pdf(paste0(prefix, ".pdf"), width = width, height = height, bg = "transparent")
     } else {
-      grDevices::png(paste0(prefix, ".png"), width = width, height = height, units = "in", res = 150)
+      grDevices::png(paste0(prefix, ".png"), width = width, height = height, units = "in", res = 150, bg = "transparent")
     }
     tryCatch(draw(), finally = grDevices::dev.off())
   }
@@ -91,11 +91,11 @@ shape_plots <- function(x, meta, result, embedding, levels, out) {
       column_names_gp = grid::gpar(fontsize = 6, fontfamily = "mono"), row_names_gp = grid::gpar(fontsize = 7),
       column_title = "96-channel spectrum similarity (not a phylogeny)"
     )
-    ComplexHeatmap::draw(ht, annotation_legend_list = legends)
+    ComplexHeatmap::draw(ht, annotation_legend_list = legends, background = "transparent")
   }
   heatmap_height <- max(8, nrow(x) * 0.2)
   # Measure real layout without creating a file, then grow for short cluster runs.
-  grDevices::pdf(NULL, width = 15, height = heatmap_height)
+  grDevices::pdf(NULL, width = 15, height = heatmap_height, bg = "transparent")
   tryCatch(draw_heatmap(), finally = grDevices::dev.off())
   heatmap_height <- heatmap_height + max(0, bracket_measure$required_body_mm - bracket_measure$body_mm) / 25.4
   shape_save(file.path(out, "heatmap"), draw_heatmap, width = 15, height = heatmap_height)
@@ -109,7 +109,7 @@ shape_plots <- function(x, meta, result, embedding, levels, out) {
           breaks = names(palettes[[level]]),
           labels = paste0(identifiers[[level]], ": ", names(palettes[[level]]))) +
         ggplot2::labs(color = level) +
-        ggplot2::theme_bw()
+        ggplot2::theme_bw() + transparent_background_theme()
       shape_save(file.path(out, paste0("umap_", level)), function() print(p), 10, 7)
     }
   }

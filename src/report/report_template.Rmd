@@ -62,31 +62,25 @@ render_pdf_preview <- function(pdf_path, preview_dir, images_dir, dpi = 200) {
     return(NULL)
   }
 
+  # Version the cache so previously flattened previews are never reused.
   hash <- unname(tools::md5sum(pdf_path))
-  preview_template <- file.path(preview_dir, paste0(hash, "-%d.%s"))
-  first_page_path <- sprintf(preview_template, 1, "png")
+  preview_prefix <- file.path(preview_dir, paste0(hash, "-transparent-v1"))
+  first_page_path <- paste0(preview_prefix, ".png")
 
   if (!file.exists(first_page_path)) {
+    renderer <- Sys.which("pdftocairo")
+    if (!nzchar(renderer)) {
+      message("Warning: transparent PDF previews require pdftocairo (Poppler); preview skipped.")
+      return(NULL)
+    }
     tryCatch(
       {
-        suppressWarnings({
-          capture.output(
-            {
-              capture.output(
-                pdftools::pdf_convert(
-                  pdf = pdf_path,
-                  format = "png",
-                  pages = 1,
-                  dpi = dpi,
-                  filenames = preview_template
-                ),
-                file = NULL,
-                type = "message"
-              )
-            },
-            file = NULL
-          )
-        })
+        output <- system2(renderer, c(
+          "-png", "-transp", "-singlefile", "-f", "1", "-l", "1",
+          "-r", as.character(dpi), shQuote(pdf_path), shQuote(preview_prefix)
+        ), stdout = TRUE, stderr = TRUE)
+        status <- attr(output, "status")
+        if (!is.null(status) && status != 0) stop(paste(output, collapse = "\n"))
       },
       error = function(e) {
         message(sprintf("Warning: failed to render preview for %s (%s)", pdf_path, e$message))
@@ -95,7 +89,7 @@ render_pdf_preview <- function(pdf_path, preview_dir, images_dir, dpi = 200) {
   }
 
   if (!file.exists(first_page_path)) {
-    message(sprintf("Preview file not found: %s (template: %s)", first_page_path, preview_template))
+    message(sprintf("Preview file not found: %s", first_page_path))
     NULL
   } else {
     preview_abs <- normalizePath(first_page_path, mustWork = TRUE)
